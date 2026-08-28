@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# gh.proxy — China / GFW helper for zcode-quick-web-forward.
+#
+# Standalone one-liner (this file IS the install entry, builds the same flow but
+# routes every GitHub download through a proxy mirror):
+#   wget -qO- https://raw.githubusercontent.com/friddle/zcode-quick-web-forward/main/gh.proxy | bash
+#
+# It can also be sourced as a tiny Git/proxy wrapper to speed up any GitHub
+# clone/download from inside China:
+#   source gh.proxy
+#   ghclone zcode           # -> git clone through the mirror
+#   ghfetch <url> <dst>     # -> download through the mirror
+#
+set -euo pipefail
+
+# ---- mirror selection -------------------------------------------------------
+# Pick a fast mirror for your network. Override with: GH_PROXY=...
+GH_PROXY="${GH_PROXY:-https://gh-proxy.com}"
+export GH_PROXY
+
+# git_proxy returns a proxy-wrapped URL for a git/GitHub URL suffix.
+git_proxy() {
+  local u="$1"
+  case "$u" in
+    https://github.com/*|https://raw.githubusercontent.com/*|https://gist.githubusercontent.com/*)
+      printf '%s/%s' "$GH_PROXY" "$u"
+      return;; 
+  esac
+  printf '%s' "$u"
+}
+
+# ghclone clones a GitHub repo through the proxy mirror.
+#   ghclone <owner>/<repo> [target-dir]
+ghclone() {
+  local ref=$1 out=${2:-}
+  local url="https://github.com/${ref#https://github.com/}"
+  if [ -n "$out" ]; then
+    git clone --depth 1 "$(git_proxy "$url.git")" "$out"
+  else
+    git clone --depth 1 "$(git_proxy "$url.git")"
+  fi
+}
+
+# ghfetch downloads any GitHub URL through the mirror.
+#   ghfetch <url> <dst>
+ghfetch() {
+  local url="$1" dst="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --connect-timeout 20 --retry 3 -o "$dst" "$(git_proxy "$url")"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --timeout=20 -t3 -O "$dst" "$(git_proxy "$url")"
+  else
+    echo "gh.proxy: need curl or wget" >&2; return 1
+  fi
+  echo "gh.proxy: saved $dst"
+}
+
+# Running directly (not sourced): perform the install using the mirror.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  echo "gh.proxy: installing zcode-quick-web-forward via $GH_PROXY …"
+  install_url="https://raw.githubusercontent.com/friddle/zcode-quick-web-forward/main/install.sh"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$(git_proxy "$install_url")" | bash -s -- "$@"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$(git_proxy "$install_url")" | bash -s -- "$@"
+  else
+    echo "gh.proxy: need curl or wget" >&2; exit 1
+  fi
+fi

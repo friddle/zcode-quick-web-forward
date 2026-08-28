@@ -1,0 +1,12 @@
+# compiled / build artifacts
+/zcode-quick-web-forward
+/zcode-quick-web-forward-*
+*.exe
+*.part
+
+# Go
+*.test
+*.out
+
+# local
+.DS_Store
