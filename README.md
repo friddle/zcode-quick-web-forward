@@ -6,9 +6,11 @@
 > own web-remote / mobile link.
 
 One-shot helper that downloads the **latest ZCode** runtime (the bundled
-`glm/zcode.cjs` app-server), starts it, opens the **browser login flow**,
-confirms the login, and finally prints a **mobile / remote access link** —
-so you can drive ZCode from your phone.
+`glm/zcode.cjs` app-server) and starts it headless: run the **browser login
+flow** (international Z.ai OAuth) or reuse the desktop client's existing
+credentials/providers (e.g. the China BigModel API key), then keep the engine
+serving. See [web-remote](#what-it-does-pure-cli-mimics-the-zcode-client) for
+what the mobile link actually requires.
 
 A single **Go** static binary (built for Linux, macOS, Windows, multiple
 arches) plus `wget | bash` bootstrap scripts (with a China / GFW **gh.proxy**
@@ -112,13 +114,13 @@ runtime's own subcommands exactly as the desktop client does:
    URL, authorize, and the CLI confirms on the callback / Enter.
 3. **app-server** → runs `node glm/zcode.cjs app-server` (the ZCode engine, the
    "**ZCode Protocol stdio app server**").
-4. **web-remote** → ZCode ships its **own mobile tunnel** (this is what the
-   desktop's "continue on your phone" uses), surfaced via the engine:
-   - `remoteUrl: https://zcode.z.ai/remote/v4` (or bigmodel/zcode.chatglm.site)
-   - `webRemoteCallbackUrl: https://zcode.z.ai/web-remote/callback`
-   - `relayWsUrl: https://zcode.z.ai/ws`
-   The tool prints the real web-remote link, which is the genuine **mobile
-   access URL** — no custom piko needed.
+4. **web-remote** → the mobile link (`https://<origin>/remote/v4?id=<session>`)
+   is established by the **desktop client**, which authenticates to the cloud
+   relay (`wss://<origin>/ws`, protocol version `2026-07-28`) and registers the
+   session; the phone then joins through `https://<origin>/remote/v4`. The
+   runtime itself never connects to the relay — a pure-CLI process cannot mint
+   that link. `remote` therefore runs the engine and shows the link template;
+   for actual phone access use the desktop client's "continue on your phone".
 
 > **Notes / requirements**
 > - The runtime expects **Node ≥ 22.5** (uses `node:sqlite`, runs under the
@@ -126,8 +128,9 @@ runtime's own subcommands exactly as the desktop client does:
 > - The `.deb` has **no nodejs dependency** — ZCode bundles its own engine.
 > - Completing login requires you to **click the authorize link in a browser**;
 >   the client confirms on the callback.
-> - The mobile link is ZCode's own web-remote (`https://zcode.z.ai/remote/v4…`);
->   it is established by the app-server, not by this tool.
+> - The mobile link is ZCode's own web-remote (`https://<origin>/remote/v4…`);
+>   it is minted by the desktop client via the cloud relay, not by the
+>   app-server and not by this tool.
 
 ## gh.proxy
 
