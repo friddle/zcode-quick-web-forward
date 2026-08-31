@@ -107,16 +107,33 @@ runtime's own subcommands exactly as the desktop client does:
 
 ## gh.proxy
 
-A tiny Git/proxy helper for China. Sourced usage:
+A China / GFW helper that does two things:
+
+1. **Standalone installer** — `wget .../gh.proxy | bash` installs
+   `zcode-quick-web-forward` exactly like `install.sh`, but routes **every**
+   GitHub download through a proxy mirror:
+
+   ```bash
+   wget -qO- https://raw.githubusercontent.com/friddle/zcode-quick-web-forward/main/gh.proxy | bash
+   ```
+
+   (This is the file that is fetched by the `wget github.com/friddle/xxx.sh |
+   bash` bootstrap in China.)
+
+2. **Sourced Git/proxy wrapper** — reuse the mirror for any GitHub clone/grab:
+
+   ```bash
+   source gh.proxy              # sets $GH_PROXY to a mirror
+   ghclone friddle/opencode     # git clone through the mirror
+   ghfetch <url> <dst>          # download through the mirror
+   ```
+
+Override the mirror with `GH_PROXY=https://gh-proxy.com` (or `https://ghp.ci`,
+`https://ghproxy.net`). Git itself can also be set globally to a mirror:
 
 ```bash
-source gh.proxy          # sets $GH_PROXY to a mirror
-ghclone friddle/opencode # clone through the mirror
-ghfetch <url> <dst>      # download through the mirror
+git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"
 ```
-
-Override the mirror with: `GH_PROXY=https://gh-proxy.com` (or `https://ghp.ci`,
-`https://ghproxy.net`).
 
 ## License
 
