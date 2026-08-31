@@ -5,12 +5,12 @@
 package runtime
 
 import (
+	"context"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/manifest"
 )
@@ -143,37 +144,109 @@ func (f *Finder) download(url, dst, shaSum string) error {
 		fmt.Printf("zcode: use cached artifact %s\n", filepath.Base(dst))
 		return nil
 	}
-	_ = os.MkdirAll(filepath.Dir(dst), 0o755)
-	resp, err := f.HTTP.Get(url)
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	client := f.HTTP
+	if client == nil {
+		client = &http.Client{}
 	}
-	defer resp.Body.Close()
-	out, err := os.Create(dst + ".part")
-	if err != nil {
-		return err
+	part := dst + ".part"
+	const maxAttempts = 30
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if lastErr != nil {
+			fmt.Printf("zcode: download interrupted (%v), resuming…\n", lastErr)
+			time.Sleep(2 * time.Second)
+		}
+		have := int64(0)
+		if fi, err := os.Stat(part); err == nil {
+			have = fi.Size()
+		}
+		lastErr = f.fetchRange(client, url, part, have)
+		if lastErr == nil {
+			break
+		}
 	}
-	var h hash.Hash
+	if lastErr != nil {
+		os.Remove(part)
+		return fmt.Errorf("download %s: %w", filepath.Base(dst), lastErr)
+	}
 	if shaSum != "" {
-		h = sha512.New()
-	}
-	if _, err := io.Copy(io.MultiWriter(out, h), resp.Body); err != nil {
-		out.Close()
-		os.Remove(dst + ".part")
-		return err
-	}
-	out.Close()
-	if h != nil {
+		h := sha512.New()
+		fh, err := os.Open(part)
+		if err != nil {
+			return err
+		}
+		_, cErr := io.Copy(h, fh)
+		fh.Close()
+		if cErr != nil {
+			return cErr
+		}
 		if !verifyChecksum(h.Sum(nil), shaSum) {
-			os.Remove(dst + ".part")
+			os.Remove(part)
 			return fmt.Errorf("checksum mismatch for %s", filepath.Base(dst))
 		}
 	}
-	return os.Rename(dst+".part", dst)
+	return os.Rename(part, dst)
+}
+
+// fetchRange appends bytes from url to part, resuming at offset have. A
+// connection that stalls (no data for stallTimeout) or drops mid-transfer is
+// returned as an error so the caller can resume from what is already on disk.
+func (f *Finder) fetchRange(client *http.Client, url, part string, have int64) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const stallTimeout = 45 * time.Second
+	stall := time.AfterFunc(stallTimeout, cancel)
+	defer stall.Stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if have > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusPartialContent:
+	case http.StatusOK:
+		have = 0 // server ignored the range; start the file over
+	default:
+		return fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	}
+	flag := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if have == 0 {
+		flag |= os.O_TRUNC
+	}
+	out, err := os.OpenFile(part, flag, 0o644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	buf := make([]byte, 64*1024)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			if !stall.Reset(stallTimeout) {
+				stall = time.AfterFunc(stallTimeout, cancel)
+			}
+		}
+		if rerr == io.EOF {
+			return nil
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
 }
 
 func (f *Finder) findCached() (string, bool) {
