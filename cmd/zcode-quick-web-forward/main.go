@@ -156,14 +156,19 @@ func doRemote(args []string) {
 	runtimePath, node := parseCommon(args)
 	rt := resolveRuntime(runtimePath)
 	_ = rt
+	origin := os.Getenv("ZCODE_BASE_URL")
+	if origin == "" {
+		origin = "https://zcode.z.ai"
+	}
 	fmt.Println("zcode: 启动 ZCode engine (app-server)...")
-	runCLI(node, scriptPath(rt), []string{"app-server"})
 	fmt.Println()
 	fmt.Println("==========================================")
-	fmt.Println("  ZCode web-remote / 手机远程访问链接：")
-	fmt.Println("  https://zcode.z.ai/remote/v4?id=<session>")
-	fmt.Println("  (由 app-server 通过 relay /web-remote/callback 建立)")
+	fmt.Println("  ZCode web-remote / 手机远程访问：")
+	fmt.Printf("  %s/remote/v4?id=<session>\n", origin)
+	fmt.Println("  (会话由 app-server 经 relay 建立；国内网络可")
+	fmt.Println("   export ZCODE_BASE_URL=https://zcode.chatglm.site)")
 	fmt.Println("==========================================")
+	runCLI(node, scriptPath(rt), []string{"app-server"})
 }
 
 func runAppServer(args []string) {

@@ -66,6 +66,27 @@ zcode-quick-web-forward --help
 All commands need **Node ≥ 22.5** (the runtime uses `node:sqlite`; on this box
 set `--node` to node 24 or `ZCODE_NODE`).
 
+### China / BigModel (国内) users
+
+The `logincli`/`run` OAuth flow targets the **international** Z.ai OAuth
+(`chat.z.ai`) — the runtime's `login` subcommand has no BigModel variant. For
+the China **BigModel** account you don't need OAuth at all:
+
+1. The runtime shares the desktop client's config (`~/.zcode/v2/config.json`).
+   Configure the BigModel API key once (the desktop client's "Bigmodel - API
+   Key" provider, `baseURL https://open.bigmodel.cn/api/anthropic`, or an
+   entry under `/provider/builtin:bigmodel`), or sign in via the desktop app.
+2. Then start the engine directly — no login step:
+
+   ```bash
+   # 切换 web-remote / relay 到国内端点（默认国际站 zcode.z.ai）
+   export ZCODE_BASE_URL=https://zcode.chatglm.site
+   zcode-quick-web-forward remote
+   ```
+
+`ZCODE_BASE_URL` (or `ZCODE_ENDPOINT_ORIGIN` / `ZCODE_PRODUCTION_BASE_URL`)
+overrides the runtime's service origin for web-remote/relay.
+
 ### Flags
 
 | flag | description |
