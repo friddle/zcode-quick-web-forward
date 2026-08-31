@@ -12,21 +12,27 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/runtime"
+	"github.com/friddle/zcode-quick-web-forward/internal/webremote"
 )
 
-const version = "0.3.1"
+const version = "0.4.0"
 
 var urlRe = regexp.MustCompile(`https?://[A-Za-z0-9._/\-?&=:%#~+{}$]+`)
 
@@ -160,15 +166,137 @@ func doRemote(args []string) {
 	if origin == "" {
 		origin = "https://zcode.z.ai"
 	}
+
+	// Register on the official web-remote relay and mint a real pairing URL
+	// (same QR the desktop's "continue on your phone" uses). Runs alongside
+	// the engine; a relay failure never blocks the local app-server.
+	go startWebRemote(origin)
+
 	fmt.Println("zcode: 启动 ZCode engine (app-server)...")
-	fmt.Println()
-	fmt.Println("==========================================")
-	fmt.Println("  ZCode web-remote / 手机远程访问：")
-	fmt.Printf("  %s/remote/v4?id=<session>\n", origin)
-	fmt.Println("  (会话由 app-server 经 relay 建立；国内网络可")
-	fmt.Println("   export ZCODE_BASE_URL=https://zcode.chatglm.site)")
-	fmt.Println("==========================================")
 	runCLI(node, scriptPath(rt), []string{"app-server"})
+}
+
+// startWebRemote registers this machine as a web-remote relay device and
+// prints the phone pairing URL (plus a terminal QR code when qrencode is
+// installed).
+func startWebRemote(origin string) {
+	cache, err := os.UserCacheDir()
+	if err == nil {
+		cache = filepath.Join(cache, "zcode-quick-web-forward")
+	}
+	opts := webremote.Options{
+		Origin:     origin,
+		DeviceMid:  loadOrCreateDeviceMid(cache),
+		DeviceName: hostname(),
+		AppVersion: version,
+		StatePath:  filepath.Join(cache, "webremote-state.json"),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	webremote.Run(ctx, opts, webremote.Handler{
+		OnReady: func(s webremote.Session) {
+			fmt.Println()
+			fmt.Println("==========================================")
+			fmt.Println("  ZCode web-remote / 手机配对链接(手机浏览器打开):")
+			fmt.Println("  " + s.PhoneURL)
+			fmt.Printf("  (relay %s,device %s)\n", origin, s.DeviceSid)
+			fmt.Println("  国内网络可 export ZCODE_BASE_URL=https://zcode.chatglm.site")
+			fmt.Println("==========================================")
+			if path, err := exec.LookPath("qrencode"); err == nil {
+				c := exec.Command(path, "-t", "UTF8", s.PhoneURL)
+				if out, err := c.Output(); err == nil {
+					fmt.Println(string(out))
+				}
+			}
+		},
+		OnPaired: func(string) {
+			fmt.Println()
+			fmt.Println("*** web-remote: 手机已配对接入 ***")
+		},
+		OnData: handleRemoteData,
+	})
+}
+
+// handleRemoteData answers the phone's bridge requests. bootstrap/workspace
+// listing is implemented so the phone gets past its splash; opening a
+// workspace (workspace-bridge-open + rpc-frame stream to the engine) is not
+// bridged yet in the CLI.
+func handleRemoteData(payload json.RawMessage, reply func(any)) {
+	var p struct {
+		ZcodeType string `json:"zcode_type"`
+		RequestID string `json:"requestId"`
+	}
+	if json.Unmarshal(payload, &p) != nil || p.RequestID == "" {
+		return
+	}
+	cwd, _ := os.Getwd()
+	ws := map[string]any{
+		"workspacePath":   cwd,
+		"label":           filepath.Base(cwd),
+		"kind":            "local",
+		"connectionState": "connected",
+	}
+	switch p.ZcodeType {
+	case "bootstrap-request":
+		reply(map[string]any{
+			"zcode_type": "bootstrap-response", "requestId": p.RequestID, "success": true,
+			"result": map[string]any{
+				"windowControlSessionId": "zqf",
+				"workspaces":             []any{ws},
+				"tasks":                  []any{},
+			},
+		})
+	case "workspace-list-request":
+		reply(map[string]any{
+			"zcode_type": "workspace-list-response", "requestId": p.RequestID, "success": true,
+			"result": map[string]any{"workspaces": []any{ws}, "tasks": []any{}},
+		})
+	case "workspace-bridge-open":
+		reply(map[string]any{
+			"zcode_type": "workspace-bridge-error", "requestId": p.RequestID,
+			"reason": "unsupported", "error": "CLI bridge does not relay engine sessions yet",
+		})
+	}
+}
+
+// loadOrCreateDeviceMid reuses the telemetry deviceMid the ZCode desktop
+// client / runtime already generated, so the relay sees a stable machine id.
+func loadOrCreateDeviceMid(cache string) string {
+	if home, err := os.UserHomeDir(); err == nil {
+		b, err := os.ReadFile(filepath.Join(home, ".zcode", "v2", "telemetry-state.json"))
+		if err == nil {
+			var st struct {
+				DeviceMid string `json:"deviceMid"`
+			}
+			if json.Unmarshal(b, &st) == nil && st.DeviceMid != "" {
+				return st.DeviceMid
+			}
+		}
+	}
+	path := filepath.Join(cache, "device-mid")
+	if b, err := os.ReadFile(path); err == nil && len(bytes.TrimSpace(b)) > 0 {
+		return string(bytes.TrimSpace(b))
+	}
+	mid := fmt.Sprintf("zqf-%s", strings.ReplaceAll(uuidNew(), "-", ""))
+	_ = os.MkdirAll(cache, 0o755)
+	_ = os.WriteFile(path, []byte(mid), 0o600)
+	return mid
+}
+
+func uuidNew() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "zcode-quick-web-forward"
+	}
+	return h
 }
 
 func runAppServer(args []string) {

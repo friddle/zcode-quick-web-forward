@@ -121,13 +121,16 @@ runtime's own subcommands exactly as the desktop client does:
    URL, authorize, and the CLI confirms on the callback / Enter.
 3. **app-server** → runs `node glm/zcode.cjs app-server` (the ZCode engine, the
    "**ZCode Protocol stdio app server**").
-4. **web-remote** → the mobile link (`https://<origin>/remote/v4?id=<session>`)
-   is established by the **desktop client**, which authenticates to the cloud
-   relay (`wss://<origin>/ws`, protocol version `2026-07-28`) and registers the
-   session; the phone then joins through `https://<origin>/remote/v4`. The
-   runtime itself never connects to the relay — a pure-CLI process cannot mint
-   that link. `remote` therefore runs the engine and shows the link template;
-   for actual phone access use the desktop client's "continue on your phone".
+4. **web-remote** → `remote` registers this machine as a device on ZCode's
+   official web-remote relay (`wss://<origin>/ws`) — the same service the
+   desktop's "continue on your phone" uses — and prints a **real pairing URL**
+   (`https://<origin>/remote/v4?sid=…&hash=…`), plus a terminal QR code when
+   `qrencode` is installed. Open it on a phone to pair. The relay handshake is
+   reverse-engineered from the desktop client (device register → HMAC
+   challenge-response → pair heartbeat). Phone-side bootstrap/workspace
+   listing is answered so the phone UI loads; relaying full engine sessions
+   into the phone (`workspace-bridge-open` + `rpc-frame` streams) is not
+   implemented yet — the desktop client remains the full experience.
 
 > **Notes / requirements**
 > - The runtime expects **Node ≥ 22.5** (uses `node:sqlite`, runs under the
@@ -135,9 +138,9 @@ runtime's own subcommands exactly as the desktop client does:
 > - The `.deb` has **no nodejs dependency** — ZCode bundles its own engine.
 > - Completing login requires you to **click the authorize link in a browser**;
 >   the client confirms on the callback.
-> - The mobile link is ZCode's own web-remote (`https://<origin>/remote/v4…`);
->   it is minted by the desktop client via the cloud relay, not by the
->   app-server and not by this tool.
+> - The mobile pairing link is minted by this tool via ZCode's official relay
+>   (`remote` command); full engine-session control from the phone still
+>   requires the desktop client.
 
 ## gh.proxy
 
