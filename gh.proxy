@@ -55,8 +55,9 @@ ghfetch() {
   echo "gh.proxy: saved $dst"
 }
 
-# Running directly (not sourced): perform the install using the mirror.
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+# Running directly, or piped via `wget -qO- … | bash` (BASH_SOURCE is unset
+# there, so fall back to $0), or sourced (BASH_SOURCE = this file ≠ $0).
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   echo "gh.proxy: installing zcode-quick-web-forward via $GH_PROXY …"
   install_url="https://raw.githubusercontent.com/friddle/zcode-quick-web-forward/main/install.sh"
   if command -v curl >/dev/null 2>&1; then
