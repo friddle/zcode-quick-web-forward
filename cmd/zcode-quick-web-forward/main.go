@@ -32,7 +32,7 @@ import (
 	"github.com/friddle/zcode-quick-web-forward/internal/webremote"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 var urlRe = regexp.MustCompile(`https?://[A-Za-z0-9._/\-?&=:%#~+{}$]+`)
 

@@ -205,6 +205,10 @@ func keepAlive(ctx context.Context, ws *client, sid string, h Handler) {
 		ws.send(relayMsg{Type: "data", Payload: mustJSON(payload)})
 	}
 	ws.readLoop(func(msg relayMsg) bool {
+		if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
+			b, _ := json.Marshal(msg)
+			fmt.Fprintf(os.Stderr, "webremote debug << %s\n", b)
+		}
 		switch {
 		case msg.PairStatus == "matched" || msg.PairStatus == "paired" || msg.TerminalSid != "":
 			if h.OnPaired != nil {
@@ -362,6 +366,9 @@ func (c *client) readLoop(onMsg func(relayMsg) bool) {
 	for {
 		op, payload, err := c.readFrame()
 		if err != nil {
+			if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
+				fmt.Fprintf(os.Stderr, "webremote debug: read err: %v\n", err)
+			}
 			c.markClosed()
 			return
 		}
@@ -376,9 +383,11 @@ func (c *client) readLoop(onMsg func(relayMsg) bool) {
 		case 0x8: // close
 			c.markClosed()
 			return
-		case 0x9: // ping -> pong
+		case 0x9: // ping -> pong (client frames must carry a mask)
 			c.wmu.Lock()
-			_, _ = c.conn.Write([]byte{0x8a, 0x80})
+			mask := make([]byte, 4)
+			rand.Read(mask)
+			_, _ = c.conn.Write(append([]byte{0x8a, 0x80}, mask...))
 			c.wmu.Unlock()
 		}
 	}
