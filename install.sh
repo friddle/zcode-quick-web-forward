@@ -37,16 +37,31 @@ mirror() {
   fi
 }
 
-dl() { # dl <url> <dst>
-  local url="$1" dst="$2"
+dl() { # dl <url> <dst> — mirror first, direct-GitHub fallback, resume on retry
+  local url="$1" dst="$2" u m rc=1
+  m="$(mirror "$url")"
   echo "zcode: downloading $(basename "$dst")"
+  local -a tries=("$m")
+  [ "$m" != "$url" ] && tries+=("$url")
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 20 --retry 3 -o "$dst" "$(mirror "$url")"
+    for u in "${tries[@]}" "${tries[@]}"; do
+      if [ -s "$dst" ]; then
+        curl -fsSL -C - --connect-timeout 20 --retry 3 -o "$dst" "$u" && { rc=0; break; }
+      else
+        curl -fsSL --connect-timeout 20 --retry 3 -o "$dst" "$u" && { rc=0; break; }
+      fi
+      echo "zcode: download via $u failed; trying next source…" >&2
+    done
   elif command -v wget >/dev/null 2>&1; then
-    wget -q --timeout=20 -t3 -O "$dst" "$(mirror "$url")"
+    for u in "${tries[@]}" "${tries[@]}"; do
+      wget -q --timeout=20 -t3 -O "$dst" "$u" && { rc=0; break; }
+      echo "zcode: download via $u failed; trying next source…" >&2
+    done
   else
     echo "zcode: need curl or wget" >&2; exit 1
   fi
+  [ "$rc" -ne 0 ] && { rm -f "$dst"; return 1; }
+  return 0
 }
 
 # ---- platform / arch detection ---------------------------------------------
