@@ -44,6 +44,9 @@ The script:
 ## Manual usage
 
 ```bash
+# full flow the installer starts: login -> app-server -> mobile/remote link
+zcode-quick-web-forward run --node /path/to/node-24
+
 # login with the real Z.AI OAuth (pure CLI, passes through the official client):
 # prints an authorize URL -> open it in a browser -> authorize -> Enter to confirm
 zcode-quick-web-forward logincli --node /path/to/node-24

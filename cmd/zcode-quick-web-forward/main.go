@@ -33,6 +33,9 @@ var urlRe = regexp.MustCompile(`https?://[A-Za-z0-9._/\-?&=:%#~+{}$]+`)
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "run":
+			runLoginCLI(os.Args[2:])
+			return
 		case "logincli", "login":
 			runLoginCLI(os.Args[2:])
 			return
@@ -65,6 +68,8 @@ mimicking the desktop client's own calls.
 usage: zcode-quick-web-forward [command] [flags]
 
 Commands:
+  run            full flow used by the installer: login, then app-server
+                 plus the web-remote/mobile link (same as logincli)
   logincli       run the real client login: node zcode.cjs login --oauth
                  --no-browser ; prints authorize URL, waits for callback/Enter
   app-server     run the ZCode engine: node zcode.cjs app-server
