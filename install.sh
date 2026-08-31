@@ -83,7 +83,7 @@ else
     git clone --depth 1 "$(mirror https://github.com/friddle/zcode-quick-web-forward.git)" "$tmp/src" \
       || { echo "zcode: failed to clone source" >&2; exit 1; }
   else
-    dl "$raw_base/main.tar.gz" "$tmp/tar.gz"
+    dl "https://github.com/friddle/zcode-quick-web-forward/archive/refs/heads/main.tar.gz" "$tmp/tar.gz"
     mkdir -p "$tmp/src"
     tar -xzf "$tmp/tar.gz" --strip-components=1 -C "$tmp/src" || {
       echo "zcode: failed to unpack source" >&2; exit 1; }
