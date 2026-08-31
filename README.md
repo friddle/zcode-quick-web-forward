@@ -89,6 +89,13 @@ the China **BigModel** account you don't need OAuth at all:
 `ZCODE_BASE_URL` (or `ZCODE_ENDPOINT_ORIGIN` / `ZCODE_PRODUCTION_BASE_URL`)
 overrides the runtime's service origin for web-remote/relay.
 
+Note: completing the international `login` (zai OAuth) rewrites the CLI
+default model in `~/.zcode/cli/config.json` to `zai/glm-5.1`. To keep using
+the BigModel key, set `/model/main` back to `bigmodel/GLM-5.3` (and make sure
+`provider/bigmodel` with `options.baseURL`/`options.apiKey` exists there —
+copy it from `~/.zcode/v2/config.json` under `provider/builtin:bigmodel` if
+needed).
+
 ### Flags
 
 | flag | description |
