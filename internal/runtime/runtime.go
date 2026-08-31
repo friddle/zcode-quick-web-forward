@@ -121,6 +121,23 @@ func (f *Finder) DownloadLatest() (string, error) {
 	return rel.Version, nil
 }
 
+// verifyChecksum reports whether a raw 64-byte sha512 matches the manifest
+// value, which is base64-encoded (hex is accepted too).
+func verifyChecksum(sum []byte, want string) bool {
+	if want == "" {
+		return true
+	}
+	if len(sum) == sha512.Size {
+		if hex.EncodeToString(sum) == strings.ToLower(strings.TrimSpace(want)) {
+			return true
+		}
+		if strings.EqualFold(base64.StdEncoding.EncodeToString(sum), strings.TrimSpace(want)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *Finder) download(url, dst, shaSum string) error {
 	if isUpToDate(dst, shaSum) {
 		fmt.Printf("zcode: use cached artifact %s\n", filepath.Base(dst))
@@ -151,9 +168,9 @@ func (f *Finder) download(url, dst, shaSum string) error {
 	}
 	out.Close()
 	if h != nil {
-		if got, want := encode512(h.Sum(nil)), strings.ToLower(shaSum); got != want {
+		if !verifyChecksum(h.Sum(nil), shaSum) {
 			os.Remove(dst + ".part")
-			return fmt.Errorf("checksum mismatch: got %s want %s", got, want)
+			return fmt.Errorf("checksum mismatch for %s", filepath.Base(dst))
 		}
 	}
 	return os.Rename(dst+".part", dst)

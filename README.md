@@ -71,14 +71,31 @@ zcode-quick-web-forward --help
    ZCode update manifest / CDN for the running platform+arch, downloads and
    extracts the bundled `glm/zcode.cjs` app-server runtime into the user cache.
    Reuses an already-installed ZCode desktop app when present.
-2. **Start the app-server** — spawns `node glm/zcode.cjs app-server` and talks
-   to it over its newline-delimited JSON protocol.
-3. **Login link + confirm** — prints the browser OAuth login URL, then confirms
-   login on **Enter** or when an auth-success event is auto-detected.
+2. **Start the app-server** — spawns `node glm/zcode.cjs app-server` (the
+   "spawn ZCode engine") and talks to it over its newline-delimited JSON
+   protocol.
+3. **Z.AI OAuth login** — builds the real authorize URL (the one the desktop
+   uses: `https://chat.z.ai/api/oauth/authorize`, client `zcode`), hosts a
+   login page with a clickable 登录 button plus a local `/callback` server,
+   prints the authorize link, waits for the browser to click + authorize, then
+   hands the returned `{callbackUrl, state}` to the runtime (via
+   `ZCODE_CLI_OAUTH_CALLBACK_STDIN=1`) to complete login. Press **Enter** to
+   force-refresh/re-probe.
 4. **Local web hub** — serves a small status page (`/` and `/api/state`) on
    the local machine.
 5. **Mobile / remote link** — forwards the local hub to the phone via a tunnel
-   (`piko` / `ssh -R` / local) and prints the URL.
+   (`piko` needed for a real public URL; `ssh -R`; or `local`) and prints the
+   URL.
+
+> **Notes / requirements**
+> - The runtime expects **Node ≥ 22.5** (it uses `node:sqlite` and runs under
+>   the desktop's bundled Electron node). Set `ZCODE_NODE=/path/to/node` or
+>   put node ≥22.5 on PATH.
+> - The `.deb` has **no nodejs dependency** — ZCode bundles its own engine.
+> - A **real mobile link** requires `piko` (or another tunnel) available on
+>   PATH; without it the tool falls back to the local/LAN URL.
+> - Completing login needs you to **click the authorize link in a browser**;
+>   the tool auto-confirms on the callback (or on Enter).
 
 ## gh.proxy
 
