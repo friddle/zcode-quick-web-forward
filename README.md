@@ -1,5 +1,10 @@
 # zcode-quick-web-forward
 
+> **Pure-CLI driver.** This tool does not re-implement login or tunnels — it invokes
+> the official ZCode runtime's own subcommands (`login`, `app-server`) exactly as
+> the desktop client does, so you get the real Z.AI authorize link and ZCode's
+> own web-remote / mobile link.
+
 One-shot helper that downloads the **latest ZCode** runtime (the bundled
 `glm/zcode.cjs` app-server), starts it, opens the **browser login flow**,
 confirms the login, and finally prints a **mobile / remote access link** —
