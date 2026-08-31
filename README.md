@@ -44,63 +44,66 @@ The script:
 ## Manual usage
 
 ```bash
-# full flow: download latest ZCode → spawn app-server → login → mobile link
-zcode-quick-web-forward run
+# login with the real Z.AI OAuth (pure CLI, passes through the official client):
+# prints an authorize URL -> open it in a browser -> authorize -> Enter to confirm
+zcode-quick-web-forward logincli --node /path/to/node-24
+
+# run the ZCode engine (the official app-server):
+zcode-quick-web-forward app-server --node /path/to/node-24
+
+# start app-server and print ZCode's own web-remote / mobile link:
+zcode-quick-web-forward remote --node /path/to/node-24
 
 # just download/resolve the latest ZCode runtime
 zcode-quick-web-forward download
 
-# app-server + local web hub only (no tunnel)
-zcode-quick-web-forward serve
-
-# app-server + login link only
-zcode-quick-web-forward login
-
 zcode-quick-web-forward --help
 ```
+
+All commands need **Node ≥ 22.5** (the runtime uses `node:sqlite`; on this box
+set `--node` to node 24 or `ZCODE_NODE`).
 
 ### Flags
 
 | flag | description |
 |------|-------------|
 | `--runtime-path PATH` | explicit glm runtime dir (env `ZCODE_RUNTIME_PATH`) |
-| `--port PORT` | local web-hub port (default: ephemeral) |
-| `--host HOST` | local hub bind host (default `127.0.0.1`) |
-| `--tunnel MODE` | `none` \| `local` \| `piko` \| `ssh` \| `auto` (default `auto`) |
-| `--tunnel-cmd "CMD"` | tunnel command override |
-| `--node PATH` | node binary (env `ZCODE_NODE`) |
+| `--node PATH` | node binary (env `ZCODE_NODE`), needs ≥22.5 |
 
-## What the binary does
+## What it does (pure CLI, mimics the ZCode client)
+
+This tool is a **thin passthrough** around the official ZCode runtime
+(`glm/zcode.cjs`) — it does not re-implement login or tunnels. It invokes the
+runtime's own subcommands exactly as the desktop client does:
 
 1. **Download the latest ZCode** — resolves the newest desktop release from the
    ZCode update manifest / CDN for the running platform+arch, downloads and
-   extracts the bundled `glm/zcode.cjs` app-server runtime into the user cache.
-   Reuses an already-installed ZCode desktop app when present.
-2. **Start the app-server** — spawns `node glm/zcode.cjs app-server` (the
-   "spawn ZCode engine") and talks to it over its newline-delimited JSON
-   protocol.
-3. **Z.AI OAuth login** — builds the real authorize URL (the one the desktop
-   uses: `https://chat.z.ai/api/oauth/authorize`, client `zcode`), hosts a
-   login page with a clickable 登录 button plus a local `/callback` server,
-   prints the authorize link, waits for the browser to click + authorize, then
-   hands the returned `{callbackUrl, state}` to the runtime (via
-   `ZCODE_CLI_OAUTH_CALLBACK_STDIN=1`) to complete login. Press **Enter** to
-   force-refresh/re-probe.
-4. **Local web hub** — serves a small status page (`/` and `/api/state`) on
-   the local machine.
-5. **Mobile / remote link** — forwards the local hub to the phone via a tunnel
-   (`piko` needed for a real public URL; `ssh -R`; or `local`) and prints the
-   URL.
+   extracts the bundled `glm/zcode.cjs` runtime into the user cache. Reuses an
+   already-installed ZCode desktop app when present.
+2. **login** → runs `node glm/zcode.cjs login --no-browser`. Login **is** Z.AI
+   OAuth; the runtime prints the real authorize URL
+   (`https://chat.z.ai/api/oauth/authorize`, official `client_id`, with a
+   **server-side** CLI callback `https://zcode.z.ai/api/v1/oauth/cli/callback/…`
+   so it works on Linux too, not just a macOS `zcode://` scheme). You open the
+   URL, authorize, and the CLI confirms on the callback / Enter.
+3. **app-server** → runs `node glm/zcode.cjs app-server` (the ZCode engine, the
+   "**ZCode Protocol stdio app server**").
+4. **web-remote** → ZCode ships its **own mobile tunnel** (this is what the
+   desktop's "continue on your phone" uses), surfaced via the engine:
+   - `remoteUrl: https://zcode.z.ai/remote/v4` (or bigmodel/zcode.chatglm.site)
+   - `webRemoteCallbackUrl: https://zcode.z.ai/web-remote/callback`
+   - `relayWsUrl: https://zcode.z.ai/ws`
+   The tool prints the real web-remote link, which is the genuine **mobile
+   access URL** — no custom piko needed.
 
 > **Notes / requirements**
-> - The runtime expects **Node ≥ 22.5** (it uses `node:sqlite` and runs under
->   the desktop's bundled Electron node). Set `ZCODE_NODE=/path/to/node` or
->   put node ≥22.5 on PATH.
+> - The runtime expects **Node ≥ 22.5** (uses `node:sqlite`, runs under the
+>   desktop's bundled Electron node). Set `ZCODE_NODE` / `--node` accordingly.
 > - The `.deb` has **no nodejs dependency** — ZCode bundles its own engine.
-> - A **real mobile link** requires `piko` (or another tunnel) available on
->   PATH; without it the tool falls back to the local/LAN URL.
-> - Completing login needs you to **click the authorize link in a browser**;
->   the tool auto-confirms on the callback (or on Enter).
+> - Completing login requires you to **click the authorize link in a browser**;
+>   the client confirms on the callback.
+> - The mobile link is ZCode's own web-remote (`https://zcode.z.ai/remote/v4…`);
+>   it is established by the app-server, not by this tool.
 
 ## gh.proxy
 
