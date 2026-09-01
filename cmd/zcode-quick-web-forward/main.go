@@ -31,6 +31,7 @@ import (
 	"github.com/friddle/zcode-quick-web-forward/internal/nodejs"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 	"github.com/friddle/zcode-quick-web-forward/internal/runtime"
+	"github.com/friddle/zcode-quick-web-forward/internal/terminal"
 	"github.com/friddle/zcode-quick-web-forward/internal/zcode"
 )
 
@@ -348,6 +349,15 @@ func doRemoteOpts(o commonOpts) {
 
 	ps := &phoneSessions{}
 	br := launchBrowser()
+	termSvc := terminal.New()
+	termSvc.SetCallbacks(
+		func(listenID int, data string) {
+			engine.SendChannelEventString(listenID, data, sender.send)
+		},
+		func(listenID, code int) {
+			engine.SendChannelEventInt(listenID, code, sender.send)
+		},
+	)
 	engClient.OnEvent = func(m json.RawMessage) {
 		handleEngineEvent(engClient, engine, sender, ps, m, br)
 	}
@@ -421,7 +431,7 @@ func doRemoteOpts(o commonOpts) {
 		}
 	}()
 
-	go startWebRemote(origin, region, engine, sender, startEngine, workspaces, ps, engClient)
+	go startWebRemote(origin, region, engine, sender, startEngine, workspaces, ps, engClient, termSvc)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -474,7 +484,7 @@ func (s *relaySender) send(v any) {
 	}
 }
 
-func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *relaySender, restartEngine func(), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client) {
+func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *relaySender, restartEngine func(), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) {
 	cache, err := os.UserCacheDir()
 	if err == nil {
 		cache = filepath.Join(cache, "zcode-quick-web-forward")
@@ -508,18 +518,18 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			fmt.Println("*** web-remote: 手机已配对接入 ***")
 			go func() {
 				time.Sleep(800 * time.Millisecond)
-				sender.send(workspaceListPush(workspaces))
+				sender.send(workspaceListPush(workspaces, ps))
 				fmt.Println("zcode: workspace list pushed to phone")
 			}()
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			handleRemoteData(payload, reply, engine, restartEngine, sender.send, workspaces, ps, engClient)
+			handleRemoteData(payload, reply, engine, restartEngine, sender.send, workspaces, ps, engClient, termSvc)
 		},
 	})
 }
 
-func workspaceListPush(workspaces []string) map[string]any {
+func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
 	wsList := make([]any, 0, len(workspaces))
 	for _, w := range workspaces {
 		wsList = append(wsList, map[string]any{
@@ -537,13 +547,13 @@ func workspaceListPush(workspaces []string) map[string]any {
 		"zcode_type": "workspace-list-updated",
 		"result": map[string]any{
 			"workspaces":         wsList,
-			"tasks":              taskListPayload(""),
+			"tasks":              taskListPayload("", ps),
 			"activeWorkspaceKey": active,
 		},
 	}
 }
 
-func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client) {
+func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) {
 	var p struct {
 		ZcodeType string `json:"zcode_type"`
 		RequestID string `json:"requestId"`
@@ -552,7 +562,7 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		return
 	}
 	if p.ZcodeType == "rpc-frame" || p.ZcodeType == "rpc-frame-ack" {
-		engine.HandlePhonePayload(payload, reply, handleChannelCall(engine, reply, workspaces, ps, engClient))
+		engine.HandlePhonePayload(payload, reply, handleChannelCall(engine, reply, workspaces, ps, engClient, termSvc))
 		return
 	}
 	if p.RequestID == "" {
@@ -570,13 +580,13 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 			"result": map[string]any{
 				"windowControlSessionId": "zqf",
 				"workspaces":             wsList,
-				"tasks":                  taskListPayload(""),
+				"tasks":                  taskListPayload("", ps),
 			},
 		})
 	case "workspace-list-request":
 		reply(map[string]any{
 			"zcode_type": "workspace-list-response", "requestId": p.RequestID, "success": true,
-			"result": map[string]any{"workspaces": wsList, "tasks": taskListPayload("")},
+			"result": map[string]any{"workspaces": wsList, "tasks": taskListPayload("", ps)},
 		})
 	case "workspace-bridge-open":
 		var v struct {
@@ -626,7 +636,7 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 			"zcode_type": "workspace-list-updated",
 			"result": map[string]any{
 				"workspaces":         wsList,
-				"tasks":              taskListPayload(""),
+				"tasks":              taskListPayload("", ps),
 				"activeWorkspaceKey": active,
 			},
 		})
@@ -658,7 +668,7 @@ func workspaceListPayload(workspaces []string) []any {
 	return wsList
 }
 
-func taskListPayload(kind string) []any {
+func taskListPayload(kind string, ps *phoneSessions) []any {
 	tasks, err := zcode.ListTasks("", kind)
 	if err != nil {
 		return []any{}
@@ -686,6 +696,9 @@ func taskListPayload(kind string) []any {
 			item["unreadAt"] = *t.UnreadAt
 		}
 		out = append(out, item)
+	}
+	if ps != nil {
+		out = append(out, ps.runtimeTaskList()...)
 	}
 	return out
 }
@@ -723,6 +736,10 @@ type phoneSessions struct {
 	convListener, indexListener, runtimeListener int
 	// logicalFrameOrdinal must strictly increase per (topic, subscriptionId)
 	frameOrdinal int
+	// runtimeTasks are sessions the engine created during this run (not yet in
+	// the on-disk task index), so the phone shows tasks that are actually
+	// running instead of "no tasks to display".
+	runtimeTasks map[string]map[string]any
 }
 
 func (p *phoneSessions) nextOrdinal() int {
@@ -736,7 +753,57 @@ func (p *phoneSessions) nextOrdinal() int {
 func (p *phoneSessions) setSession(id, ws string) {
 	p.mu.Lock()
 	p.sessionId, p.workspacePath = id, ws
+	if p.runtimeTasks == nil {
+		p.runtimeTasks = map[string]map[string]any{}
+	}
+	if id != "" {
+		now := time.Now().UnixMilli()
+		if _, ok := p.runtimeTasks[id]; !ok {
+			p.runtimeTasks[id] = map[string]any{
+				"taskId":        id,
+				"title":         "新任务",
+				"workspaceKey":  ws,
+				"workspacePath": ws,
+				"displayStatus": "running",
+				"createdAt":     now,
+				"updatedAt":     now,
+			}
+		}
+	}
 	p.mu.Unlock()
+}
+
+// runtimeTask adds a session created by the engine so it shows in the phone.
+func (p *phoneSessions) runtimeTask(sessionID, workspace, title string) {
+	p.mu.Lock()
+	if p.runtimeTasks == nil {
+		p.runtimeTasks = map[string]map[string]any{}
+	}
+	if title == "" {
+		title = "新任务"
+	}
+	p.runtimeTasks[sessionID] = map[string]any{
+		"taskId":        sessionID,
+		"title":         title,
+		"workspaceKey":  workspace,
+		"workspacePath": workspace,
+		"displayStatus": "running",
+		"createdAt":     time.Now().UnixMilli(),
+		"updatedAt":     time.Now().UnixMilli(),
+	}
+	p.mu.Unlock()
+}
+
+// runtimeTaskList returns the runtime-created tasks merged into the on-disk
+// task list so the phone always has something to show.
+func (p *phoneSessions) runtimeTaskList() []any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := []any{}
+	for _, t := range p.runtimeTasks {
+		out = append(out, t)
+	}
+	return out
 }
 
 func (p *phoneSessions) get() (string, string) {
@@ -757,7 +824,7 @@ func (p *phoneSessions) convSub() string {
 	return p.convSubscription
 }
 
-func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client) func(*relay.ChannelCall) {
+func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) func(*relay.ChannelCall) {
 	return func(c *relay.ChannelCall) {
 		fmt.Printf("zcode: channel call kind=%d id=%d %s.%s\n", c.Kind, c.ID, c.ChannelName, c.Name)
 		// EventListen (102): record the subscription so we can push EventFire.
@@ -769,13 +836,22 @@ func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []
 				ps.indexListener = c.ID
 			case "onAgentRuntimeLifecycle", "onAgentRuntimeRestarted":
 				ps.runtimeListener = c.ID
+			case "onDynamicData":
+				// terminal/onDynamicData — c.Arg is the terminal id string
+				if id, ok := c.Arg.(string); ok {
+					_ = termSvc.SetDataListener(id, c.ID)
+				}
+			case "onDynamicExit":
+				if id, ok := c.Arg.(string); ok {
+					_ = termSvc.SetExitListener(id, c.ID)
+				}
 			}
 			return
 		}
 		if c.Kind != 100 || c.ID == 0 {
 			return
 		}
-		if answerDesktopChannel(engine, c, send, workspaces, ps, engClient) {
+		if answerDesktopChannel(engine, c, send, workspaces, ps, engClient, termSvc) {
 			return
 		}
 		engine.RegisterCall(c.ID)
@@ -791,12 +867,83 @@ func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []
 	}
 }
 
-func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client) bool {
+func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) bool {
 	reply := func(result any) {
 		b, _ := json.Marshal(result)
 		engine.ReplyChannelPromise(c.ID, b, send)
 	}
-	switch c.ChannelName + "/" + c.Name {
+	replyNil := func() {
+		engine.ReplyChannelPromise(c.ID, []byte("null"), send)
+	}
+	switch key := c.ChannelName + "/" + c.Name; key {
+	case "terminal/create":
+		var p struct {
+			Cols int    `json:"cols"`
+			Rows int    `json:"rows"`
+			Cwd  string `json:"cwd"`
+		}
+		var raw json.RawMessage
+		if b, ok := c.Arg.(json.RawMessage); ok {
+			raw = b
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			raw = b
+		}
+		_ = json.Unmarshal(raw, &p)
+		desc, err := termSvc.Create(p.Cols, p.Rows, p.Cwd)
+		if err != nil {
+			reply(map[string]any{"error": err.Error()})
+			return true
+		}
+		reply(desc)
+		fmt.Printf("zcode: terminal created id=%s\n", desc["id"])
+	case "terminal/write":
+		var p struct {
+			ID   string `json:"id"`
+			Data string `json:"data"`
+		}
+		var raw json.RawMessage
+		if b, ok := c.Arg.(json.RawMessage); ok {
+			raw = b
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			raw = b
+		}
+		_ = json.Unmarshal(raw, &p)
+		if err := termSvc.Write(p.ID, p.Data); err != nil {
+			reply(map[string]any{"error": err.Error()})
+			return true
+		}
+		replyNil()
+	case "terminal/resize":
+		var p struct {
+			ID   string `json:"id"`
+			Cols int    `json:"cols"`
+			Rows int    `json:"rows"`
+		}
+		var raw json.RawMessage
+		if b, ok := c.Arg.(json.RawMessage); ok {
+			raw = b
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			raw = b
+		}
+		_ = json.Unmarshal(raw, &p)
+		if err := termSvc.Resize(p.ID, p.Cols, p.Rows); err != nil {
+			reply(map[string]any{"error": err.Error()})
+			return true
+		}
+		replyNil()
+	case "terminal/dispose":
+		var p struct {
+			ID string `json:"id"`
+		}
+		var raw json.RawMessage
+		if b, ok := c.Arg.(json.RawMessage); ok {
+			raw = b
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			raw = b
+		}
+		_ = json.Unmarshal(raw, &p)
+		termSvc.Dispose(p.ID)
+		replyNil()
 	case "model-provider/getAll", "model-provider/getAllCached":
 		reply(providerPayload())
 	case "model-provider/getDisplayOrder":
@@ -831,7 +978,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		case "listArchivedTasks":
 			kind = "archived"
 		}
-		reply(taskListPayload(kind))
+		reply(taskListPayload(kind, ps))
 	case "zcode-task/listPinnedTaskIds", "zcode-task/listArchivedTaskIds", "zcode-task/listDeletedTaskIds", "zcode-task/listRecentTasks":
 		kind := ""
 		switch c.Name {
@@ -947,7 +1094,7 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 	indexID, runtimeID, convSub := ps.indexListener, ps.runtimeListener, ps.convSubscription
 	ps.mu.Unlock()
 	if indexID > 0 {
-		b, _ := json.Marshal(sessionsIndexFrame(convSub))
+		b, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
 		engine.SendChannelEvent(indexID, b, send)
 		fmt.Println("zcode: pushed sessions-index snapshot")
 	}
@@ -988,11 +1135,14 @@ func pushConversationFrame(engine *relay.BridgeEngine, send func(any), ps *phone
 }
 
 // sessionsIndexFrame builds a sessions-index snapshot wire frame.
-func sessionsIndexFrame(convSub string) map[string]any {
+func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 	idx := "0"
 	tasks, _ := zcode.ListTasks("", "")
 	sessions := make([]any, 0, len(tasks))
 	for _, t := range tasks {
+		if strings.HasPrefix(t.WorkspaceKey, "remote:") {
+			continue
+		}
 		sessions = append(sessions, map[string]any{
 			"sessionId":      t.TaskID,
 			"workspaceId":    t.WorkspaceKey,
@@ -1002,6 +1152,23 @@ func sessionsIndexFrame(convSub string) map[string]any {
 			"createdAt":      t.CreatedAt,
 			"lastActivityAt": t.UpdatedAt,
 		})
+	}
+	if ps != nil {
+		for _, rt := range ps.runtimeTaskList() {
+			m, _ := rt.(map[string]any)
+			sid, _ := m["taskId"].(string)
+			title, _ := m["title"].(string)
+			ws, _ := m["workspacePath"].(string)
+			sessions = append(sessions, map[string]any{
+				"sessionId":      sid,
+				"workspaceId":    ws,
+				"title":          title,
+				"titleSource":    "generated",
+				"phase":          "running",
+				"createdAt":      m["createdAt"],
+				"lastActivityAt": m["updatedAt"],
+			})
+		}
 	}
 	return map[string]any{
 		"wireVersion":           3,
@@ -1263,11 +1430,19 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			}
 		}
 		ps.setSession(sid, ws)
+		title := req.Envelope.Payload.FirstInput.Text
+		if title == "" {
+			title = req.Envelope.Payload.Text
+		}
+		if title == "" {
+			title = "新任务"
+		}
+		ps.runtimeTask(sid, ws, title)
 		ack["result"] = map[string]any{
 			"type":      "createSession",
 			"sessionId": sid,
 		}
-		fmt.Printf("zcode: engine created session %s\n", sid)
+		fmt.Printf("zcode: engine created session %s title=%q\n", sid, title)
 	case "sendText", "":
 		sid := req.Envelope.SessionID
 		if sid == "" {

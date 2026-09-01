@@ -219,6 +219,31 @@ func (e *BridgeEngine) SendChannelEvent(id int, data []byte, send func(any)) {
 	e.sendChannelBytes(w.b, send)
 }
 
+// SendChannelEventString pushes an EventFire with a raw UTF-8 string payload
+// (used by the terminal channel: onDynamicData must arrive as a string, not a
+// JSON object).
+func (e *BridgeEngine) SendChannelEventString(id int, s string, send func(any)) {
+	w := &chWriter{}
+	w.byte(4)
+	w.varint(2)
+	w.value(chEventFire)
+	w.value(id)
+	w.value(s)
+	e.sendChannelBytes(w.b, send)
+}
+
+// SendChannelEventInt pushes an EventFire with an integer payload (terminal
+// onDynamicExit carries the exit code).
+func (e *BridgeEngine) SendChannelEventInt(id, v int, send func(any)) {
+	w := &chWriter{}
+	w.byte(4)
+	w.varint(2)
+	w.value(chEventFire)
+	w.value(id)
+	w.value(v)
+	e.sendChannelBytes(w.b, send)
+}
+
 // RegisterCall marks a JSON-RPC id as originating from a phone channel call.
 func (e *BridgeEngine) RegisterCall(id int) {
 	e.mu.Lock()

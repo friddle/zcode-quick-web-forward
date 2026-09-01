@@ -7,7 +7,6 @@
 package browser
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Browser is a running headless chromium with a CDP debugging port.
@@ -85,7 +86,7 @@ func Launch() (*Browser, error) {
 	if chrome == "" {
 		return nil, fmt.Errorf("no Playwright chromium found; install playwright browsers")
 	}
-	port := "0" // let chromium pick, we read it from DevToolsActivePort
+	port := "9222" // fixed CDP port so the host always finds it
 	b := &Browser{
 		generation: time.Now().UnixMilli(),
 		id:         fmt.Sprintf("iab:%d", time.Now().UnixMilli()),
@@ -112,17 +113,15 @@ func Launch() (*Browser, error) {
 	}
 	b.cmd = cmd
 
-	// Wait for the DevToolsActivePort file in the user-data-dir.
+	// Wait for the CDP endpoint to accept requests.
 	var cdpPort string
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		raw, err := os.ReadFile(filepath.Join(userData, "DevToolsActivePort"))
+		resp, err := http.Get("http://127.0.0.1:" + port + "/json")
 		if err == nil {
-			var p string
-			if _, err := fmt.Sscanf(string(raw), "%s", &p); err == nil {
-				cdpPort = p
-				break
-			}
+			resp.Body.Close()
+			cdpPort = port
+			break
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -216,10 +215,9 @@ func (b *Browser) Tabs() []map[string]any {
 	return out
 }
 
-// Execute runs a browser command over CDP. It implements the command set the
-// browser-use plugin client uses: list, newTab, navigate, getState, screenshot,
-// visibility, tabList, finalizeTabs. Returns the same shape the desktop
-// executor returns ({ok, result?, error?, elapsedMs}).
+// Execute runs a browser command over CDP. Returns the flat $L shape the
+// engine expects ({ok, tab|state|tabs|userTabs|value|image, elapsedMs} —
+// NO "result" wrapper; the schema is strict).
 func (b *Browser) Execute(command map[string]any) map[string]any {
 	method, _ := command["method"].(string)
 	started := time.Now().UnixMilli()
@@ -230,47 +228,89 @@ func (b *Browser) Execute(command map[string]any) map[string]any {
 
 	switch method {
 	case "list":
-		tabs := b.Tabs()
-		return map[string]any{"ok": true, "result": map[string]any{"method": "list", "tabs": tabs}, "elapsedMs": elapsed()}
+		tabs := b.tabsPayload()
+		return map[string]any{"ok": true, "tabs": tabs, "elapsedMs": elapsed()}
 	case "newTab":
 		tab, err := b.newTab()
 		if err != nil {
 			return fail("execution_error", err.Error())
 		}
-		return map[string]any{"ok": true, "result": map[string]any{"method": "newTab", "tab": tab}, "elapsedMs": elapsed()}
+		return map[string]any{"ok": true, "tab": tab, "elapsedMs": elapsed()}
 	case "navigate":
 		url, _ := command["url"].(string)
-		if err := b.Navigate(url); err != nil {
+		tabID, _ := command["tabId"].(string)
+		if err := b.NavigateTab(tabID, url); err != nil {
 			return fail("execution_error", err.Error())
 		}
-		state := b.getState()
-		return map[string]any{"ok": true, "result": map[string]any{"method": "navigate", "state": state}, "elapsedMs": elapsed()}
+		return map[string]any{"ok": true, "state": b.getState(), "elapsedMs": elapsed()}
 	case "getState":
-		return map[string]any{"ok": true, "result": map[string]any{"method": "getState", "state": b.getState()}, "elapsedMs": elapsed()}
+		return map[string]any{"ok": true, "state": b.getState(), "elapsedMs": elapsed()}
 	case "screenshot":
 		img, err := b.Screenshot()
 		if err != nil {
 			return fail("execution_error", err.Error())
 		}
-		return map[string]any{"ok": true, "result": map[string]any{"method": "screenshot", "format": "png", "data": img}, "elapsedMs": elapsed()}
-	case "visibility":
-		return map[string]any{"ok": true, "result": map[string]any{"method": "visibility", "visible": true}, "elapsedMs": elapsed()}
+		return map[string]any{"ok": true, "image": map[string]any{"base64": img, "mimeType": "image/png"}, "elapsedMs": elapsed()}
+	case "browserVisibilityGet":
+		return map[string]any{"ok": true, "value": true, "elapsedMs": elapsed()}
+	case "browserVisibilitySet", "nameSession":
+		return map[string]any{"ok": true, "elapsedMs": elapsed()}
 	case "tabList":
-		return map[string]any{"ok": true, "result": map[string]any{"method": "tabList", "tabs": b.Tabs()}, "elapsedMs": elapsed()}
+		return map[string]any{"ok": true, "tabs": b.tabsPayload(), "elapsedMs": elapsed()}
+	case "listUserTabs":
+		return map[string]any{"ok": true, "userTabs": b.userTabsPayload(), "elapsedMs": elapsed()}
 	case "finalizeTabs":
-		return map[string]any{"ok": true, "result": map[string]any{"method": "finalizeTabs"}, "elapsedMs": elapsed()}
+		return map[string]any{"ok": true, "elapsedMs": elapsed()}
 	case "closeTab":
-		return map[string]any{"ok": true, "result": map[string]any{"method": "closeTab"}, "elapsedMs": elapsed()}
+		return map[string]any{"ok": true, "elapsedMs": elapsed()}
 	default:
-		// Unknown / playwright ops: return ok with the method echoed so the
-		// agent can continue. Fuller CDP bridging for playwright locators is
-		// out of scope here.
-		return map[string]any{"ok": true, "result": map[string]any{"method": method}, "elapsedMs": elapsed()}
+		// Unknown commands: return ok so the agent can continue.
+		return map[string]any{"ok": true, "elapsedMs": elapsed()}
 	}
 }
 
+// tabPayload builds a tab descriptor matching the engine's Ikt schema.
+func tabPayload(t *Tab) map[string]any {
+	return map[string]any{
+		"tabId": t.ID,
+		"url":   t.URL,
+		"title": t.Title,
+		"viewport": map[string]any{
+			"width":  1280,
+			"height": 720,
+		},
+	}
+}
+
+func (b *Browser) tabsPayload() []any {
+	b.refreshTabs()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := []any{}
+	for _, t := range b.tabs {
+		out = append(out, tabPayload(t))
+	}
+	return out
+}
+
+// userTabsPayload builds userTabs entries (key is "id", not "tabId").
+func (b *Browser) userTabsPayload() []any {
+	b.refreshTabs()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := []any{}
+	for _, t := range b.tabs {
+		out = append(out, map[string]any{
+			"id":    t.ID,
+			"title": t.Title,
+			"url":   t.URL,
+		})
+	}
+	return out
+}
+
 // newTab creates a new page target via the CDP /json/new endpoint and returns
-// the tab descriptor the plugin client expects ({tabId, url, title, ...}).
+// the tab descriptor the engine expects (Ikt: tabId/url/title/viewport).
 func (b *Browser) newTab() (map[string]any, error) {
 	resp, err := http.Get(b.debuggerURL + "/json/new?about:blank")
 	if err != nil {
@@ -291,15 +331,10 @@ func (b *Browser) newTab() (map[string]any, error) {
 	b.nextTabID++
 	b.tabs[t.ID] = &Tab{ID: t.ID, Title: t.Title, URL: t.URL, wsURL: t.WsURL, viewID: b.nextTabID}
 	b.mu.Unlock()
-	return map[string]any{
-		"tabId":  t.ID,
-		"url":    t.URL,
-		"title":  t.Title,
-		"viewId": b.nextTabID,
-	}, nil
+	return tabPayload(b.tabs[t.ID]), nil
 }
 
-// getState returns the current first-page state ({url, title}) for getState.
+// getState returns the current first-page state for getState/navigate.
 func (b *Browser) getState() map[string]any {
 	b.refreshTabs()
 	b.mu.Lock()
@@ -309,86 +344,104 @@ func (b *Browser) getState() map[string]any {
 		break
 	}
 	b.mu.Unlock()
-	state := map[string]any{"url": "", "title": "", "loading": false}
-	if tab == nil {
-		return state
+	state := map[string]any{"url": "", "title": "", "canGoBack": false, "canGoForward": false}
+	if tab != nil {
+		state["url"] = tab.URL
+		state["title"] = tab.Title
 	}
-	state["url"] = tab.URL
-	state["title"] = tab.Title
 	return state
 }
 
-// Navigate opens a URL in the first page target.
+// Navigate opens a URL in the first page target over CDP WebSocket.
 func (b *Browser) Navigate(url string) error {
-	b.refreshTabs()
-	b.mu.Lock()
-	var tab *Tab
-	for _, t := range b.tabs {
-		tab = t
-		break
-	}
-	b.mu.Unlock()
-	if tab == nil {
-		return fmt.Errorf("no browser tab")
-	}
-	// Use the HTTP JSON endpoint to navigate the first page target.
-	var targets []struct {
-		ID    string `json:"id"`
-		Type  string `json:"type"`
-	}
-	resp, err := http.Get(b.debuggerURL + "/json")
+	return b.NavigateTab("", url)
+}
+
+// NavigateTab navigates the given tab (by CDP target id) to url; empty tabID
+// uses the first page target.
+func (b *Browser) NavigateTab(tabID, url string) error {
+	wsURL, err := b.pageWS(tabID)
 	if err != nil {
 		return err
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&targets)
-	resp.Body.Close()
-	for _, t := range targets {
-		if t.Type != "page" {
-			continue
-		}
-		body, _ := json.Marshal(map[string]any{"cmd": "Page.navigate", "params": map[string]any{"url": url}})
-		r, err := http.Post(b.debuggerURL+"/json/"+t.ID+"/execute", "application/json", bytes.NewReader(body))
-		if err == nil {
-			r.Body.Close()
-			return nil
-		}
-		return err
-	}
-	return fmt.Errorf("no page target")
+	_, err = b.cdpCall(wsURL, tabID, "Page.navigate", map[string]any{"url": url})
+	return err
 }
 
 // Screenshot captures the first page via CDP Page.captureScreenshot.
 func (b *Browser) Screenshot() (string, error) {
-	b.refreshTabs()
-	b.mu.Lock()
-	var tab *Tab
-	for _, t := range b.tabs {
-		tab = t
-		break
-	}
-	b.mu.Unlock()
-	if tab == nil {
-		return "", fmt.Errorf("no browser tab")
-	}
-	body, _ := json.Marshal(map[string]any{"cmd": "Page.captureScreenshot", "params": map[string]any{"format": "png"}})
-	resp, err := http.Post(b.debuggerURL+"/json/"+tab.ID+"/execute", "application/json", bytes.NewReader(body))
+	wsURL, err := b.pageWS("")
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	var out struct {
-		Result struct {
-			Data string `json:"data"`
-		} `json:"result"`
+	res, err := b.cdpCall(wsURL, "", "Page.captureScreenshot", map[string]any{"format": "png"})
+	if err != nil {
+		return "", err
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) != nil {
-		return "", fmt.Errorf("bad screenshot response")
-	}
-	if out.Result.Data == "" {
+	data, _ := res["data"].(string)
+	if data == "" {
 		return "", fmt.Errorf("empty screenshot")
 	}
-	// CDP Page.captureScreenshot returns base64 png directly.
-	return out.Result.Data, nil
+	return data, nil
+}
+
+// pageWS returns the WebSocket URL for the given tab (by id), or the first
+// page target when id is empty.
+func (b *Browser) pageWS(id string) (string, error) {
+	b.refreshTabs()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if id != "" {
+		if t, ok := b.tabs[id]; ok && t.wsURL != "" {
+			return t.wsURL, nil
+		}
+	}
+	for _, t := range b.tabs {
+		if t.wsURL != "" {
+			return t.wsURL, nil
+		}
+	}
+	return "", fmt.Errorf("no browser tab")
+}
+
+// cdpCall sends a CDP command over WebSocket and returns the result.
+func (b *Browser) cdpCall(wsURL, targetID, method string, params map[string]any) (map[string]any, error) {
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	id := time.Now().UnixMilli()
+	if err := conn.WriteJSON(map[string]any{
+		"id": id, "method": method, "params": params,
+	}); err != nil {
+		return nil, err
+	}
+	// read until we get the matching id
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return nil, err
+		}
+		var out struct {
+			ID     int64          `json:"id"`
+			Result map[string]any `json:"result"`
+			Error  *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(msg, &out) != nil {
+			continue
+		}
+		if out.ID == id {
+			if out.Error != nil {
+				return nil, fmt.Errorf("cdp %s: %s", method, out.Error.Message)
+			}
+			return out.Result, nil
+		}
+	}
+	return nil, fmt.Errorf("cdp %s: timeout", method)
 }
 
 // Close shuts down chromium.
