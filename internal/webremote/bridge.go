@@ -188,11 +188,74 @@ type BridgeEngine struct {
 	mu       sync.Mutex
 	sink     io.Writer     // app-server stdin (newline-delimited JSON)
 	identity frameIdentity // set when the phone opens a workspace bridge
+	pending  map[int]bool  // JSON-RPC ids awaiting channel replies
 }
 
 // NewBridgeEngine creates an engine; call Attach before use.
 func NewBridgeEngine() *BridgeEngine {
-	return &BridgeEngine{enc: newFrameEncoder(), asm: newAssembler()}
+	return &BridgeEngine{enc: newFrameEncoder(), asm: newAssembler(), pending: map[int]bool{}}
+}
+
+// SendChannelInitialize performs the channel handshake: without it the phone
+// stays Uninitialized and never issues any request.
+func (e *BridgeEngine) SendChannelInitialize(send func(any)) {
+	e.sendChannelBytes(initializeMessage(), send)
+}
+
+// ReplyChannelPromise wraps a JSON result for a phone channel request id.
+func (e *BridgeEngine) ReplyChannelPromise(id int, result []byte, send func(any)) {
+	e.sendChannelBytes(promiseSuccess(id, result), send)
+}
+
+// RegisterCall marks a JSON-RPC id as originating from a phone channel call.
+func (e *BridgeEngine) RegisterCall(id int) {
+	e.mu.Lock()
+	e.pending[id] = true
+	e.mu.Unlock()
+}
+
+// ServerLine routes one app-server stdout line: replies to phone-originated
+// calls become channel PromiseSuccess frames; everything else is dropped
+// (the phone cannot parse raw JSON frames).
+func (e *BridgeEngine) ServerLine(line []byte, send func(any)) {
+	var msg struct {
+		ID     int             `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(line, &msg) != nil || msg.ID == 0 {
+		return
+	}
+	e.mu.Lock()
+	wanted := e.pending[msg.ID]
+	delete(e.pending, msg.ID)
+	e.mu.Unlock()
+	if !wanted {
+		return
+	}
+	if len(msg.Error) > 0 {
+		e.sendChannelBytes(promiseSuccess(msg.ID, msg.Error), send)
+		return
+	}
+	e.sendChannelBytes(promiseSuccess(msg.ID, msg.Result), send)
+}
+
+func (e *BridgeEngine) sendChannelBytes(b []byte, send func(any)) {
+	e.mu.Lock()
+	id := e.identity
+	enc := e.enc
+	e.mu.Unlock()
+	if id.BridgeSessionID == "" {
+		return
+	}
+	frames, err := enc.encode(id, b)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "webremote bridge: %v\n", err)
+		return
+	}
+	for _, f := range frames {
+		send(f)
+	}
 }
 
 // WriteToServer sends one raw protocol line to the app-server's stdin
@@ -225,9 +288,8 @@ func (e *BridgeEngine) SetIdentity(sessionID string, generation *int, recoveryID
 	e.enc = newFrameEncoder()
 }
 
-// PumpServerLine frames one outbound line from the app-server and sends it.
-// Lines produced before any bridge exists are dropped: they belong to no
-// frame channel.
+// PumpServerLine observes an outbound engine line; channel replies are sent
+// via ServerLine, so raw JSON is never framed to the phone.
 func (e *BridgeEngine) PumpServerLine(line []byte, send func(any)) {
 	msg := append(append([]byte{}, line...), '\n')
 	e.mu.Lock()
@@ -247,9 +309,9 @@ func (e *BridgeEngine) PumpServerLine(line []byte, send func(any)) {
 	}
 }
 
-// HandlePhonePayload processes one phone data payload. writeSink receives
-// bytes destined for the app-server's stdin; send replies to the phone.
-func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any), writeSink func([]byte)) {
+// HandlePhonePayload processes one phone data payload. onCall receives
+// decoded channel requests (Promise/EventListen); send replies to the phone.
+func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any), onCall func(*ChannelCall)) {
 	var head struct {
 		ZcodeType string `json:"zcode_type"`
 	}
@@ -271,14 +333,17 @@ func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any
 			return
 		}
 		send(rpcAck{ZcodeType: "rpc-frame-ack", frameIdentity: f.frameIdentity, AckMessageSeq: f.MessageSeq})
+		if call := parseChannelCall(msg); call != nil {
+			if onCall != nil {
+				onCall(call)
+			}
+			return
+		}
 		e.mu.Lock()
 		sink := e.sink
 		e.mu.Unlock()
 		if sink != nil {
 			_, _ = sink.Write(msg)
-		}
-		if writeSink != nil {
-			writeSink(msg)
 		}
 	case "rpc-frame-ack":
 		// informational; the CLI keeps no replay buffer in v1

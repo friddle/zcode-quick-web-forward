@@ -28,12 +28,13 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/runtime"
 	"github.com/friddle/zcode-quick-web-forward/internal/webremote"
 )
 
-const version = "0.4.3"
+const version = "0.5.0"
 
 var urlRe = regexp.MustCompile(`https?://[A-Za-z0-9._/\-?&=:%#~+{}$]+`)
 
@@ -172,47 +173,66 @@ func doRemote(args []string) {
 
 	// The engine's stdio belongs to the web-remote bridge: the phone drives
 	// it through rpc-frames and engine output is framed back to the phone
-	// (echoed locally too, so the CLI stays observable).
+	// (echoed locally too, so the CLI stays observable). The desktop spawns a
+	// fresh engine per workspace bridge, so every bridge-open restarts the
+	// engine here too — the fresh host's initial output is what the phone UI
+	// waits for before leaving its loading screen.
 	engine := webremote.NewBridgeEngine()
 	sender := &relaySender{}
-	app := exec.Command(node, scriptPath(rt), "app-server")
-	app.Dir = dirOf(scriptPath(rt))
-	app.Stderr = os.Stderr
-	stdin, err := app.StdinPipe()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "zcode: engine stdin: %v\n", err)
-		os.Exit(1)
-	}
-	stdout, err := app.StdoutPipe()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "zcode: engine stdout: %v\n", err)
-		os.Exit(1)
-	}
-	if err := app.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "zcode: engine start: %v\n", err)
-		os.Exit(1)
-	}
-	engine.Attach(stdin)
-	go func() {
-		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-		for sc.Scan() {
-			line := sc.Bytes()
-			if len(line) == 0 {
-				continue
-			}
-			fmt.Printf("zcode << %s\n", line)
-			engine.PumpServerLine(line, sender.send)
+
+	var engMu sync.Mutex
+	var engCmd *exec.Cmd
+
+	startEngine := func() {
+		engMu.Lock()
+		if engCmd != nil && engCmd.Process != nil {
+			_ = engCmd.Process.Kill()
+			_, _ = engCmd.Process.Wait()
 		}
-		_ = app.Wait()
-		fmt.Println("zcode: engine exited")
-		os.Exit(0)
-	}()
+		engMu.Unlock()
+
+		cmd := exec.Command(node, scriptPath(rt), "app-server")
+		cmd.Dir = dirOf(scriptPath(rt))
+		cmd.Stderr = os.Stderr
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "zcode: engine stdin: %v\n", err)
+			return
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "zcode: engine stdout: %v\n", err)
+			return
+		}
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "zcode: engine start: %v\n", err)
+			return
+		}
+		engMu.Lock()
+		engCmd = cmd
+		engMu.Unlock()
+		engine.Attach(stdin)
+		fmt.Println("zcode: engine (re)started for bridge")
+		go func() {
+			sc := bufio.NewScanner(stdout)
+			sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+			for sc.Scan() {
+				line := sc.Bytes()
+				if len(line) == 0 {
+					continue
+				}
+				fmt.Printf("zcode << %s\n", line)
+				engine.ServerLine(line, sender.send)
+			}
+			_ = cmd.Wait()
+		}()
+	}
+	startEngine()
 
 	// Register on the official web-remote relay and mint a real pairing URL
 	// (same QR the desktop's "continue on your phone" uses). Runs alongside
 	// the engine; a relay failure never blocks the local app-server.
-	go startWebRemote(origin, engine, sender)
+	go startWebRemote(origin, engine, sender, startEngine)
 
 	waitSig()
 }
@@ -238,6 +258,30 @@ func (s *relaySender) send(v any) {
 	}
 }
 
+func (s *relaySender) sendFn() func(any) { return s.send }
+
+// handleChannelCall bridges a phone channel request onto the engine's JSON
+// protocol: channelName/name map to method path, replies flow back as
+// PromiseSuccess frames via ServerLine.
+func handleChannelCall(engine *webremote.BridgeEngine) func(*webremote.ChannelCall) {
+	return func(c *webremote.ChannelCall) {
+		fmt.Printf("zcode: channel call kind=%d id=%d %s.%s\n", c.Kind, c.ID, c.ChannelName, c.Name)
+		if c.Kind != 100 || c.ID == 0 {
+			return
+		}
+		engine.RegisterCall(c.ID)
+		params := "null"
+		if c.Arg != nil {
+			if b, ok := c.Arg.(json.RawMessage); ok && len(b) > 0 {
+				params = string(b)
+			} else if b, err := json.Marshal(c.Arg); err == nil {
+				params = string(b)
+			}
+		}
+		engine.WriteToServer(fmt.Sprintf(`{"id":%d,"method":%q,"params":%s}`, c.ID, c.ChannelName+"/"+c.Name, params))
+	}
+}
+
 func waitSig() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -247,7 +291,7 @@ func waitSig() {
 // startWebRemote registers this machine as a web-remote relay device and
 // prints the phone pairing URL (plus a terminal QR code when qrencode is
 // installed).
-func startWebRemote(origin string, engine *webremote.BridgeEngine, sender *relaySender) {
+func startWebRemote(origin string, engine *webremote.BridgeEngine, sender *relaySender, restartEngine func()) {
 	cache, err := os.UserCacheDir()
 	if err == nil {
 		cache = filepath.Join(cache, "zcode-quick-web-forward")
@@ -283,14 +327,14 @@ func startWebRemote(origin string, engine *webremote.BridgeEngine, sender *relay
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			handleRemoteData(payload, reply, engine)
+			handleRemoteData(payload, reply, engine, restartEngine, sender.send)
 		},
 	})
 }
 
 // handleRemoteData answers the phone's bridge requests: bootstrap/workspace
 // listing, bridge-open (ready), and the rpc-frame stream to/from the engine.
-func handleRemoteData(payload json.RawMessage, reply func(any), engine *webremote.BridgeEngine) {
+func handleRemoteData(payload json.RawMessage, reply func(any), engine *webremote.BridgeEngine, restartEngine func(), replyFrames func(any)) {
 	var p struct {
 		ZcodeType string `json:"zcode_type"`
 		RequestID string `json:"requestId"`
@@ -299,7 +343,7 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *webremot
 		return
 	}
 	if p.ZcodeType == "rpc-frame" || p.ZcodeType == "rpc-frame-ack" {
-		engine.HandlePhonePayload(payload, reply, nil)
+		engine.HandlePhonePayload(payload, reply, handleChannelCall(engine))
 		return
 	}
 	if p.RequestID == "" {
@@ -343,6 +387,9 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *webremot
 			return
 		}
 		engine.SetIdentity(v.BridgeSessionID, v.BridgeGeneration, v.RecoveryID)
+		if restartEngine != nil {
+			restartEngine() // fresh host per bridge, desktop-style
+		}
 		ready := map[string]any{
 			"zcode_type": "workspace-bridge-ready", "requestId": v.RequestID,
 			"bridgeSessionId": v.BridgeSessionID,
@@ -370,9 +417,14 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *webremot
 				"activeWorkspaceKey": cwd,
 			},
 		})
-		// Prime the engine so it emits state over the fresh frame channel,
-		// like the desktop's per-workspace host attach does.
-		engine.WriteToServer(`{"id":900001,"method":"session/list","params":{}}`)
+		// Channel handshake: without Initialize the phone never sends anything.
+		// Deferred like the desktop's deferInit — the phone wires its frame
+		// channel right after bridge-ready; an immediate Initialize races it.
+		go func() {
+			time.Sleep(1200 * time.Millisecond)
+			engine.SendChannelInitialize(replyFrames)
+			fmt.Println("zcode: channel initialize sent")
+		}()
 	case "workspace-reconnect-request":
 		reply(map[string]any{
 			"zcode_type": "workspace-reconnect-response", "requestId": p.RequestID, "success": true,
