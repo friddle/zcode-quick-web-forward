@@ -1538,9 +1538,16 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		if ws == "" && len(workspaces) > 0 {
 			ws = workspaces[0]
 		}
-		// Ask the engine to create a real session, passing the phone's chosen
-		// provider/model so the engine uses it (not just the config default).
-		res, err := engClient.CreateSession(ws, ws, req.Envelope.Payload.Config.Provider, req.Envelope.Payload.Config.Model, 15*time.Second)
+		// Ask the engine to create a real session. Prefer the config's default
+		// model (model.main) over the phone's cached selection — the phone may
+		// still carry a model whose key is out of balance, and the config is
+		// the authoritative default.
+		provider := req.Envelope.Payload.Config.Provider
+		model := req.Envelope.Payload.Config.Model
+		if defP, defM := zcode.DefaultModel(); defP != "" && defM != "" {
+			provider, model = defP, defM
+		}
+		res, err := engClient.CreateSession(ws, ws, provider, model, 15*time.Second)
 		if err != nil {
 			fmt.Printf("zcode: engine createSession failed: %v\n", err)
 			ack["status"] = "failed"

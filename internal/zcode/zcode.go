@@ -271,4 +271,20 @@ func ActiveWorkspace() string {
 	return ""
 }
 
+// DefaultModel returns the configured default model ref from
+// ~/.zcode/cli/config.json (model.main, e.g. "bigmodel/GLM-5.3"), split into
+// provider/model. Empty strings when unset.
+func DefaultModel() (provider, model string) {
+	cfg := readJSON(filepath.Join(Home(), "cli", "config.json"))
+	mo, _ := cfg["model"].(map[string]any)
+	ref, _ := mo["main"].(string)
+	if ref == "" {
+		return "", ""
+	}
+	if i := strings.Index(ref, "/"); i > 0 {
+		return ref[:i], ref[i+1:]
+	}
+	return "", ref
+}
+
 var _ = fmt.Sprintf
