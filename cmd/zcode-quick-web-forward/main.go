@@ -27,6 +27,7 @@ import (
 	"time"
 
 	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
+	"github.com/friddle/zcode-quick-web-forward/internal/browser"
 	"github.com/friddle/zcode-quick-web-forward/internal/nodejs"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 	"github.com/friddle/zcode-quick-web-forward/internal/runtime"
@@ -211,6 +212,22 @@ func fatal(format string, a ...any) {
 	os.Exit(1)
 }
 
+// launchBrowser starts the headless chromium browser host, or returns nil when
+// no chromium is available (browser tasks then report backend_unavailable).
+func launchBrowser() *browser.Browser {
+	if browser.FindChromium() == "" {
+		fmt.Println("zcode: no chromium found; browser tasks unavailable (set PLAYWRIGHT_BROWSERS_PATH)")
+		return nil
+	}
+	b, err := browser.Launch()
+	if err != nil {
+		fmt.Printf("zcode: browser launch failed: %v (browser tasks unavailable)\n", err)
+		return nil
+	}
+	fmt.Printf("zcode: browser host ready (%s)\n", b.ID())
+	return b
+}
+
 func resolveRuntime(runtimePath string) (dir string) {
 	dir, _, err := runtime.NewFinder().Resolve(runtimePath)
 	if err != nil {
@@ -250,6 +267,26 @@ func dirOf(p string) string {
 		return p[:i]
 	}
 	return "."
+}
+
+// defaultPlaywrightPath returns the Playwright browsers cache directory used
+// for headless browser tooling, preferring an existing one on the machine.
+func defaultPlaywrightPath() string {
+	if v := os.Getenv("PLAYWRIGHT_BROWSERS_PATH"); v != "" {
+		return v
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		cands := []string{
+			filepath.Join(home, ".cache", "ms-playwright"),
+			filepath.Join(home, "Library", "Caches", "ms-playwright"),
+		}
+		for _, c := range cands {
+			if fi, err := os.Stat(c); err == nil && fi.IsDir() {
+				return c
+			}
+		}
+	}
+	return ""
 }
 
 // runLoginCLI drives the interactive entry: region, login method, then remote.
@@ -310,8 +347,9 @@ func doRemoteOpts(o commonOpts) {
 	sender := &relaySender{}
 
 	ps := &phoneSessions{}
+	br := launchBrowser()
 	engClient.OnEvent = func(m json.RawMessage) {
-		handleEngineEvent(engClient, engine, sender, ps, m)
+		handleEngineEvent(engClient, engine, sender, ps, m, br)
 	}
 
 	var engMu sync.Mutex
@@ -331,6 +369,12 @@ func doRemoteOpts(o commonOpts) {
 		cmd := exec.Command(node, scriptPath(rt), "app-server")
 		cmd.Dir = dirOf(scriptPath(rt))
 		cmd.Stderr = os.Stderr
+		// Let the engine discover the browser-use plugin and Playwright
+		// chromium (headless browser capability).
+		cmd.Env = append(os.Environ(),
+			"ZCODE_PLUGIN_ROOT="+filepath.Join(filepath.Dir(scriptPath(rt)), "packages", "browser-use-plugin"),
+			"PLAYWRIGHT_BROWSERS_PATH="+defaultPlaywrightPath(),
+		)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			fatal("engine stdin: %v", err)
@@ -1249,7 +1293,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 // handleEngineEvent processes engine->client notifications: it answers
 // session/requestRuntimePreferences and forwards conversation-relevant stream
 // events to the phone as onDynamicConversationFrame frames.
-func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, sender *relaySender, ps *phoneSessions, m json.RawMessage) {
+func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, sender *relaySender, ps *phoneSessions, m json.RawMessage, br *browser.Browser) {
 	var ev struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -1268,6 +1312,50 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		}
 		engClient.RespondToRequest(ev.ID, result)
 		fmt.Println("zcode: engine prefs ok")
+	case "interaction/requestPermission":
+		// The engine requests permission for a tool (e.g. the browser-use
+		// plugin opening a browser). The phone already asked to run the task,
+		// so auto-approve. The broker result schema S2 is
+		// {decision, reason?, modifiedInput?, permissionUpdates?}.strict() —
+		// any extra field (even resolvedAt) fails strict and the engine
+		// silently retries the permission request forever.
+		engClient.RespondToRequest(ev.ID, map[string]any{
+			"decision": "allow",
+			"reason":   "Auto-approved by zcode-quick-web-forward (phone requested this task)",
+		})
+		fmt.Println("zcode: auto-approved permission request")
+	case "interaction/browserList":
+		// Report the browser host so the engine's browser-use plugin has a
+		// real browser to drive.
+		var p struct {
+			RequestID string `json:"requestId"`
+		}
+		_ = json.Unmarshal(ev.Params, &p)
+		if br == nil {
+			engClient.RespondToRequest(ev.ID, map[string]any{"browsers": []any{}})
+			fmt.Println("zcode: browserList (no browser host)")
+			return
+		}
+		insts := br.List()
+		engClient.RespondToRequest(ev.ID, map[string]any{"browsers": insts})
+		fmt.Printf("zcode: browserList -> %d browser\n", len(insts))
+	case "interaction/browserExecute":
+		// Execute a browser command on the browser host.
+		var p struct {
+			RequestID  string         `json:"requestId"`
+			BrowserID  string         `json:"browserId"`
+			Command    map[string]any `json:"command"`
+		}
+		if json.Unmarshal(ev.Params, &p) != nil {
+			return
+		}
+		if br == nil {
+			engClient.RespondToRequest(ev.ID, map[string]any{"ok": false, "error": map[string]any{"code": "backend_unavailable", "message": "no browser host"}, "elapsedMs": 0})
+			return
+		}
+		result := br.Execute(p.Command)
+		engClient.RespondToRequest(ev.ID, result)
+		fmt.Printf("zcode: browserExecute %v -> ok=%v\n", p.Command["method"], result["ok"])
 	case "state.updated":
 		var p struct {
 			SessionID string `json:"sessionId"`
