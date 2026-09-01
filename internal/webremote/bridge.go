@@ -195,6 +195,18 @@ func NewBridgeEngine() *BridgeEngine {
 	return &BridgeEngine{enc: newFrameEncoder(), asm: newAssembler()}
 }
 
+// WriteToServer sends one raw protocol line to the app-server's stdin
+// (device-initiated requests, e.g. priming workspace state after a bridge
+// opens, mirroring the desktop's per-workspace host attach).
+func (e *BridgeEngine) WriteToServer(line string) {
+	e.mu.Lock()
+	sink := e.sink
+	e.mu.Unlock()
+	if sink != nil {
+		_, _ = sink.Write([]byte(line + "\n"))
+	}
+}
+
 // Attach binds the app-server's stdin as the sink for phone messages.
 func (e *BridgeEngine) Attach(sink io.Writer) {
 	e.mu.Lock()
@@ -203,20 +215,29 @@ func (e *BridgeEngine) Attach(sink io.Writer) {
 }
 
 // SetIdentity records the bridge session the phone opened, so outbound
-// frames carry the right bridgeSessionId/bridgeGeneration/recoveryId.
+// frames carry the right bridgeSessionId/bridgeGeneration/recoveryId. Each
+// bridge is a fresh frame channel: the phone expects the seq/messageSeq
+// series to restart at 1, so the encoder resets with the identity.
 func (e *BridgeEngine) SetIdentity(sessionID string, generation *int, recoveryID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.identity = frameIdentity{BridgeSessionID: sessionID, BridgeGeneration: generation, RecoveryID: recoveryID}
+	e.enc = newFrameEncoder()
 }
 
 // PumpServerLine frames one outbound line from the app-server and sends it.
+// Lines produced before any bridge exists are dropped: they belong to no
+// frame channel.
 func (e *BridgeEngine) PumpServerLine(line []byte, send func(any)) {
 	msg := append(append([]byte{}, line...), '\n')
 	e.mu.Lock()
 	id := e.identity
+	enc := e.enc
 	e.mu.Unlock()
-	frames, err := e.enc.encode(id, msg)
+	if id.BridgeSessionID == "" {
+		return
+	}
+	frames, err := enc.encode(id, msg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "webremote bridge: %v\n", err)
 		return

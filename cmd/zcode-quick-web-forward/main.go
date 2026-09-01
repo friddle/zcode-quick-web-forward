@@ -33,7 +33,7 @@ import (
 	"github.com/friddle/zcode-quick-web-forward/internal/webremote"
 )
 
-const version = "0.4.2"
+const version = "0.4.3"
 
 var urlRe = regexp.MustCompile(`https?://[A-Za-z0-9._/\-?&=:%#~+{}$]+`)
 
@@ -370,6 +370,9 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *webremot
 				"activeWorkspaceKey": cwd,
 			},
 		})
+		// Prime the engine so it emits state over the fresh frame channel,
+		// like the desktop's per-workspace host attach does.
+		engine.WriteToServer(`{"id":900001,"method":"session/list","params":{}}`)
 	case "workspace-reconnect-request":
 		reply(map[string]any{
 			"zcode_type": "workspace-reconnect-response", "requestId": p.RequestID, "success": true,
