@@ -682,15 +682,20 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 			continue
 		}
 		item := map[string]any{
-			"taskId":        t.TaskID,
-			"title":         t.Title,
-			"workspaceKey":  t.WorkspaceKey,
-			"workspacePath": t.WorkspacePath,
-			"displayStatus": displayStatus(t.Status),
-			"pinned":        t.Pinned,
-			"archived":      t.Archived,
-			"createdAt":     t.CreatedAt,
-			"updatedAt":     t.UpdatedAt,
+			"taskId":          t.TaskID,
+			"title":           t.Title, // must be a string or the phone renders [object Object]
+			"workspacePath":   t.WorkspacePath,
+			"workspaceLabel":  pathLabel(t.WorkspacePath),
+			"workspaceKind":   "local",
+			"displayStatus":   displayStatus(t.Status),
+			"createdAt":       t.CreatedAt,
+			"updatedAt":       t.UpdatedAt,
+		}
+		if t.Pinned {
+			item["pinned"] = true
+		}
+		if t.Archived {
+			item["archived"] = true
 		}
 		if t.UnreadAt != nil {
 			item["unreadAt"] = *t.UnreadAt
@@ -698,20 +703,45 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 		out = append(out, item)
 	}
 	if ps != nil {
-		out = append(out, ps.runtimeTaskList()...)
+		for _, rt := range ps.runtimeTaskList() {
+			m, _ := rt.(map[string]any)
+			title, _ := m["title"].(string)
+			ws, _ := m["workspacePath"].(string)
+			item := map[string]any{
+				"taskId":         m["taskId"],
+				"title":          title,
+				"workspacePath":  ws,
+				"workspaceLabel": pathLabel(ws),
+				"workspaceKind":  "local",
+				"displayStatus":  "running",
+				"createdAt":      m["createdAt"],
+				"updatedAt":      m["updatedAt"],
+			}
+			out = append(out, item)
+		}
 	}
 	return out
 }
 
-func displayStatus(s string) string {
-	if s == "" {
-		return "idle"
+// pathLabel returns the last path segment (used for the phone's workspaceLabel).
+func pathLabel(p string) string {
+	p = strings.TrimRight(p, "/\\")
+	if i := strings.LastIndexAny(p, "/\\"); i >= 0 {
+		return p[i+1:]
 	}
+	return p
+}
+
+func displayStatus(s string) string {
 	switch strings.ToLower(s) {
 	case "running", "in-progress", "active":
 		return "running"
-	case "idle", "completed", "cancelled", "failed", "interrupted", "paused":
-		return strings.ToLower(s)
+	case "completed", "completedSuccess", "completedInterrupted":
+		return "completed"
+	case "error":
+		return "error"
+	case "idle", "cancelled", "failed", "interrupted", "paused", "":
+		return "idle"
 	default:
 		return "idle"
 	}
@@ -782,14 +812,16 @@ func (p *phoneSessions) runtimeTask(sessionID, workspace, title string) {
 	if title == "" {
 		title = "新任务"
 	}
+	now := time.Now().UnixMilli()
 	p.runtimeTasks[sessionID] = map[string]any{
-		"taskId":        sessionID,
-		"title":         title,
-		"workspaceKey":  workspace,
-		"workspacePath": workspace,
-		"displayStatus": "running",
-		"createdAt":     time.Now().UnixMilli(),
-		"updatedAt":     time.Now().UnixMilli(),
+		"taskId":         sessionID,
+		"title":          title,
+		"workspacePath":  workspace,
+		"workspaceLabel": pathLabel(workspace),
+		"workspaceKind":  "local",
+		"displayStatus":  "running",
+		"createdAt":      now,
+		"updatedAt":      now,
 	}
 	p.mu.Unlock()
 }
