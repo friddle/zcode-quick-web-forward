@@ -53,8 +53,9 @@ func (c *Client) Write(v any) bool {
 }
 
 // CreateSession asks the engine to create a conversation session and blocks
-// until it replies (or times out).
-func (c *Client) CreateSession(workspaceKey, workspacePath string, timeout time.Duration) (map[string]any, error) {
+// until it replies (or times out). provider/model optionally set the session
+// model (otherwise the engine uses the config default).
+func (c *Client) CreateSession(workspaceKey, workspacePath, provider, model string, timeout time.Duration) (map[string]any, error) {
 	c.mu.Lock()
 	c.nextID++
 	id := c.nextID
@@ -67,6 +68,9 @@ func (c *Client) CreateSession(workspaceKey, workspacePath string, timeout time.
 			"workspaceKey":  workspaceKey,
 			"workspacePath": workspacePath,
 		},
+	}
+	if provider != "" && model != "" {
+		params["model"] = map[string]any{"providerId": provider, "modelId": model}
 	}
 	if !c.Write(map[string]any{"id": id, "method": "session/create", "params": params}) {
 		c.forget(id)

@@ -887,15 +887,102 @@ func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []
 			return
 		}
 		engine.RegisterCall(c.ID)
-		params := "null"
-		if c.Arg != nil {
-			if b, ok := c.Arg.(json.RawMessage); ok && len(b) > 0 {
-				params = string(b)
-			} else if b, err := json.Marshal(c.Arg); err == nil {
-				params = string(b)
-			}
+		method, params := translateChannelMethod(c, workspaces)
+		if method == "__local__" {
+			engine.ReplyChannelPromise(c.ID, []byte(`{"runtimeModel":null}`), send)
+			return
 		}
-		engine.WriteToServer(fmt.Sprintf(`{"id":%d,"method":%q,"params":%s}`, c.ID, c.ChannelName+"/"+c.Name, params))
+		engine.WriteToServer(fmt.Sprintf(`{"id":%d,"method":%q,"params":%s}`, c.ID, method, params))
+	}
+}
+
+// translateChannelMethod maps phone channel calls onto the engine's real
+// ZCode Protocol methods. The phone's zcode-session/* names differ from the
+// engine's workspace/* + session/* methods; the engine also persists model
+// selection to ~/.zcode/cli/config.json automatically.
+func translateChannelMethod(c *relay.ChannelCall, workspaces []string) (method, params string) {
+	raw := []byte("null")
+	if c.Arg != nil {
+		if b, ok := c.Arg.(json.RawMessage); ok && len(b) > 0 {
+			raw = b
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			raw = b
+		}
+	}
+	key := c.ChannelName + "/" + c.Name
+	// helper to wrap args as {workspace:{...}} — engine workspace/* requires
+	// workspaceKey, which the phone doesn't send; derive it from the bridge.
+	withWorkspace := func(body map[string]any) string {
+		if body == nil {
+			body = map[string]any{}
+		}
+		var in struct {
+			WorkspacePath     string `json:"workspacePath"`
+			WorkspaceIdentity string `json:"workspaceIdentity"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		ws := map[string]any{"workspacePath": in.WorkspacePath}
+		if in.WorkspaceIdentity != "" {
+			ws["workspaceIdentity"] = in.WorkspaceIdentity
+		}
+		ws["workspaceKey"] = in.WorkspacePath
+		if in.WorkspacePath == "" && len(workspaces) > 0 {
+			ws["workspaceKey"] = workspaces[0]
+			ws["workspacePath"] = workspaces[0]
+		}
+		body["workspace"] = ws
+		b, _ := json.Marshal(body)
+		return string(b)
+	}
+
+	switch key {
+	case "zcode-session/setWorkspaceDefaultModel":
+		// keep the model field, wrap workspacePath/Identity into workspace.
+		var in struct {
+			WorkspacePath     string `json:"workspacePath"`
+			WorkspaceIdentity string `json:"workspaceIdentity"`
+			Model             any    `json:"model"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		body := map[string]any{}
+		if in.Model != nil {
+			body["model"] = in.Model
+		}
+		return "workspace/setDefaultModel", withWorkspace(body)
+	case "zcode-session/readWorkspaceState":
+		return "workspace/readState", withWorkspace(nil)
+	case "zcode-session/setModel":
+		// session/setModel is strict: only sessionId + model (+persist flag).
+		var in struct {
+			SessionID string `json:"sessionId"`
+			Model     any    `json:"model"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		body := map[string]any{}
+		if in.SessionID != "" {
+			body["sessionId"] = in.SessionID
+		}
+		if in.Model != nil {
+			body["model"] = in.Model
+		}
+		body["persistAsWorkspaceLastUsed"] = true
+		b, _ := json.Marshal(body)
+		return "session/setModel", string(b)
+	case "zcode-session/setThoughtLevel":
+		return "session/setThoughtLevel", string(raw)
+	case "zcode-session/setWorkspaceDefaultThoughtLevel":
+		return "workspace/setDefaultThoughtLevel", withWorkspace(map[string]any{})
+	case "zcode-session/closeDeferredDraftSession", "zcode-session/closeSession":
+		return "session/close", string(raw)
+	case "zcode-session/readSession":
+		return "session/read", string(raw)
+	case "zcode-session/resolveRuntimeModelForV4":
+		// Resolve a runtime model for a model ref; answer with a minimal
+		// structure so the phone continues (the model itself is already
+		// applied via session/setModel / session/create).
+		return "__local__", string(raw)
+	default:
+		return key, string(raw)
 	}
 }
 
@@ -1405,7 +1492,6 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 	}
 	// Parse the phone envelope: {workspacePath, envelope:{commandId, sessionId, type, payload}}.
 	var arg []byte
-	fmt.Printf("zcode: bridgeSendCommand argType=%T\n", c.Arg)
 	switch a := c.Arg.(type) {
 	case json.RawMessage:
 		arg = a
@@ -1427,7 +1513,13 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				FirstInput  struct {
 					Text string `json:"text"`
 				} `json:"firstInput"`
-				Text string `json:"text"`
+				Text     string `json:"text"`
+				Provider string `json:"provider"`
+				Model    string `json:"model"`
+				Config   struct {
+					Provider string `json:"provider"`
+					Model    string `json:"model"`
+				} `json:"config"`
 			} `json:"payload"`
 		} `json:"envelope"`
 	}
@@ -1446,8 +1538,9 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		if ws == "" && len(workspaces) > 0 {
 			ws = workspaces[0]
 		}
-		// Ask the engine to create a real session.
-		res, err := engClient.CreateSession(ws, ws, 15*time.Second)
+		// Ask the engine to create a real session, passing the phone's chosen
+		// provider/model so the engine uses it (not just the config default).
+		res, err := engClient.CreateSession(ws, ws, req.Envelope.Payload.Config.Provider, req.Envelope.Payload.Config.Model, 15*time.Second)
 		if err != nil {
 			fmt.Printf("zcode: engine createSession failed: %v\n", err)
 			ack["status"] = "failed"
@@ -1490,6 +1583,25 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				ack["message"] = "engine stdin closed"
 			}
 			fmt.Printf("zcode: engine session/send %s text=%q\n", sid, text)
+		}
+	case "switchModelConfig":
+		// Switch the current session's model. The payload is
+		// {provider, model, thought} at the top level.
+		sid := req.Envelope.SessionID
+		if sid == "" {
+			sid, _ = ps.get()
+		}
+		provider := req.Envelope.Payload.Provider
+		model := req.Envelope.Payload.Model
+		if sid != "" && provider != "" && model != "" {
+			body := map[string]any{
+				"sessionId":                  sid,
+				"model":                      map[string]any{"providerId": provider, "modelId": model},
+				"persistAsWorkspaceLastUsed": true,
+			}
+			if engClient.Write(map[string]any{"id": 0, "method": "session/setModel", "params": body}) {
+				fmt.Printf("zcode: engine switchModelConfig session=%s provider=%s model=%s\n", sid, provider, model)
+			}
 		}
 	default:
 		fmt.Printf("zcode: engine command type %q unhandled (ignored)\n", req.Envelope.Type)

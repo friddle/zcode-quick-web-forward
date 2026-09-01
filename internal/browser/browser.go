@@ -86,7 +86,20 @@ func Launch() (*Browser, error) {
 	if chrome == "" {
 		return nil, fmt.Errorf("no Playwright chromium found; install playwright browsers")
 	}
-	port := "9222" // fixed CDP port so the host always finds it
+	// Try a range of CDP ports so a busy/conflicting port doesn't kill the
+	// browser host (the box may already run other chromium instances).
+	var b *Browser
+	var lastErr error
+	for _, port := range []string{"9333", "9334", "9335", "9336", "9337"} {
+		b, lastErr = launchOnPort(chrome, port)
+		if b != nil {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("chromium CDP not ready on any port: %w", lastErr)
+}
+
+func launchOnPort(chrome, port string) (*Browser, error) {
 	b := &Browser{
 		generation: time.Now().UnixMilli(),
 		id:         fmt.Sprintf("iab:%d", time.Now().UnixMilli()),
@@ -114,25 +127,20 @@ func Launch() (*Browser, error) {
 	b.cmd = cmd
 
 	// Wait for the CDP endpoint to accept requests.
-	var cdpPort string
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get("http://127.0.0.1:" + port + "/json")
 		if err == nil {
 			resp.Body.Close()
-			cdpPort = port
-			break
+			b.cdpPort = port
+			b.debuggerURL = "http://127.0.0.1:" + port
+			b.refreshTabs()
+			return b, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	if cdpPort == "" {
-		_ = cmd.Process.Kill()
-		return nil, fmt.Errorf("chromium CDP port not ready")
-	}
-	b.cdpPort = cdpPort
-	b.debuggerURL = "http://127.0.0.1:" + cdpPort
-	b.refreshTabs()
-	return b, nil
+	_ = cmd.Process.Kill()
+	return nil, fmt.Errorf("chromium CDP port %s not ready", port)
 }
 
 // ID returns the browser instance id.
