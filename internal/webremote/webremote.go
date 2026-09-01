@@ -336,6 +336,9 @@ func (c *client) send(m relayMsg) {
 	if err != nil {
 		return
 	}
+	if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
+		fmt.Fprintf(os.Stderr, "webremote debug >> %s\n", string(b))
+	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	mask := make([]byte, 4)

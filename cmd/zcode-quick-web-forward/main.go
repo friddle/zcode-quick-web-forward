@@ -26,13 +26,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/runtime"
 	"github.com/friddle/zcode-quick-web-forward/internal/webremote"
 )
 
-const version = "0.4.1"
+const version = "0.4.2"
 
 var urlRe = regexp.MustCompile(`https?://[A-Za-z0-9._/\-?&=:%#~+{}$]+`)
 
@@ -167,19 +168,86 @@ func doRemote(args []string) {
 		origin = "https://zcode.z.ai"
 	}
 
+	fmt.Println("zcode: 启动 ZCode engine (app-server)...")
+
+	// The engine's stdio belongs to the web-remote bridge: the phone drives
+	// it through rpc-frames and engine output is framed back to the phone
+	// (echoed locally too, so the CLI stays observable).
+	engine := webremote.NewBridgeEngine()
+	sender := &relaySender{}
+	app := exec.Command(node, scriptPath(rt), "app-server")
+	app.Dir = dirOf(scriptPath(rt))
+	app.Stderr = os.Stderr
+	stdin, err := app.StdinPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "zcode: engine stdin: %v\n", err)
+		os.Exit(1)
+	}
+	stdout, err := app.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "zcode: engine stdout: %v\n", err)
+		os.Exit(1)
+	}
+	if err := app.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "zcode: engine start: %v\n", err)
+		os.Exit(1)
+	}
+	engine.Attach(stdin)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+		for sc.Scan() {
+			line := sc.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+			fmt.Printf("zcode << %s\n", line)
+			engine.PumpServerLine(line, sender.send)
+		}
+		_ = app.Wait()
+		fmt.Println("zcode: engine exited")
+		os.Exit(0)
+	}()
+
 	// Register on the official web-remote relay and mint a real pairing URL
 	// (same QR the desktop's "continue on your phone" uses). Runs alongside
 	// the engine; a relay failure never blocks the local app-server.
-	go startWebRemote(origin)
+	go startWebRemote(origin, engine, sender)
 
-	fmt.Println("zcode: 启动 ZCode engine (app-server)...")
-	runCLI(node, scriptPath(rt), []string{"app-server"})
+	waitSig()
+}
+
+// relaySender routes frames to whichever relay connection is current.
+type relaySender struct {
+	mu sync.Mutex
+	fn func(any)
+}
+
+func (s *relaySender) set(fn func(any)) {
+	s.mu.Lock()
+	s.fn = fn
+	s.mu.Unlock()
+}
+
+func (s *relaySender) send(v any) {
+	s.mu.Lock()
+	fn := s.fn
+	s.mu.Unlock()
+	if fn != nil {
+		fn(v)
+	}
+}
+
+func waitSig() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
 }
 
 // startWebRemote registers this machine as a web-remote relay device and
 // prints the phone pairing URL (plus a terminal QR code when qrencode is
 // installed).
-func startWebRemote(origin string) {
+func startWebRemote(origin string, engine *webremote.BridgeEngine, sender *relaySender) {
 	cache, err := os.UserCacheDir()
 	if err == nil {
 		cache = filepath.Join(cache, "zcode-quick-web-forward")
@@ -213,20 +281,28 @@ func startWebRemote(origin string) {
 			fmt.Println()
 			fmt.Println("*** web-remote: 手机已配对接入 ***")
 		},
-		OnData: handleRemoteData,
+		OnData: func(payload json.RawMessage, reply func(any)) {
+			sender.set(reply)
+			handleRemoteData(payload, reply, engine)
+		},
 	})
 }
 
-// handleRemoteData answers the phone's bridge requests. bootstrap/workspace
-// listing is implemented so the phone gets past its splash; opening a
-// workspace (workspace-bridge-open + rpc-frame stream to the engine) is not
-// bridged yet in the CLI.
-func handleRemoteData(payload json.RawMessage, reply func(any)) {
+// handleRemoteData answers the phone's bridge requests: bootstrap/workspace
+// listing, bridge-open (ready), and the rpc-frame stream to/from the engine.
+func handleRemoteData(payload json.RawMessage, reply func(any), engine *webremote.BridgeEngine) {
 	var p struct {
 		ZcodeType string `json:"zcode_type"`
 		RequestID string `json:"requestId"`
 	}
-	if json.Unmarshal(payload, &p) != nil || p.RequestID == "" {
+	if json.Unmarshal(payload, &p) != nil {
+		return
+	}
+	if p.ZcodeType == "rpc-frame" || p.ZcodeType == "rpc-frame-ack" {
+		engine.HandlePhonePayload(payload, reply, nil)
+		return
+	}
+	if p.RequestID == "" {
 		return
 	}
 	cwd, _ := os.Getwd()
@@ -252,9 +328,51 @@ func handleRemoteData(payload json.RawMessage, reply func(any)) {
 			"result": map[string]any{"workspaces": []any{ws}, "tasks": []any{}},
 		})
 	case "workspace-bridge-open":
+		var v struct {
+			RequestID        string `json:"requestId"`
+			BridgeSessionID  string `json:"bridgeSessionId"`
+			BridgeGeneration *int   `json:"bridgeGeneration"`
+			RecoveryID       string `json:"recoveryId"`
+			WorkspaceKey     string `json:"workspaceKey"`
+		}
+		if json.Unmarshal(payload, &v) != nil || v.BridgeSessionID == "" {
+			reply(map[string]any{
+				"zcode_type": "workspace-bridge-error", "requestId": p.RequestID,
+				"reason": "unexpected-error", "error": "malformed bridge-open",
+			})
+			return
+		}
+		engine.SetIdentity(v.BridgeSessionID, v.BridgeGeneration, v.RecoveryID)
+		ready := map[string]any{
+			"zcode_type": "workspace-bridge-ready", "requestId": v.RequestID,
+			"bridgeSessionId": v.BridgeSessionID,
+			"bridge": map[string]any{
+				"kind":            "local",
+				"bridgeSessionId": v.BridgeSessionID,
+				"workspaceKey":    v.WorkspaceKey,
+				"workspacePath":   v.WorkspaceKey,
+			},
+		}
+		if v.BridgeGeneration != nil {
+			ready["bridgeGeneration"] = *v.BridgeGeneration
+		}
+		if v.RecoveryID != "" {
+			ready["recoveryId"] = v.RecoveryID
+		}
+		reply(ready)
+		// The phone shows "Syncing workspace and tasks" until the device
+		// pushes the workspace list over the fresh bridge.
 		reply(map[string]any{
-			"zcode_type": "workspace-bridge-error", "requestId": p.RequestID,
-			"reason": "unsupported", "error": "CLI bridge does not relay engine sessions yet",
+			"zcode_type": "workspace-list-updated",
+			"result": map[string]any{
+				"workspaces":         []any{ws},
+				"tasks":              []any{},
+				"activeWorkspaceKey": cwd,
+			},
+		})
+	case "workspace-reconnect-request":
+		reply(map[string]any{
+			"zcode_type": "workspace-reconnect-response", "requestId": p.RequestID, "success": true,
 		})
 	}
 }
