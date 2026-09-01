@@ -16,14 +16,18 @@ func TestInitializeMessageBytes(t *testing.T) {
 }
 
 func TestRoundTripChannelCall(t *testing.T) {
-	// client promise: [100, 7, "chan", "method", "arg"]
+	// Real wire format: serialize(head=[kind,id,channel,name]) then
+	// serialize(data=[arg]) — the arg is the first element of the appended
+	// data array (buildMessage layout the phone uses).
 	w := &chWriter{}
 	w.byte(4)
-	w.varint(5)
-	for _, v := range []any{100, 7, "chan", "method", "arg"} {
+	w.varint(4) // head array: 4 elements
+	for _, v := range []any{100, 7, "chan", "method"} {
 		w.value(v)
 	}
-	w.value(nil)
+	w.byte(4)
+	w.varint(1) // data array: 1 element
+	w.value("arg")
 	c := parseChannelCall(w.b)
 	if c == nil || c.Kind != 100 || c.ID != 7 || c.ChannelName != "chan" || c.Name != "method" || c.Arg != "arg" {
 		t.Fatalf("parsed = %+v", c)

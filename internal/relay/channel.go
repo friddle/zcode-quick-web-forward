@@ -228,7 +228,9 @@ type ChannelCall struct {
 	Arg         any
 }
 
-// parseChannelCall decodes a client binary message.
+// parseChannelCall decodes a client binary message. The wire format is
+// serialize(head=[kind,id,channel,name]) + serialize(data=[arg]): the arg is
+// a separate array appended after the head array (buildMessage layout).
 func parseChannelCall(b []byte) *ChannelCall {
 	r := &chReader{b: b}
 	arr, _ := r.value().([]any)
@@ -246,8 +248,9 @@ func parseChannelCall(b []byte) *ChannelCall {
 	if len(arr) > 3 {
 		c.Name, _ = arr[3].(string)
 	}
-	if len(arr) > 4 {
-		c.Arg = arr[4]
+	// The arg lives in the appended data value: Array[arg].
+	if data, ok := r.value().([]any); ok && len(data) > 0 {
+		c.Arg = data[0]
 	}
 	return c
 }

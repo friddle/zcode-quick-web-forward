@@ -207,6 +207,18 @@ func (e *BridgeEngine) ReplyChannelPromise(id int, result []byte, send func(any)
 	e.sendChannelBytes(promiseSuccess(id, result), send)
 }
 
+// SendChannelEvent pushes an EventFire (204) frame to the phone for a
+// previously-registered EventListen id.
+func (e *BridgeEngine) SendChannelEvent(id int, data []byte, send func(any)) {
+	w := &chWriter{}
+	w.byte(4)
+	w.varint(2)
+	w.value(chEventFire)
+	w.value(id)
+	w.value(jsonToChannel(data))
+	e.sendChannelBytes(w.b, send)
+}
+
 // RegisterCall marks a JSON-RPC id as originating from a phone channel call.
 func (e *BridgeEngine) RegisterCall(id int) {
 	e.mu.Lock()
