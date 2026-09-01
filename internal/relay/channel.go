@@ -11,7 +11,7 @@
 // Client→server messages: [100,id,channelName,name,arg] Promise,
 // [102,id,channelName,name,arg] EventListen, [103,...] EventDispose,
 // [101,id] PromiseCancel.
-package webremote
+package relay
 
 import (
 	"encoding/json"
@@ -55,17 +55,46 @@ func (w *chWriter) value(v any) {
 	case int:
 		w.byte(6)
 		w.varint(t)
+	case int64:
+		w.byte(6)
+		w.varint(int(t))
+	case float64:
+		w.byte(6)
+		w.varint(int(t))
+	case bool:
+		w.byte(6)
+		if t {
+			w.varint(1)
+		} else {
+			w.varint(0)
+		}
 	case string:
 		w.byte(1)
 		w.varint(len(t))
 		w.b = append(w.b, []byte(t)...)
+	case []byte:
+		w.byte(3)
+		w.varint(len(t))
+		w.b = append(w.b, t...)
 	case []any:
 		w.byte(4)
 		w.varint(len(t))
 		for _, e := range t {
 			w.value(e)
 		}
+	case map[string]any:
+		b, _ := json.Marshal(t)
+		w.byte(5)
+		w.varint(len(b))
+		w.b = append(w.b, b...)
 	default:
+		b, err := json.Marshal(v)
+		if err == nil {
+			w.byte(5)
+			w.varint(len(b))
+			w.b = append(w.b, b...)
+			return
+		}
 		panic(fmt.Sprintf("channel: unsupported value %T", v))
 	}
 }
@@ -153,19 +182,41 @@ func buildMessage(head []any, data any) []byte {
 // initializeMessage is the server handshake: [200], data undefined.
 func initializeMessage() []byte { return buildMessage([]any{chInitialize}, nil) }
 
-// promiseSuccess wraps a JSON result for a client request id. The data is a
-// VSBuffer value (tag 3) so arbitrary JSON bytes survive verbatim.
+// promiseSuccess wraps a JSON result for a client request id. The data is
+// encoded as a native channel value (not a VSBuffer): the phone's service
+// proxy hands `data` straight to the caller, so arrays must decode as arrays
+// (tag 4), objects as JSON objects (tag 5), etc. — a VSBuffer would crash
+// code that calls .find()/.map() on the result.
 func promiseSuccess(id int, result []byte) []byte {
 	w := &chWriter{}
 	w.byte(4)
 	w.varint(2)
 	w.value(chPromiseSuccess)
 	w.value(id)
-	// data: VSBuffer(result)
-	w.byte(3)
-	w.varint(len(result))
-	w.b = append(w.b, result...)
+	w.value(jsonToChannel(result))
 	return w.b
+}
+
+// jsonToChannel parses JSON bytes into native channel values (array -> []any,
+// object -> map[string]any, number -> int/float, bool, string, null).
+func jsonToChannel(b []byte) any {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return json.RawMessage(b) // keep opaque bytes as an object-ish fallback
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		return t
+	case []any:
+		return t
+	case float64:
+		if t == float64(int64(t)) {
+			return int(t)
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 // ChannelCall is one decoded client→server request.

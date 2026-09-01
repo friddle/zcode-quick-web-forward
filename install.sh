@@ -8,11 +8,10 @@
 # China / GFW one-liner (uses gh.proxy mirror):
 #   wget -qO- https://raw.githubusercontent.com/friddle/zcode-quick-web-forward/main/gh.proxy | bash
 #
-# It: 1) detects platform/arch, 2) grabs the matching prebuilt single binary
-# from GitHub Releases (or builds from source when Go is available), 3) installs
-# it to ~/.local/bin, 4) starts the full "run" flow: download the latest ZCode
-# runtime, spawn the app-server, print the login link, confirm, and print the
-# mobile/remote link.
+# It: 1) detects platform/arch and the network region, 2) grabs the matching
+# prebuilt single binary from GitHub Releases (or builds from source when Go
+# is available), 3) installs it to ~/.local/bin, 4) starts the full "run"
+# flow: region + login (link / BigModel key), then the phone pairing URL.
 set -euo pipefail
 
 # ---- mirror selection (China / GFW) ----------------------------------------

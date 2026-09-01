@@ -22,7 +22,7 @@
 // The pairing URL is <origin>/remote/v4?sid=<device_sid>&hash=<pass_hash>
 // &t=<ms>&mid=<mid>&name=<name>&app_version=<version> — identical in shape
 // to the desktop client's QR code.
-package webremote
+package relay
 
 import (
 	"bufio"
@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -204,6 +205,7 @@ func keepAlive(ctx context.Context, ws *client, sid string, h Handler) {
 	reply := func(payload any) {
 		ws.send(relayMsg{Type: "data", Payload: mustJSON(payload)})
 	}
+	var lastTerminal string
 	ws.readLoop(func(msg relayMsg) bool {
 		if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
 			b, _ := json.Marshal(msg)
@@ -211,8 +213,13 @@ func keepAlive(ctx context.Context, ws *client, sid string, h Handler) {
 		}
 		switch {
 		case msg.PairStatus == "matched" || msg.PairStatus == "paired" || msg.TerminalSid != "":
-			if h.OnPaired != nil {
-				h.OnPaired(msg.TerminalSid)
+			// every pair_status_ack carries the terminal sid, so only fire
+			// OnPaired when a NEW terminal attaches (not every heartbeat).
+			if msg.TerminalSid != "" && msg.TerminalSid != lastTerminal {
+				lastTerminal = msg.TerminalSid
+				if h.OnPaired != nil {
+					h.OnPaired(msg.TerminalSid)
+				}
 			}
 		case msg.Type == "data" && len(msg.Payload) > 0 && h.OnData != nil:
 			h.OnData(msg.Payload, reply)
@@ -309,7 +316,10 @@ func dial(o Options) (*client, error) {
 	if !strings.Contains(addr, ":") {
 		addr += ":443"
 	}
-	tconn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: u.Hostname()})
+	// A dead/misdialing origin must surface as a retryable error, not hang
+	// the relay goroutine forever — cap TCP connect and TLS handshake.
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	tconn, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{ServerName: u.Hostname()})
 	if err != nil {
 		return nil, err
 	}

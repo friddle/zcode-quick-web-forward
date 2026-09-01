@@ -9,7 +9,7 @@
 //
 // Limits mirror the desktop client (le={...}): 16 MiB per message, at most
 // 64 fragments, 1024 bytes per physical frame.
-package webremote
+package relay
 
 import (
 	"encoding/base64"

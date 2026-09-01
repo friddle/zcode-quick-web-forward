@@ -1,25 +1,25 @@
 # zcode-quick-web-forward
 
-> **Pure-CLI driver.** This tool does not re-implement login or tunnels — it invokes
-> the official ZCode runtime's own subcommands (`login`, `app-server`) exactly as
-> the desktop client does, so you get the real Z.AI authorize link and ZCode's
-> own web-remote / mobile link.
+> **Pure-CLI driver.** This tool does not re-implement login or tunnels — it
+> invokes the official ZCode runtime (`glm/zcode.cjs` `app-server`), reads your
+> real ZCode state (task index, model providers, settings), and mints a phone
+> pairing URL on ZCode's own web-remote relay — so the phone sees the same
+> workspaces and tasks your desktop does.
 
-One-shot helper that downloads the **latest ZCode** runtime (the bundled
-`glm/zcode.cjs` app-server) and starts it headless: run the **browser login
-flow** (international Z.ai OAuth) or reuse the desktop client's existing
-credentials/providers (e.g. the China BigModel API key), then keep the engine
-serving. See [web-remote](#what-it-does-pure-cli-mimics-the-zcode-client) for
-what the mobile link actually requires.
+One-shot helper that downloads the **latest ZCode** runtime, logs you in (Z.AI
+OAuth or a BigModel API key), exposes the **real** workspaces/tasks from your
+local ZCode install, and prints the phone pairing URL. No stubs — the phone
+gets real data from `~/.zcode` (task index, provider config, settings).
 
 A single **Go** static binary (built for Linux, macOS, Windows, multiple
 arches) plus `wget | bash` bootstrap scripts (with a China / GFW **gh.proxy**
 mirror helper).
 
 ```
-ZCode app-server (glm/zcode.cjs)  ──  login link ──>  browser OAuth
-        │                                                    │
-        └──────────── local web hub ── tunnel ──>  mobile/remote URL
+ZCode runtime (glm/zcode.cjs) ── login ──>  Z.AI / BigModel
+        │
+        ├── reads ~/.zcode: tasks-index.sqlite, provider config, settings
+        └── web-remote relay (zcode.z.ai) ──>  phone pairing URL
 ```
 
 ## Quick start (global)
@@ -37,27 +37,32 @@ wget -qO- https://raw.githubusercontent.com/friddle/zcode-quick-web-forward/main
 ```
 
 The script:
-1. detects OS/arch,
+1. detects OS/arch and the network region (google/baidu probe — GitHub
+   downloads go through a proxy mirror only in China),
 2. downloads the matching prebuilt binary from GitHub Releases (or builds from
    source when Go is available),
 3. installs it to `~/.local/bin`,
-4. runs the full flow.
+4. runs the full flow: region + login + workspace, then the phone pairing URL.
 
 ## Manual usage
 
 ```bash
-# full flow the installer starts: login -> app-server -> mobile/remote link
-zcode-quick-web-forward run --node /path/to/node-24
+# interactive: region (china/global), login method (link or BigModel key),
+# then engine + relay + phone pairing URL.
+# Node.js and the ZCode runtime download automatically when missing.
+zcode-quick-web-forward run
 
-# login with the real Z.AI OAuth (pure CLI, passes through the official client):
-# prints an authorize URL -> open it in a browser -> authorize -> Enter to confirm
-zcode-quick-web-forward logincli --node /path/to/node-24
+# pin the region: login method + download mirrors
+#   --region china  -> BigModel API key login + Aliyun node mirror
+#   --region global -> Z.AI OAuth login + official node sources
+zcode-quick-web-forward run --region china
+zcode-quick-web-forward run --region global
 
-# run the ZCode engine (the official app-server):
-zcode-quick-web-forward app-server --node /path/to/node-24
+# run the official login command (Z.AI OAuth):
+zcode-quick-web-forward logincli
 
-# start app-server and print ZCode's own web-remote / mobile link:
-zcode-quick-web-forward remote --node /path/to/node-24
+# start engine + relay and print the phone pairing URL:
+zcode-quick-web-forward remote
 
 # just download/resolve the latest ZCode runtime
 zcode-quick-web-forward download
@@ -65,82 +70,78 @@ zcode-quick-web-forward download
 zcode-quick-web-forward --help
 ```
 
-All commands need **Node ≥ 22.5** (the runtime uses `node:sqlite`; on this box
-set `--node` to node 24 or `ZCODE_NODE`).
+**Node.js is handled for you**: when no suitable `node` (>= 22.5 — the runtime
+uses the `node:sqlite` built-in) is on `PATH`, the tool downloads a managed
+Node.js release into the user cache — through the Aliyun mirror in China,
+nodejs.org elsewhere. Force your own binary with `--node` / `ZCODE_NODE`.
 
-### China / BigModel (国内) users
+### Workspaces
 
-The `logincli`/`run` OAuth flow targets the **international** Z.ai OAuth
-(`chat.z.ai`) — the runtime's `login` subcommand has no BigModel variant. For
-the China **BigModel** account you don't need OAuth at all:
+The workspaces exposed to the phone are the **real** ones from your ZCode
+install plus any you pass explicitly. When nothing is given, the startup
+directory is used automatically:
 
-1. The runtime shares the desktop client's config (`~/.zcode/v2/config.json`).
-   Configure the BigModel API key once (the desktop client's "Bigmodel - API
-   Key" provider, `baseURL https://open.bigmodel.cn/api/anthropic`, or an
-   entry under `/provider/builtin:bigmodel`), or sign in via the desktop app.
-2. Then start the engine directly — no login step:
+```bash
+# explicit workspaces (repeatable flag or env, path-separated):
+zcode-quick-web-forward run --workspace /path/to/proj-a --workspace /path/to/proj-b
+ZCODE_WORKSPACE=/a:/b zcode-quick-web-forward run
+```
 
-   ```bash
-   # 切换 web-remote / relay 到国内端点（默认国际站 zcode.z.ai）
-   export ZCODE_BASE_URL=https://zcode.chatglm.site
-   zcode-quick-web-forward remote
-   ```
+Local workspaces from the ZCode task index (`tasks-index.sqlite`) are merged
+in automatically. Remote SSH workspaces are skipped (the phone can't bridge to
+them).
 
-`ZCODE_BASE_URL` (or `ZCODE_ENDPOINT_ORIGIN` / `ZCODE_PRODUCTION_BASE_URL`)
-overrides the runtime's service origin for web-remote/relay.
+### Region (国内 / global)
 
-Note: completing the international `login` (zai OAuth) rewrites the CLI
-default model in `~/.zcode/cli/config.json` to `zai/glm-5.1`. To keep using
-the BigModel key, set `/model/main` back to `bigmodel/GLM-5.3` (and make sure
-`provider/bigmodel` with `options.baseURL`/`options.apiKey` exists there —
-copy it from `~/.zcode/v2/config.json` under `provider/builtin:bigmodel` if
-needed).
+`--region china` (or `--region global`) selects everything network-related at
+once; without the flag the region is **auto-detected** by probing
+google.com, then baidu.com (env override: `ZCODE_REGION`):
+
+| | `china` | `global` |
+|---|---|---|
+| login | BigModel API key (`open.bigmodel.cn`) | Z.AI OAuth (`chat.z.ai`) |
+| Node.js download | Aliyun `mirrors.aliyun.com/nodejs-release` | `nodejs.org/dist` |
+
+The web-remote / mobile pairing relay defaults to `https://zcode.z.ai` for
+both regions (env override: `ZCODE_BASE_URL`).
 
 ### Flags
 
 | flag | description |
 |------|-------------|
 | `--runtime-path PATH` | explicit glm runtime dir (env `ZCODE_RUNTIME_PATH`) |
-| `--node PATH` | node binary (env `ZCODE_NODE`), needs ≥22.5 |
+| `--node PATH` | node binary (env `ZCODE_NODE`); optional — auto-downloaded when missing/too old |
+| `--region REGION` | `china` / `global` (env `ZCODE_REGION`); auto-detected when empty |
+| `--workspace PATH` | workspace to expose to the phone (repeatable; env `ZCODE_WORKSPACE`) |
 
-## What it does (pure CLI, mimics the ZCode client)
-
-This tool is a **thin passthrough** around the official ZCode runtime
-(`glm/zcode.cjs`) — it does not re-implement login or tunnels. It invokes the
-runtime's own subcommands exactly as the desktop client does:
+## What it does
 
 1. **Download the latest ZCode** — resolves the newest desktop release from the
-   ZCode update manifest / CDN for the running platform+arch, downloads and
-   extracts the bundled `glm/zcode.cjs` runtime into the user cache. Reuses an
-   already-installed ZCode desktop app when present.
-2. **login** → runs `node glm/zcode.cjs login --no-browser`. Login **is** Z.AI
-   OAuth; the runtime prints the real authorize URL
-   (`https://chat.z.ai/api/oauth/authorize`, official `client_id`, with a
-   **server-side** CLI callback `https://zcode.z.ai/api/v1/oauth/cli/callback/…`
-   so it works on Linux too, not just a macOS `zcode://` scheme). You open the
-   URL, authorize, and the CLI confirms on the callback / Enter.
-3. **app-server** → runs `node glm/zcode.cjs app-server` (the ZCode engine, the
-   "**ZCode Protocol stdio app server**").
-4. **web-remote** → `remote` registers this machine as a device on ZCode's
-   official web-remote relay (`wss://<origin>/ws`) — the same service the
-   desktop's "continue on your phone" uses — and prints a **real pairing URL**
-   (`https://<origin>/remote/v4?sid=…&hash=…`), plus a terminal QR code when
-   `qrencode` is installed. Open it on a phone to pair. The relay handshake is
-   reverse-engineered from the desktop client (device register → HMAC
-   challenge-response → pair heartbeat). Phone-side bootstrap/workspace
-   listing is answered so the phone UI loads; relaying full engine sessions
-   into the phone (`workspace-bridge-open` + `rpc-frame` streams) is not
-   implemented yet — the desktop client remains the full experience.
+   ZCode update manifest / CDN, downloads and extracts the bundled
+   `glm/zcode.cjs` runtime into the user cache.
+2. **login** — `--region china` uses a **BigModel API key** (validated against
+   `open.bigmodel.cn/api/anthropic/v1/models`, then written into
+   `~/.zcode/v2/config.json` + `~/.zcode/cli/config.json`); `--region global`
+   runs the official `login --no-browser` (Z.AI OAuth).
+3. **engine** — runs `node glm/zcode.cjs app-server` (the ZCode engine).
+4. **web-remote** — `remote` registers this machine as a device on ZCode's
+   official web-remote relay (`wss://zcode.z.ai/ws`) and prints a **real
+   pairing URL** (`https://zcode.z.ai/remote/v4?sid=…&hash=…`), plus a terminal
+   QR code when `qrencode` is installed. The phone's channel services
+   (model providers, settings, tasks) are answered from **real ZCode state** —
+   the task index (`tasks-index.sqlite`), provider config and settings — so the
+   phone shows actual workspaces and tasks.
 
 > **Notes / requirements**
-> - The runtime expects **Node ≥ 22.5** (uses `node:sqlite`, runs under the
->   desktop's bundled Electron node). Set `ZCODE_NODE` / `--node` accordingly.
-> - The `.deb` has **no nodejs dependency** — ZCode bundles its own engine.
-> - Completing login requires you to **click the authorize link in a browser**;
->   the client confirms on the callback.
-> - The mobile pairing link is minted by this tool via ZCode's official relay
->   (`remote` command); full engine-session control from the phone still
->   requires the desktop client.
+> - **Node.js is auto-provisioned**: the runtime needs Node >= 22.5 (it uses
+>   the `node:sqlite` built-in); when the system node is missing or too old,
+>   a managed release is downloaded (Aliyun mirror in China, nodejs.org
+>   elsewhere). Set `ZCODE_NODE` / `--node` to use your own.
+> - The pairing relay defaults to `https://zcode.z.ai` (reachable). Set
+>   `ZCODE_BASE_URL` to a domestic relay if you have one that resolves
+>   publicly.
+> - Full engine-session control from the phone (running tasks on the desktop
+>   engine) is not implemented yet — the phone gets a real workspace view.
 
 ## gh.proxy
 
@@ -148,19 +149,17 @@ A China / GFW helper that does two things:
 
 1. **Standalone installer** — `wget .../gh.proxy | bash` installs
    `zcode-quick-web-forward` exactly like `install.sh`, but routes **every**
-   GitHub download through a proxy mirror:
+   GitHub download through a proxy mirror when on a China network
+   (google/baidu probe):
 
    ```bash
    wget -qO- https://raw.githubusercontent.com/friddle/zcode-quick-web-forward/main/gh.proxy | bash
    ```
 
-   (This is the file that is fetched by the `wget github.com/friddle/xxx.sh |
-   bash` bootstrap in China.)
-
 2. **Sourced Git/proxy wrapper** — reuse the mirror for any GitHub clone/grab:
 
    ```bash
-   source gh.proxy              # sets $GH_PROXY to a mirror
+   source gh.proxy              # sets $GH_PROXY to a mirror only in China
    ghclone friddle/opencode     # git clone through the mirror
    ghfetch <url> <dst>          # download through the mirror
    ```
