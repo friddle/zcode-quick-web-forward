@@ -22,6 +22,11 @@ type Service struct {
 	terms  map[string]*Term
 	onData func(listenID int, data string)
 	onExit func(listenID, code int)
+	// defaultDataListen / defaultExitListen are used when the phone subscribes
+	// onDynamicData/onDynamicExit without a terminal id (arg=nil) — the phone
+	// attaches a single global listener and routes by the payload we send.
+	defaultDataListen int
+	defaultExitListen int
 }
 
 // Term is one running shell pty.
@@ -97,6 +102,11 @@ func (s *Service) pump(t *Term) {
 			t.mu.Lock()
 			dl := t.DataListen
 			t.mu.Unlock()
+			if dl == 0 {
+				s.mu.Lock()
+				dl = s.defaultDataListen
+				s.mu.Unlock()
+			}
 			if dl != 0 && s.onData != nil {
 				s.onData(dl, data)
 			}
@@ -117,6 +127,11 @@ func (s *Service) pump(t *Term) {
 	t.mu.Lock()
 	el := t.ExitListen
 	t.mu.Unlock()
+	if el == 0 {
+		s.mu.Lock()
+		el = s.defaultExitListen
+		s.mu.Unlock()
+	}
 	if el != 0 && s.onExit != nil {
 		s.onExit(el, code)
 	}
@@ -159,8 +174,16 @@ func (s *Service) Resize(id string, cols, rows int) error {
 	return pty.Setsize(t.pty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 }
 
-// SetDataListener records the EventListen id for onDynamicData.
+// SetDataListener records the EventListen id for onDynamicData. If the phone
+// subscribed without a terminal id (arg=nil) it applies as a default for all
+// terminals; with an id it applies to just that terminal.
 func (s *Service) SetDataListener(id string, listenID int) error {
+	if id == "" {
+		s.mu.Lock()
+		s.defaultDataListen = listenID
+		s.mu.Unlock()
+		return nil
+	}
 	t, err := s.get(id)
 	if err != nil {
 		return err
@@ -173,6 +196,12 @@ func (s *Service) SetDataListener(id string, listenID int) error {
 
 // SetExitListener records the EventListen id for onDynamicExit.
 func (s *Service) SetExitListener(id string, listenID int) error {
+	if id == "" {
+		s.mu.Lock()
+		s.defaultExitListen = listenID
+		s.mu.Unlock()
+		return nil
+	}
 	t, err := s.get(id)
 	if err != nil {
 		return err

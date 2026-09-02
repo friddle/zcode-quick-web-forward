@@ -872,14 +872,13 @@ func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []
 			case "onAgentRuntimeLifecycle", "onAgentRuntimeRestarted":
 				ps.runtimeListener = c.ID
 			case "onDynamicData":
-				// terminal/onDynamicData — c.Arg is the terminal id string
-				if id, ok := c.Arg.(string); ok {
-					_ = termSvc.SetDataListener(id, c.ID)
-				}
+				// terminal/onDynamicData — c.Arg may be the terminal id string,
+				// or nil when the phone subscribes a single global listener.
+				id, _ := c.Arg.(string)
+				_ = termSvc.SetDataListener(id, c.ID)
 			case "onDynamicExit":
-				if id, ok := c.Arg.(string); ok {
-					_ = termSvc.SetExitListener(id, c.ID)
-				}
+				id, _ := c.Arg.(string)
+				_ = termSvc.SetExitListener(id, c.ID)
 			}
 			return
 		}
