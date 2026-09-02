@@ -954,6 +954,7 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 		return []any{}
 	}
 	out := make([]any, 0, len(tasks))
+	seen := map[string]bool{}
 	for _, t := range tasks {
 		// Only expose local tasks: remote SSH workspaces (workspaceKey with a
 		// remote: prefix) have no matching local workspace the phone can open,
@@ -961,6 +962,7 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 		if strings.HasPrefix(t.WorkspaceKey, "remote:") {
 			continue
 		}
+		seen[t.TaskID] = true
 		item := map[string]any{
 			"taskId":          t.TaskID,
 			"title":           t.Title, // must be a string or the phone renders [object Object]
@@ -985,10 +987,15 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 	if ps != nil {
 		for _, rt := range ps.runtimeTaskList() {
 			m, _ := rt.(map[string]any)
+			sid, _ := m["taskId"].(string)
+			if sid == "" || seen[sid] {
+				continue // already surfaced from the persisted task index
+			}
+			seen[sid] = true
 			title, _ := m["title"].(string)
 			ws, _ := m["workspacePath"].(string)
 			item := map[string]any{
-				"taskId":         m["taskId"],
+				"taskId":         sid,
 				"title":          title,
 				"workspacePath":  ws,
 				"workspaceLabel": pathLabel(ws),
@@ -1010,6 +1017,15 @@ func pathLabel(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func displayStatus(s string) string {
@@ -1137,6 +1153,31 @@ func (p *phoneSessions) runtimeTaskList() []any {
 		out = append(out, t)
 	}
 	return out
+}
+
+// taskMeta returns the workspace path + title known for a session id (looks in
+// the runtime map first, then the on-disk task index).
+func taskMeta(ps *phoneSessions, sid string) (ws, title string) {
+	ps.mu.Lock()
+	if t, ok := ps.runtimeTasks[sid]; ok {
+		ws, _ = t["workspacePath"].(string)
+		title, _ = t["title"].(string)
+	}
+	ps.mu.Unlock()
+	if ws == "" {
+		if tasks, err := zcode.ListTasks("", ""); err == nil {
+			for _, t := range tasks {
+				if t.TaskID == sid {
+					ws, title = t.WorkspacePath, t.Title
+					break
+				}
+			}
+		}
+	}
+	if title == "" {
+		title = "新任务"
+	}
+	return ws, title
 }
 
 func (p *phoneSessions) get() (string, string) {
@@ -1431,6 +1472,30 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		// The engine has no usage-stats service. Return the phone's neutral
 		// state shape (snapshot:null) so the UI shows no plan/entitlement.
 		reply(map[string]any{"snapshot": nil})
+	case "file/ensureConversationWorkspace":
+		// Phone-side file service: confirm the workspace dir for a conversation
+		// (returns {path}). The engine has no file/* protocol — resolve the
+		// path from the active workspace / session.
+		pth := ""
+		var fp struct {
+			SessionID      string `json:"sessionId"`
+			WorkspacePath  string `json:"workspacePath"`
+			WorkspaceID    string `json:"workspaceId"`
+			LocalWorkspace string `json:"localWorkspacePath"`
+		}
+		var raw json.RawMessage
+		if b, ok := c.Arg.(json.RawMessage); ok {
+			raw = b
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			raw = b
+		}
+		_ = json.Unmarshal(raw, &fp)
+		pth = firstNonEmpty(fp.WorkspacePath, fp.LocalWorkspace, fp.WorkspaceID, ps.workspacePath)
+		if pth == "" && len(workspaces) > 0 {
+			pth = workspaces[0]
+		}
+		fmt.Printf("zcode: file.ensureConversationWorkspace path=%q session=%q\n", pth, fp.SessionID)
+		reply(map[string]any{"path": pth})
 	case "zcode-task/getTaskSessionFilePath":
 		reply(map[string]any{"path": nil, "exists": false})
 	case "zcode-task/getTaskNativeSessionLogFile":
@@ -1502,6 +1567,20 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		// The subscriptionId must be stable and echoed in resync (never
 		// minted fresh) — a mismatch throws resyncGenerationMismatch. We
 		// derive it from the sessionId so pushed frames and the ack agree.
+		// The phone may ask to subscribe/resync a SPECIFIC session (opening an
+		// old task from the list) — honor that instead of only the bridge's
+		// current session.
+		var subReq struct {
+			SessionID string `json:"sessionId"`
+		}
+		if raw, ok := c.Arg.(json.RawMessage); ok {
+			_ = json.Unmarshal(raw, &subReq)
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			_ = json.Unmarshal(b, &subReq)
+		}
+		if subReq.SessionID != "" {
+			ps.setSession(subReq.SessionID, "") // keep workspacePath
+		}
 		sid, _ := ps.get()
 		subID := ps.convSub()
 		if subID == "" {
@@ -1597,8 +1676,11 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 		engine.SendChannelEvent(runtimeID, b, send)
 	}
 	// If this was a resync, the phone waits for a recovery-delivery frame with
-	// the full transcript so it renders the conversation history.
-	if c.Name == "resyncConversationV4" || c.Name == "resyncSessionsIndexV4" {
+	// the full transcript so it renders the conversation history. When the
+	// phone opens a specific session (old task from the list) we also push its
+	// history so the conversation is restored, not left empty.
+	if (c.Name == "resyncConversationV4" || c.Name == "resyncSessionsIndexV4" ||
+		c.Name == "subscribeConversationV4") && (c.Name != "subscribeSessionsIndexV4") {
 		sid, _ := ps.get()
 		if sid != "" {
 			rows := []any{}
@@ -1610,7 +1692,17 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 					fmt.Printf("zcode: recovery read failed: %v\n", err)
 				}
 			}
-			b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
+			// workspacePath: prefer the one persisted for this task in sqlite.
+			ws := ps.workspacePath
+			if tasks, err := zcode.ListTasks("", ""); err == nil {
+				for _, t := range tasks {
+					if t.TaskID == sid && t.WorkspacePath != "" {
+						ws = t.WorkspacePath
+						break
+					}
+				}
+			}
+			b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
 			engine.SendChannelEvent(ps.convListener, b, send)
 			fmt.Printf("zcode: pushed recovery snapshot session=%s rows=%d\n", sid, len(rows))
 		}
@@ -1653,6 +1745,21 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	if err != nil {
 		fmt.Printf("zcode: syncConversation read failed: %v\n", err)
 		return
+	}
+	// Persist the engine-generated session title (engine titles the task, e.g.
+	// "List files in /home/friddle") so the phone list shows real names.
+	if s, ok := tx["session"].(map[string]any); ok {
+		if t, _ := s["title"].(string); t != "" {
+			if ws, _ := s["workspace"].(map[string]any); ws != nil {
+				if wp, _ := ws["workspacePath"].(string); wp != "" {
+					if err := zcode.UpsertTask(wp, wp, sessionID, t, "completed"); err != nil {
+						fmt.Printf("zcode: task title sync failed: %v\n", err)
+					} else {
+						fmt.Printf("zcode: task title synced %s title=%q\n", sessionID, t)
+					}
+				}
+			}
+		}
 	}
 	rows := messageRows(tx, sessionID, ps.nextOrdinal)
 	if len(rows) == 0 {
@@ -1758,10 +1865,12 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 	idx := "0"
 	tasks, _ := zcode.ListTasks("", "")
 	sessions := make([]any, 0, len(tasks))
+	seen := map[string]bool{}
 	for _, t := range tasks {
 		if strings.HasPrefix(t.WorkspaceKey, "remote:") {
 			continue
 		}
+		seen[t.TaskID] = true
 		sessions = append(sessions, map[string]any{
 			"sessionId":      t.TaskID,
 			"workspaceId":    t.WorkspaceKey,
@@ -1776,6 +1885,10 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 		for _, rt := range ps.runtimeTaskList() {
 			m, _ := rt.(map[string]any)
 			sid, _ := m["taskId"].(string)
+			if sid == "" || seen[sid] {
+				continue
+			}
+			seen[sid] = true
 			title, _ := m["title"].(string)
 			ws, _ := m["workspacePath"].(string)
 			sessions = append(sessions, map[string]any{
@@ -2077,6 +2190,13 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			title = "新任务"
 		}
 		ps.runtimeTask(sid, ws, title)
+		// Persist to the real task index so the task survives reconnects/restarts
+		// (the phone's task list is read from that sqlite).
+		if err := zcode.UpsertTask(ws, ws, sid, title, "running"); err != nil {
+			fmt.Printf("zcode: task persist failed: %v\n", err)
+		} else {
+			fmt.Printf("zcode: task persisted %s\n", sid)
+		}
 		ack["result"] = map[string]any{
 			"type":      "createSession",
 			"sessionId": sid,
@@ -2279,6 +2399,20 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			}
 		}
 		if p.Kind == "turn.terminal" && p.Session != "" {
+			// Persist the finished state so the task list shows the outcome
+			// after a reconnect. status is success/interrupted/failed.
+			st := p.Status
+			if st != "success" && st != "interrupted" && st != "failed" {
+				st = "completed"
+			}
+			go func(sid string) {
+				ws, title := taskMeta(ps, sid)
+				if ws != "" {
+					if err := zcode.UpsertTask(ws, ws, sid, title, st); err != nil {
+						fmt.Printf("zcode: task finalize failed: %v\n", err)
+					}
+				}
+			}(p.Session)
 			// A turn finished: pull the full transcript (assistant text, tool
 			// outputs like ls results) and push it as conversation rows so the
 			// phone actually sees the reply. Run async — this goroutine IS the

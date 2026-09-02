@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -49,6 +50,44 @@ func openTaskDB() (*sql.DB, error) {
 		return nil, err
 	}
 	return sql.Open("sqlite", "file:"+path+"?mode=ro")
+}
+
+// UpsertTask records (or updates) a task in the real task index. The engine's
+// sessions are NOT auto-persisted to the desktop task index, so we write them
+// here on create/complete — otherwise the phone's task list only ever shows
+// "new task" after a reconnect (the list is read from this sqlite).
+func UpsertTask(workspaceKey, workspacePath, taskID, title, status string) error {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(Home(), "v2", "tasks-index.sqlite")+"?_pragma=busy_timeout(3000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	now := time.Now().UnixMilli()
+	var exists int
+	_ = db.QueryRow("SELECT COUNT(1) FROM tasks WHERE workspace_key=? AND task_id=?", workspaceKey, taskID).Scan(&exists)
+	if exists > 0 {
+		_, err = db.Exec("UPDATE tasks SET title=?, task_status=?, updated_at=? WHERE workspace_key=? AND task_id=?",
+			title, status, now, workspaceKey, taskID)
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO tasks
+		(workspace_key, workspace_path, task_id, title, task_status, mode, created_at, updated_at, last_unread_at, deleted, archived, pinned, meta_json, searchable_text)
+		VALUES (?, ?, ?, ?, ?, 'build', ?, ?, 0, 0, 0, 0, '{}', '')`,
+		workspaceKey, workspacePath, taskID, title, status, now, now)
+	return err
+}
+
+// TaskExists reports whether a task id is already in the index under any
+// workspace (used to decide whether the phone-side task is real/restorable).
+func TaskExists(taskID string) bool {
+	db, err := openTaskDB()
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	var n int
+	_ = db.QueryRow("SELECT COUNT(1) FROM tasks WHERE task_id=?", taskID).Scan(&n)
+	return n > 0
 }
 
 // ListTasks returns tasks from the real task index, newest first. kind filters
