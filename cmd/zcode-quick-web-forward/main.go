@@ -1076,7 +1076,25 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 	case "model-provider/getProviderRegistrySnapshot":
 		reply(providerPayload())
 	case "setting/get":
-		reply(map[string]any{"language": "en", "locale": "zh-CN"})
+		homeDir, _ := os.UserHomeDir()
+		reply(map[string]any{
+			"language":       "en",
+			"locale":         "zh-CN",
+			"dataBaseDir":    homeDir,
+			"defaultHomeDir": homeDir,
+		})
+	case "system/info":
+		reply(map[string]any{
+			"version":       "0.7.0",
+			"appName":       "zcode-quick-web-forward",
+			"platform":      "linux",
+			"arch":          "amd64",
+			"nodeVersion":   "",
+			"runtime":       "web-remote",
+			"home":          "",
+			"userName":      "",
+			"workspacePath": "/home/friddle/zqf-work",
+		})
 	case "setting/update":
 		reply(map[string]any{})
 	case "oauth/restoreCachedSessionState":
