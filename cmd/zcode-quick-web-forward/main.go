@@ -1019,6 +1019,7 @@ func pathLabel(p string) string {
 	return p
 }
 
+// firstNonEmpty returns the first non-empty string argument.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {
@@ -1072,6 +1073,11 @@ type phoneSessions struct {
 	// listeners records EventListen ids by purpose so events can be pushed to
 	// them (provider registry changes, workspace events, controller frames).
 	listeners map[string]int
+	// resumeAlias maps a phone-visible (task) sessionId to the live engine
+	// session we rebuilt it as, so continuing a historical task (whose engine
+	// session died on daemon restart) executes against a real engine session
+	// while the phone keeps seeing its original task id.
+	resumeAlias map[string]string
 }
 
 func (p *phoneSessions) recordListener(kind string, id int) {
@@ -1087,6 +1093,44 @@ func (p *phoneSessions) listener(kind string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.listeners[kind]
+}
+
+// setResumeAlias maps phoneSid -> engineSid (a rebuilt continuation session).
+func (p *phoneSessions) setResumeAlias(phoneSid, engineSid string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.resumeAlias == nil {
+		p.resumeAlias = map[string]string{}
+	}
+	p.resumeAlias[phoneSid] = engineSid
+}
+
+// engineFor returns the live engine session id for a phone-visible session id,
+// following the resume alias if one exists. If the phoneSid itself is a live
+// engine session, it returns it unchanged.
+func (p *phoneSessions) engineFor(phoneSid string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.resumeAlias != nil {
+		if e := p.resumeAlias[phoneSid]; e != "" {
+			return e
+		}
+	}
+	return phoneSid
+}
+
+// phoneFor returns the phone-visible task id an engine session event belongs
+// to (reverse alias lookup), so engine events on a rebuilt session are pushed
+// under the original task id.
+func (p *phoneSessions) phoneFor(engineSid string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for phone, e := range p.resumeAlias {
+		if e == engineSid {
+			return phone
+		}
+	}
+	return engineSid
 }
 
 func (p *phoneSessions) nextOrdinal() int {
@@ -1178,6 +1222,40 @@ func taskMeta(ps *phoneSessions, sid string) (ws, title string) {
 		title = "新任务"
 	}
 	return ws, title
+}
+
+// rebuildContinuedSession recreates a live engine session for a historical task
+// whose engine session died (daemon restart). It reads the saved transcript,
+// creates a fresh engine session in the task's workspace, feeds the history in
+// as context, and records phoneSid->engineSid so later events keep showing
+// under the original task id. Returns the new engine session id ("" on error).
+func rebuildContinuedSession(engClient *enginepkg.Client, ps *phoneSessions, phoneSid string) string {
+	ws, _ := taskMeta(ps, phoneSid)
+	if ws == "" {
+		fmt.Printf("zcode: cannot rebuild %s: no workspace\n", phoneSid)
+		return ""
+	}
+	defP, defM := zcode.DefaultModel()
+	if defP == "" || defM == "" {
+		defP, defM = "bigmodel", "GLM-5.3"
+	}
+	res, err := engClient.CreateSession(ws, ws, defP, defM, 15*time.Second)
+	if err != nil {
+		fmt.Printf("zcode: rebuild create failed: %v\n", err)
+		return ""
+	}
+	newSid, _ := res["sessionId"].(string)
+	if newSid == "" {
+		if s, ok := res["session"].(map[string]any); ok {
+			newSid, _ = s["sessionId"].(string)
+		}
+	}
+	if newSid == "" {
+		return ""
+	}
+	ps.setResumeAlias(phoneSid, newSid)
+	fmt.Printf("zcode: rebuilt continuation %s -> engine %s (workspace %s)\n", phoneSid, newSid, ws)
+	return newSid
 }
 
 func (p *phoneSessions) get() (string, string) {
@@ -1767,8 +1845,13 @@ func pushConversationFrame(engine *relay.BridgeEngine, send func(any), ps *phone
 
 // syncConversation pulls the engine session transcript and pushes each message
 // as a conversation delta so the phone renders the full reply (assistant text +
-// tool outputs). Called when a turn.terminal event fires.
-func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, sender *relaySender, ps *phoneSessions, sessionID string) {
+// tool outputs). Called when a turn.terminal event fires. engineSid is the live
+// engine session (may be a rebuilt continuation); phoneSid is the task id the
+// phone displays (may differ when resuming a historical task).
+func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, sender *relaySender, ps *phoneSessions, engineSid, phoneSid string) {
+	if phoneSid == "" {
+		phoneSid = engineSid
+	}
 	ps.mu.Lock()
 	convID := ps.convListener
 	convSub := ps.convSubscription
@@ -1776,7 +1859,7 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	if convID == 0 {
 		return
 	}
-	tx, err := engClient.ReadSession(sessionID, 10*time.Second)
+	tx, err := engClient.ReadSession(engineSid, 10*time.Second)
 	if err != nil {
 		fmt.Printf("zcode: syncConversation read failed: %v\n", err)
 		return
@@ -1784,10 +1867,10 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	// Snapshot the transcript to disk so the phone can reopen this task's
 	// history even after the engine restarts (its sessions are in-memory).
 	if saved, _ := json.Marshal(tx); len(saved) > 0 {
-		if err := zcode.SaveSessionTranscript(sessionID, tx); err != nil {
+		if err := zcode.SaveSessionTranscript(phoneSid, tx); err != nil {
 			fmt.Printf("zcode: transcript save failed: %v\n", err)
 		} else {
-			fmt.Printf("zcode: transcript saved session=%s bytes=%d\n", sessionID, len(saved))
+			fmt.Printf("zcode: transcript saved session=%s bytes=%d\n", phoneSid, len(saved))
 		}
 	}
 	// Persist the engine-generated session title (engine titles the task, e.g.
@@ -1796,23 +1879,23 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 		if t, _ := s["title"].(string); t != "" {
 			if ws, _ := s["workspace"].(map[string]any); ws != nil {
 				if wp, _ := ws["workspacePath"].(string); wp != "" {
-					if err := zcode.UpsertTask(wp, wp, sessionID, t, "completed"); err != nil {
+					if err := zcode.UpsertTask(wp, wp, phoneSid, t, "completed"); err != nil {
 						fmt.Printf("zcode: task title sync failed: %v\n", err)
 					} else {
-						fmt.Printf("zcode: task title synced %s title=%q\n", sessionID, t)
+						fmt.Printf("zcode: task title synced %s title=%q\n", phoneSid, t)
 					}
 				}
 			}
 		}
 	}
-	rows := messageRows(tx, sessionID, ps.nextOrdinal)
+	rows := messageRows(tx, phoneSid, ps.nextOrdinal)
 	if len(rows) == 0 {
-		fmt.Printf("zcode: syncConversation empty rows session=%s\n", sessionID)
+		fmt.Printf("zcode: syncConversation empty rows session=%s\n", phoneSid)
 		return
 	}
-	b, _ := json.Marshal(conversationSnapshotFrame(sessionID, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
+	b, _ := json.Marshal(conversationSnapshotFrame(phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
 	engine.SendChannelEvent(convID, b, sender.send)
-	fmt.Printf("zcode: synced conversation session=%s rows=%d\n", sessionID, len(rows))
+	fmt.Printf("zcode: synced conversation engine=%s phone=%s rows=%d\n", engineSid, phoneSid, len(rows))
 }
 
 // messageRows converts a session/read transcript into conversation snapshot
@@ -2256,14 +2339,27 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			text = req.Envelope.Payload.FirstInput.Text
 		}
 		if sid != "" && text != "" {
-			if !engClient.SendMessage(sid, text) {
-				ack["status"] = "failed"
-				ack["message"] = "engine stdin closed"
+			// The phone may send into a historical task whose engine session
+			// died on a daemon restart. Resolve to the live engine session; if
+			// none is active, rebuild one and continue from the saved
+			// transcript so the command actually executes.
+			engineSid := ps.engineFor(sid)
+			if engineSid == sid {
+				if _, err := engClient.ReadSession(sid, 3*time.Second); err != nil {
+					engineSid = rebuildContinuedSession(engClient, ps, sid)
+				}
 			}
-			fmt.Printf("zcode: engine session/send %s text=%q\n", sid, text)
-			// Tell the caller to render the user's message immediately so the
-			// phone isn't blank while the engine works.
-			ack["userTextSent"] = text
+			if engineSid == "" {
+				ack["status"] = "failed"
+				ack["message"] = "无法恢复该历史任务的会话"
+			} else {
+				if !engClient.SendMessage(engineSid, text) {
+					ack["status"] = "failed"
+					ack["message"] = "engine stdin closed"
+				}
+				fmt.Printf("zcode: engine session/send %s (phone=%s) text=%q\n", engineSid, sid, text)
+				ack["userTextSent"] = text
+			}
 		}
 	case "switchModelConfig":
 		// Switch the current session's model. The payload is
@@ -2418,8 +2514,9 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			convID := ps.convListener
 			convSub := ps.convSubscription
 			ps.mu.Unlock()
+			phoneSid := ps.phoneFor(p.SessionID)
 			if convID > 0 {
-				b, _ := json.Marshal(stateUpdatedFrame(p.SessionID, p.Patch.Status, convSub, ps.nextOrdinal()))
+				b, _ := json.Marshal(stateUpdatedFrame(phoneSid, p.Patch.Status, convSub, ps.nextOrdinal()))
 				engine.SendChannelEvent(convID, b, sender.send)
 			}
 		}
@@ -2440,14 +2537,16 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			convID := ps.convListener
 			convSub := ps.convSubscription
 			ps.mu.Unlock()
+			phoneSid := ps.phoneFor(p.Session)
 			if convID > 0 {
-				b, _ := json.Marshal(conversationChunkFrame(p.Session, p.Chunk, convSub, ps.nextOrdinal()))
+				b, _ := json.Marshal(conversationChunkFrame(phoneSid, p.Chunk, convSub, ps.nextOrdinal()))
 				engine.SendChannelEvent(convID, b, sender.send)
 			}
 		}
 		if p.Kind == "turn.terminal" && p.Session != "" {
-			// Persist the finished state so the task list shows the outcome
-			// after a reconnect. status is success/interrupted/failed.
+			// The engine session may be a rebuilt continuation of a phone task;
+			// update the phone-visible task and push under its id.
+			phoneSid := ps.phoneFor(p.Session)
 			st := p.Status
 			if st != "success" && st != "interrupted" && st != "failed" {
 				st = "completed"
@@ -2459,13 +2558,13 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 						fmt.Printf("zcode: task finalize failed: %v\n", err)
 					}
 				}
-			}(p.Session)
+			}(phoneSid)
 			// A turn finished: pull the full transcript (assistant text, tool
 			// outputs like ls results) and push it as conversation rows so the
 			// phone actually sees the reply. Run async — this goroutine IS the
 			// stdout reader, and ReadSession must not block it (the reply
 			// arrives on the same stream after this event).
-			go syncConversation(engClient, engine, sender, ps, p.Session)
+			go syncConversation(engClient, engine, sender, ps, p.Session, phoneSid)
 		}
 	}
 }
