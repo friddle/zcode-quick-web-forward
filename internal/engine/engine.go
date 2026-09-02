@@ -100,6 +100,46 @@ func (c *Client) CreateSession(workspaceKey, workspacePath, provider, model stri
 	}
 }
 
+// ReadSession reads the full session transcript (messages including assistant
+// text and tool outputs) so the desktop can relay it to the phone.
+func (c *Client) ReadSession(sessionID string, timeout time.Duration) (map[string]any, error) {
+	c.mu.Lock()
+	c.nextID++
+	id := c.nextID
+	ch := make(chan json.RawMessage, 1)
+	c.pending[id] = ch
+	c.mu.Unlock()
+	if !c.Write(map[string]any{
+		"id": id, "method": "session/read",
+		"params": map[string]any{"sessionId": sessionID},
+	}) {
+		c.forget(id)
+		return nil, fmt.Errorf("engine stdin closed")
+	}
+	select {
+	case line := <-ch:
+		c.forget(id)
+		var resp struct {
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(line, &resp) != nil {
+			return nil, fmt.Errorf("bad read reply")
+		}
+		if len(resp.Error) > 0 {
+			return nil, fmt.Errorf("session/read: %s", resp.Error)
+		}
+		var m map[string]any
+		if json.Unmarshal(resp.Result, &m) != nil {
+			return nil, fmt.Errorf("bad read result")
+		}
+		return m, nil
+	case <-time.After(timeout):
+		c.forget(id)
+		return nil, fmt.Errorf("session/read timeout")
+	}
+}
+
 // SendMessage sends a user message to a session (fire-and-forget; streaming
 // results arrive via OnEvent).
 func (c *Client) SendMessage(sessionID, content string) bool {

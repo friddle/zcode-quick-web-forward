@@ -1170,7 +1170,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 			},
 		}
 		reply(ack)
-		go pushSubscriptionFrames(engine, send, ps, c)
+		go pushSubscriptionFrames(engine, send, ps, c, engClient)
 	case "zcode-agent/sendConversationCommandV4":
 		ack := bridgeSendCommand(c, engClient, ps, workspaces)
 		reply(ack)
@@ -1207,7 +1207,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 
 // pushSubscriptionFrames pushes the sessions-index + conversation snapshot so
 // the phone's subscription goes live (otherwise it resync-loops).
-func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phoneSessions, c *relay.ChannelCall) {
+func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phoneSessions, c *relay.ChannelCall, engClient *enginepkg.Client) {
 	time.Sleep(300 * time.Millisecond)
 	ps.mu.Lock()
 	indexID, runtimeID, convSub := ps.indexListener, ps.runtimeListener, ps.convSubscription
@@ -1221,13 +1221,23 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 		b, _ := json.Marshal(map[string]any{"workspaceKey": "local", "state": "available"})
 		engine.SendChannelEvent(runtimeID, b, send)
 	}
-	// If this was a resync, the phone waits for a recovery-delivery frame.
+	// If this was a resync, the phone waits for a recovery-delivery frame with
+	// the full transcript so it renders the conversation history.
 	if c.Name == "resyncConversationV4" || c.Name == "resyncSessionsIndexV4" {
 		sid, _ := ps.get()
 		if sid != "" {
-			b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal()))
+			rows := []any{}
+			if engClient != nil {
+				if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {
+					rows = messageRows(tx, sid, ps.nextOrdinal)
+					fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
+				} else {
+					fmt.Printf("zcode: recovery read failed: %v\n", err)
+				}
+			}
+			b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows))
 			engine.SendChannelEvent(ps.convListener, b, send)
-			fmt.Printf("zcode: pushed recovery snapshot session=%s\n", sid)
+			fmt.Printf("zcode: pushed recovery snapshot session=%s rows=%d\n", sid, len(rows))
 		}
 	}
 }
@@ -1247,10 +1257,125 @@ func pushConversationFrame(engine *relay.BridgeEngine, send func(any), ps *phone
 	if convID == 0 {
 		return
 	}
-	frame := conversationSnapshotFrame(sessionID, ws, convSub, "initial", ps.nextOrdinal())
+	frame := conversationSnapshotFrame(sessionID, ws, convSub, "initial", ps.nextOrdinal(), nil)
 	b, _ := json.Marshal(frame)
 	engine.SendChannelEvent(convID, b, send)
 	fmt.Printf("zcode: pushed conversation snapshot session=%s\n", sessionID)
+}
+
+// syncConversation pulls the engine session transcript and pushes each message
+// as a conversation delta so the phone renders the full reply (assistant text +
+// tool outputs). Called when a turn.terminal event fires.
+func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, sender *relaySender, ps *phoneSessions, sessionID string) {
+	ps.mu.Lock()
+	convID := ps.convListener
+	convSub := ps.convSubscription
+	ps.mu.Unlock()
+	if convID == 0 {
+		return
+	}
+	tx, err := engClient.ReadSession(sessionID, 10*time.Second)
+	if err != nil {
+		fmt.Printf("zcode: syncConversation read failed: %v\n", err)
+		return
+	}
+	rows := messageRows(tx, sessionID, ps.nextOrdinal)
+	if len(rows) == 0 {
+		fmt.Printf("zcode: syncConversation empty rows session=%s\n", sessionID)
+		return
+	}
+	b, _ := json.Marshal(conversationSnapshotFrame(sessionID, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows))
+	engine.SendChannelEvent(convID, b, sender.send)
+	fmt.Printf("zcode: synced conversation session=%s rows=%d\n", sessionID, len(rows))
+}
+
+// messageRows converts a session/read transcript into conversation snapshot
+// rows (assistant text + tool outputs + user text) so the phone renders the
+// full reply.
+func messageRows(tx map[string]any, sessionID string, ordinal func() int) []any {
+	var msgs []any
+	if m, ok := tx["messages"].([]any); ok {
+		msgs = m
+	} else if m, ok := tx["rows"].([]any); ok {
+		msgs = m
+	}
+	out := make([]any, 0, len(msgs))
+	for _, raw := range msgs {
+		m, _ := raw.(map[string]any)
+		if m == nil {
+			continue
+		}
+		role, _ := m["role"].(string)
+		kind, _ := m["kind"].(string)
+		content, _ := m["content"].(string)
+		if content == "" {
+			content = messageTextFromParts(m["parts"], m["contentParts"])
+		}
+		if content == "" {
+			continue
+		}
+		rowKind := "assistantText"
+		if role == "user" || kind == "userText" {
+			rowKind = "userText"
+		}
+		now := time.Now().UnixMilli()
+		out = append(out, map[string]any{
+			"rowId":              0,
+			"turnId":             "turn-" + sessionID,
+			"createdAt":          now,
+			"createdAtSeq":       1,
+			"kind":               rowKind,
+			"assistantResponseId": "ar-" + sessionID,
+			"text":               content,
+			"state":              "complete",
+		})
+	}
+	return out
+}
+
+// messageTextFromParts extracts joined text from a message's parts array
+// (assistant messages carry {type:"text",text:...} or {type:"tool",...}).
+func messageTextFromParts(parts any, contentParts any) string {
+	extract := func(p any) string {
+		pm, _ := p.(map[string]any)
+		if pm == nil {
+			return ""
+		}
+		t, _ := pm["type"].(string)
+		if t == "text" {
+			if txt, ok := pm["text"].(string); ok {
+				return txt
+			}
+			return ""
+		}
+		if t == "tool" {
+			// {type:"tool", title:"Bash", state:{input:{command}, output}}
+			var cmd, output string
+			if st, ok := pm["state"].(map[string]any); ok {
+				if inp, ok := st["input"].(map[string]any); ok {
+					cmd, _ = inp["command"].(string)
+				}
+				output, _ = st["output"].(string)
+			}
+			if cmd == "" && output == "" {
+				return ""
+			}
+			return "```\n" + cmd + "\n```\n```\n" + output + "\n```"
+		}
+		return ""
+	}
+	var sb strings.Builder
+	for _, list := range []any{parts, contentParts} {
+		if arr, ok := list.([]any); ok {
+			for _, p := range arr {
+				if s := extract(p); s != "" {
+					sb.WriteString(s)
+					sb.WriteString("\n")
+				}
+			}
+		}
+	}
+	return sb.String()
 }
 
 // sessionsIndexFrame builds a sessions-index snapshot wire frame.
@@ -1398,12 +1523,15 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 // conversationSnapshotFrame builds a conversation snapshot wire frame matching
 // the phone's strict Hoe schema. deliveryKind is "initial" (fresh subscribe) or
 // "recovery" (resync). ordinal must strictly increase per subscription.
-func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind string, ordinal int) map[string]any {
+func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
 	}
 	if deliveryKind == "" {
 		deliveryKind = "initial"
+	}
+	if rows == nil {
+		rows = []any{}
 	}
 	snapshot := map[string]any{
 		"protocolVersion": 1,
@@ -1455,8 +1583,8 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 		"plan":                  nil,
 		"workspaceHookAdmission": nil,
 		"rows": map[string]any{
-			"window":     []any{},
-			"totalCount": 0,
+			"window":     rows,
+			"totalCount": len(rows),
 			"firstRowId": nil,
 		},
 	}
@@ -1721,6 +1849,14 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				b, _ := json.Marshal(conversationChunkFrame(p.Session, p.Chunk, convSub, ps.nextOrdinal()))
 				engine.SendChannelEvent(convID, b, sender.send)
 			}
+		}
+		if p.Kind == "turn.terminal" && p.Session != "" {
+			// A turn finished: pull the full transcript (assistant text, tool
+			// outputs like ls results) and push it as conversation rows so the
+			// phone actually sees the reply. Run async — this goroutine IS the
+			// stdout reader, and ReadSession must not block it (the reply
+			// arrives on the same stream after this event).
+			go syncConversation(engClient, engine, sender, ps, p.Session)
 		}
 	}
 }
