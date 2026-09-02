@@ -287,4 +287,65 @@ func DefaultModel() (provider, model string) {
 	return "", ref
 }
 
+// workspaceStorePath is the file holding workspaces added with `workspace add`.
+// It lives next to the desktop's other state so a running remote picks it up.
+func workspaceStorePath() string {
+	return filepath.Join(Home(), "v2", "zqf-workspaces.json")
+}
+
+// StoredWorkspaces returns the extra workspaces registered via `workspace add`
+// (paths only, one per line in a json array).
+func StoredWorkspaces() []string {
+	b, err := os.ReadFile(workspaceStorePath())
+	if err != nil {
+		return nil
+	}
+	var out []string
+	_ = json.Unmarshal(b, &out)
+	return out
+}
+
+// AddStoredWorkspace persists an extra workspace path (deduped, cleaned).
+func AddStoredWorkspace(path string) (string, bool, error) {
+	clean := filepath.Clean(path)
+	existing := StoredWorkspaces()
+	for _, p := range existing {
+		if filepath.Clean(p) == clean {
+			return clean, false, nil
+		}
+	}
+	next := append(existing, clean)
+	if err := os.MkdirAll(filepath.Dir(workspaceStorePath()), 0o755); err != nil {
+		return "", false, err
+	}
+	b, _ := json.Marshal(next)
+	if err := os.WriteFile(workspaceStorePath(), b, 0o644); err != nil {
+		return "", false, err
+	}
+	return clean, true, nil
+}
+
+// RemoveStoredWorkspace drops a workspace registered via `workspace add`.
+func RemoveStoredWorkspace(path string) (bool, error) {
+	clean := filepath.Clean(path)
+	existing := StoredWorkspaces()
+	next := existing[:0]
+	removed := false
+	for _, p := range existing {
+		if filepath.Clean(p) == clean {
+			removed = true
+			continue
+		}
+		next = append(next, p)
+	}
+	if !removed {
+		return false, nil
+	}
+	b, _ := json.Marshal(next)
+	if err := os.WriteFile(workspaceStorePath(), b, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 var _ = fmt.Sprintf

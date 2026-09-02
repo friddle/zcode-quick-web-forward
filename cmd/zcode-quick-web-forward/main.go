@@ -52,6 +52,9 @@ func main() {
 		case "download", "fetch":
 			doDownload(os.Args[2:])
 			return
+		case "workspace":
+			doWorkspace(os.Args[2:])
+			return
 		case "version", "-version", "--version", "-v":
 			fmt.Printf("zcode-quick-web-forward %s\n", version)
 			return
@@ -76,7 +79,13 @@ Commands:
   run            interactive: region, login method (link or BigModel key),
                  then engine + relay + phone pairing URL
   logincli       run the real client login (node zcode.cjs login --no-browser)
-  remote|web     start engine + relay and print the phone pairing URL
+  remote|web     start engine + relay and print the phone pairing URL.
+                 Default: runs as a background daemon (no tmux/ssh needed)
+                 and tails r.log to the terminal. Use --foreground to run in
+                 the foreground, --stop to stop the daemon, --log PATH to
+                 choose the log file (default ./r.log).
+  workspace      add/remove/list extra workspaces exposed to the phone
+                 (zcode-quick-web-forward workspace add /path/to/dir)
   download       resolve/download the latest ZCode runtime
   version        print version
 
@@ -205,6 +214,14 @@ func (o commonOpts) resolveWorkspaces() []string {
 			}
 		}
 	}
+	// merge in workspaces registered via `workspace add`
+	for _, p := range zcode.StoredWorkspaces() {
+		c := filepath.Clean(p)
+		if !seen[c] {
+			out = append(out, c)
+			seen[c] = true
+		}
+	}
 	return out
 }
 
@@ -327,9 +344,219 @@ func runLoginCLI(args []string) {
 }
 
 func doRemote(args []string) {
-	doRemoteOpts(parseCommon(args))
+	// daemon/foreground/stop handling. Default (no flag): run as a background
+	// daemon (no tmux needed) and tail the log to stdout.
+	if hasFlag(args, "--stop", "-s") {
+		stopDaemon()
+		return
+	}
+	foreground := hasFlag(args, "--foreground", "-f", "--fg")
+	logPath := flagValue(args, "--log", "")
+	args = stripFlags(args, "--stop", "-s", "--foreground", "-f", "--fg", "--log")
+	if foreground {
+		doRemoteOpts(parseCommon(args))
+		return
+	}
+	daemonMain(args, logPath)
 }
 
+// --- daemon / log tail -------------------------------------------------
+
+func zqfLogPath(hint string) string {
+	if hint != "" {
+		return hint
+	}
+	if v := os.Getenv("ZQF_LOG"); v != "" {
+		return v
+	}
+	if dir, err := os.Getwd(); err == nil {
+		return filepath.Join(dir, "r.log")
+	}
+	return "r.log"
+}
+
+func pidPath(log string) string { return log + ".pid" }
+
+func daemonPID(log string) int {
+	b, err := os.ReadFile(pidPath(log))
+	if err != nil {
+		return 0
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(b), "%d", &pid); err != nil {
+		return 0
+	}
+	if pid <= 0 {
+		return 0
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return 0
+	}
+	if err := p.Signal(syscall.Signal(0)); err != nil {
+		return 0
+	}
+	return pid
+}
+
+func stopDaemon() {
+	// The log may live under several conventional locations; try the current
+	// dir r.log plus the cache dir.
+	candidates := []string{zqfLogPath("")}
+	if cache, err := os.UserCacheDir(); err == nil {
+		candidates = append(candidates, filepath.Join(cache, "zcode-quick-web-forward", "remote.log"))
+	}
+	seen := map[string]bool{}
+	stopped := false
+	for _, l := range candidates {
+		if seen[l] {
+			continue
+		}
+		seen[l] = true
+		if pid := daemonPID(l); pid != 0 {
+			_ = syscall.Kill(pid, syscall.SIGTERM)
+			fmt.Printf("zcode: daemon %d stopped (log %s)\n", pid, l)
+			stopped = true
+		}
+	}
+	if !stopped {
+		fmt.Println("zcode: no running daemon found")
+	}
+}
+
+// daemonMain re-execs this binary in the background (detached from the tty and
+// the current ssh session), redirects output to the log, then tails the log.
+func daemonMain(args []string, logHint string) {
+	log := zqfLogPath(logHint)
+	if pid := daemonPID(log); pid != 0 {
+		fmt.Printf("zcode: daemon already running pid=%d (log %s)\n", pid, log)
+		tailLog(log, true)
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(filepath.Clean(log)), 0o755)
+	// Child: re-exec self with a marker env so the child knows to run the
+	// engine+relay in the foreground (it inherits a redirect to the log).
+	exe, err := os.Executable()
+	if err != nil {
+		fatal("daemonize: %v", err)
+	}
+	childArgs := append([]string{"remote", "--foreground"}, args...)
+	child := exec.Command(exe, childArgs...)
+	child.Env = append(os.Environ(), "ZQF_DAEMON_CHILD=1", "ZQF_LOG="+log)
+	// Detach: new session, stdin /dev/null, stdout+stderr -> log file.
+	child.Stdin = nil
+	f, err := os.OpenFile(log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		fatal("daemonize log: %v", err)
+	}
+	defer f.Close()
+	child.Stdout = f
+	child.Stderr = f
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := child.Start(); err != nil {
+		fatal("daemonize start: %v", err)
+	}
+	if err := os.WriteFile(pidPath(log), []byte(fmt.Sprintf("%d\n", child.Process.Pid)), 0o644); err != nil {
+		fmt.Printf("zcode: warn: cannot write pid file: %v\n", err)
+	}
+	fmt.Printf("zcode: daemon started pid=%d (log %s)\n", child.Process.Pid, log)
+	_ = child.Process.Release()
+	tailLog(log, false)
+}
+
+// tailLog prints the pairing URL / log as it appears, like `tail -f`.
+// fromEnd: when re-attaching to an already-running daemon, start at the tail so
+// we don't replay the whole log from the beginning.
+func tailLog(path string, fromEnd bool) {
+	fmt.Printf("zcode: tailing %s (ctrl-c to stop tailing; daemon keeps running)\n", path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		fatal("tail log: %v", err)
+	}
+	defer f.Close()
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sig
+		fmt.Println("\nzcode: tail stopped (daemon still running; use --stop to end it)")
+		os.Exit(0)
+	}()
+	st, _ := f.Stat()
+	off := int64(0)
+	if fromEnd {
+		// Skip the last full-line boundary before the final 8KB so we still
+		// show the most recent startup banner / activity without replaying
+		// the entire history.
+		off = st.Size() - 8192
+		if off < 0 {
+			off = 0
+		}
+	}
+	printNew := func() {
+		cur, err := f.Stat()
+		if err != nil {
+			return
+		}
+		if cur.Size() <= off {
+			return
+		}
+		buf := make([]byte, cur.Size()-off)
+		n, _ := f.ReadAt(buf, off)
+		off += int64(n)
+		os.Stdout.Write(buf)
+	}
+	printNew()
+	for {
+		time.Sleep(400 * time.Millisecond)
+		printNew()
+	}
+}
+
+func hasFlag(args []string, names ...string) bool {
+	for _, a := range args {
+		for _, n := range names {
+			if a == n {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func flagValue(args []string, name, def string) string {
+	for i, a := range args {
+		if a == name && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(a, name+"=") {
+			return strings.TrimPrefix(a, name+"=")
+		}
+	}
+	return def
+}
+
+func stripFlags(args []string, names ...string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		skip := false
+		for _, n := range names {
+			if args[i] == n {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		// also skip value of --log
+		if args[i] == "--log" {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
 func doRemoteOpts(o commonOpts) {
 	rt := resolveRuntime(o.runtimePath)
 	node := o.ensureNode()
@@ -437,6 +664,59 @@ func doRemoteOpts(o commonOpts) {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 	atomic.StoreInt32(&shuttingDown, 1)
+}
+
+// doWorkspace manages the persistent extra-workspace list.
+//
+//	zcode-quick-web-forward workspace add /path/to/dir
+//	zcode-quick-web-forward workspace remove /path/to/dir
+//	zcode-quick-web-forward workspace list
+func doWorkspace(args []string) {
+	if len(args) == 0 {
+		fmt.Println("usage: zcode-quick-web-forward workspace <add|remove|list> [path]")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "add":
+		if len(args) < 2 {
+			fatal("usage: zcode-quick-web-forward workspace add <path>")
+		}
+		p, added, err := zcode.AddStoredWorkspace(args[1])
+		if err != nil {
+			fatal("workspace add: %v", err)
+		}
+		if !added {
+			fmt.Printf("zcode: workspace already registered: %s\n", p)
+		} else {
+			fmt.Printf("zcode: workspace added: %s\n", p)
+		}
+		fmt.Println("zcode: 生效方式: 停掉再启动 daemon 即可 (zqf remote --stop && zqf remote)")
+	case "remove", "rm":
+		if len(args) < 2 {
+			fatal("usage: zcode-quick-web-forward workspace remove <path>")
+		}
+		removed, err := zcode.RemoveStoredWorkspace(args[1])
+		if err != nil {
+			fatal("workspace remove: %v", err)
+		}
+		if !removed {
+			fmt.Printf("zcode: workspace not in list: %s\n", args[1])
+		} else {
+			fmt.Printf("zcode: workspace removed: %s\n", args[1])
+		}
+	case "list", "ls":
+		ws := zcode.StoredWorkspaces()
+		if len(ws) == 0 {
+			fmt.Println("zcode: no extra workspaces registered")
+			return
+		}
+		for _, p := range ws {
+			fmt.Println(p)
+		}
+	default:
+		fmt.Println("usage: zcode-quick-web-forward workspace <add|remove|list> [path]")
+		os.Exit(1)
+	}
 }
 
 // baseURL returns the web-remote/relay origin: ZCODE_BASE_URL wins, else the
@@ -773,6 +1053,24 @@ type phoneSessions struct {
 	// collabMode is the phone's current collaboration mode
 	// (confirm/edit/plan/yolo). confirm means Edit/Write need asking.
 	collabMode string
+	// listeners records EventListen ids by purpose so events can be pushed to
+	// them (provider registry changes, workspace events, controller frames).
+	listeners map[string]int
+}
+
+func (p *phoneSessions) recordListener(kind string, id int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.listeners == nil {
+		p.listeners = map[string]int{}
+	}
+	p.listeners[kind] = id
+}
+
+func (p *phoneSessions) listener(kind string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.listeners[kind]
 }
 
 func (p *phoneSessions) nextOrdinal() int {
@@ -861,24 +1159,45 @@ func (p *phoneSessions) convSub() string {
 
 func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) func(*relay.ChannelCall) {
 	return func(c *relay.ChannelCall) {
-		fmt.Printf("zcode: channel call kind=%d id=%d %s.%s\n", c.Kind, c.ID, c.ChannelName, c.Name)
+		fmt.Printf("zcode: [call] kind=%d id=%d %s.%s\n", c.Kind, c.ID, c.ChannelName, c.Name)
 		// EventListen (102): record the subscription so we can push EventFire.
 		if c.Kind == 102 {
 			switch c.Name {
 			case "onDynamicConversationFrame":
 				ps.convListener = c.ID
+				fmt.Printf("zcode: [listen] onDynamicConversationFrame id=%d (监听 ✓)\n", c.ID)
 			case "onDynamicSessionsIndexFrame":
 				ps.indexListener = c.ID
+				fmt.Printf("zcode: [listen] onDynamicSessionsIndexFrame id=%d (监听 ✓)\n", c.ID)
 			case "onAgentRuntimeLifecycle", "onAgentRuntimeRestarted":
 				ps.runtimeListener = c.ID
+				fmt.Printf("zcode: [listen] %s id=%d (监听 ✓)\n", c.Name, c.ID)
 			case "onDynamicData":
 				// terminal/onDynamicData — c.Arg may be the terminal id string,
 				// or nil when the phone subscribes a single global listener.
 				id, _ := c.Arg.(string)
 				_ = termSvc.SetDataListener(id, c.ID)
+				fmt.Printf("zcode: [listen] terminal.onDynamicData id=%d term=%q (监听 ✓)\n", c.ID, id)
 			case "onDynamicExit":
 				id, _ := c.Arg.(string)
 				_ = termSvc.SetExitListener(id, c.ID)
+				fmt.Printf("zcode: [listen] terminal.onDynamicExit id=%d term=%q (监听 ✓)\n", c.ID, id)
+			case "onDidChangeProviderRegistry":
+				ps.recordListener("providerRegistry", c.ID)
+				fmt.Printf("zcode: [listen] onDidChangeProviderRegistry id=%d (监听 ✓)\n", c.ID)
+			case "onDynamicWorkspaceEvent":
+				ps.recordListener("workspaceEvent", c.ID)
+				fmt.Printf("zcode: [listen] onDynamicWorkspaceEvent id=%d (监听 ✓)\n", c.ID)
+			case "onDynamicControllerFrame":
+				ps.recordListener("controllerFrame", c.ID)
+				fmt.Printf("zcode: [listen] onDynamicControllerFrame id=%d (监听 ✓)\n", c.ID)
+			case "onMessage":
+				// Transport-level socket event (phone internals); nothing for
+				// us to push — ack by recording so it never stalls.
+				ps.recordListener("onMessage", c.ID)
+				fmt.Printf("zcode: [listen] onMessage id=%d (记录，无需推送)\n", c.ID)
+			default:
+				fmt.Printf("zcode: [listen] UNTRACKED subscribe %s id=%d (未监听，EventListen 未记录)\n", c.Name, c.ID)
 			}
 			return
 		}
@@ -886,15 +1205,18 @@ func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []
 			return
 		}
 		if answerDesktopChannel(engine, c, send, workspaces, ps, engClient, termSvc) {
+			fmt.Printf("zcode: [done] %s.%s answered locally\n", c.ChannelName, c.Name)
 			return
 		}
 		engine.RegisterCall(c.ID)
 		method, params := translateChannelMethod(c, workspaces)
 		if method == "__local__" {
 			engine.ReplyChannelPromise(c.ID, []byte(`{"runtimeModel":null}`), send)
+			fmt.Printf("zcode: [done] %s.%s handled as __local__\n", c.ChannelName, c.Name)
 			return
 		}
 		engine.WriteToServer(fmt.Sprintf(`{"id":%d,"method":%q,"params":%s}`, c.ID, method, params))
+		fmt.Printf("zcode: [fwd] %s.%s -> engine %s\n", c.ChannelName, c.Name, method)
 	}
 }
 
@@ -1105,7 +1427,22 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		reply([]any{})
 	case "coding-plan-subscription/getBillingDiscount", "coding-plan-subscription/getManualClaimPlanPreviews":
 		reply(map[string]any{})
+	case "usage-stats/getEntitlementSnapshot":
+		// The engine has no usage-stats service. Return the phone's neutral
+		// state shape (snapshot:null) so the UI shows no plan/entitlement.
+		reply(map[string]any{"snapshot": nil})
+	case "zcode-task/getTaskSessionFilePath":
+		reply(map[string]any{"path": nil, "exists": false})
+	case "zcode-task/getTaskNativeSessionLogFile":
+		reply(map[string]any{"provider": nil, "path": nil, "exists": false})
+	case "zcode-task/getTaskSessionId", "zcode-task/getTaskNativeSessionId":
+		reply(map[string]any{"sessionId": nil})
 	case "settings-sync/getFirstRunPromptState":
+		// Returning handled:true suppresses the "欢迎使用 ZCode" first-run
+		// wizard on every new pairing session (the phone checks e.handled
+		// before opening it).
+		reply(map[string]any{"handled": true})
+	case "settings-sync/markFirstRunPromptHandled":
 		reply(map[string]any{})
 	case "zcode-task/getWorkspaceProviderConfigFile":
 		reply(nil)
