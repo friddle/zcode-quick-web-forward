@@ -163,6 +163,19 @@ func (c *Client) RespondToRequest(reqID any, result any) bool {
 	return c.Write(map[string]any{"id": reqID, "result": result})
 }
 
+// SetMode switches the session's collaboration mode (confirm/edit/plan/yolo).
+func (c *Client) SetMode(sessionID, mode string) bool {
+	return c.Write(map[string]any{
+		"id":     0,
+		"method": "session/setMode",
+		"params": map[string]any{
+			"sessionId":       sessionID,
+			"mode":            mode,
+			"expectedRevision": nil,
+		},
+	})
+}
+
 func (c *Client) forget(id int) {
 	c.mu.Lock()
 	delete(c.pending, id)

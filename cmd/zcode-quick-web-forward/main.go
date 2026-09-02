@@ -770,6 +770,9 @@ type phoneSessions struct {
 	// the on-disk task index), so the phone shows tasks that are actually
 	// running instead of "no tasks to display".
 	runtimeTasks map[string]map[string]any
+	// collabMode is the phone's current collaboration mode
+	// (confirm/edit/plan/yolo). confirm means Edit/Write need asking.
+	collabMode string
 }
 
 func (p *phoneSessions) nextOrdinal() int {
@@ -1180,6 +1183,24 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 				go pushConversationFrame(engine, send, ps, ack)
 			}
 		}
+		// A collaboration-mode switch needs a snapshot push so the phone's
+		// picker reflects the new mode (the engine doesn't relay setMode).
+		if mode, ok := ack["modeChanged"].(string); ok && mode != "" {
+			sid, _ := ps.get()
+			if sid != "" {
+				go func() {
+					time.Sleep(400 * time.Millisecond)
+					ps.mu.Lock()
+					convID, convSub := ps.convListener, ps.convSubscription
+					ps.mu.Unlock()
+					if convID > 0 {
+						b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), nil, mode))
+						engine.SendChannelEvent(convID, b, send)
+						fmt.Printf("zcode: pushed mode snapshot session=%s mode=%s\n", sid, mode)
+					}
+				}()
+			}
+		}
 	case "zcode-agent/queryConversationCommandsV4":
 		reply(map[string]any{"results": []any{}})
 	case "zcode-agent/unsubscribeConversationV4", "zcode-agent/unsubscribeSessionsIndexV4":
@@ -1235,7 +1256,7 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 					fmt.Printf("zcode: recovery read failed: %v\n", err)
 				}
 			}
-			b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows))
+			b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
 			engine.SendChannelEvent(ps.convListener, b, send)
 			fmt.Printf("zcode: pushed recovery snapshot session=%s rows=%d\n", sid, len(rows))
 		}
@@ -1257,7 +1278,7 @@ func pushConversationFrame(engine *relay.BridgeEngine, send func(any), ps *phone
 	if convID == 0 {
 		return
 	}
-	frame := conversationSnapshotFrame(sessionID, ws, convSub, "initial", ps.nextOrdinal(), nil)
+	frame := conversationSnapshotFrame(sessionID, ws, convSub, "initial", ps.nextOrdinal(), nil, ps.collabMode)
 	b, _ := json.Marshal(frame)
 	engine.SendChannelEvent(convID, b, send)
 	fmt.Printf("zcode: pushed conversation snapshot session=%s\n", sessionID)
@@ -1284,7 +1305,7 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 		fmt.Printf("zcode: syncConversation empty rows session=%s\n", sessionID)
 		return
 	}
-	b, _ := json.Marshal(conversationSnapshotFrame(sessionID, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows))
+	b, _ := json.Marshal(conversationSnapshotFrame(sessionID, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
 	engine.SendChannelEvent(convID, b, sender.send)
 	fmt.Printf("zcode: synced conversation session=%s rows=%d\n", sessionID, len(rows))
 }
@@ -1523,7 +1544,7 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 // conversationSnapshotFrame builds a conversation snapshot wire frame matching
 // the phone's strict Hoe schema. deliveryKind is "initial" (fresh subscribe) or
 // "recovery" (resync). ordinal must strictly increase per subscription.
-func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any) map[string]any {
+func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any, mode string) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
 	}
@@ -1532,6 +1553,9 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 	}
 	if rows == nil {
 		rows = []any{}
+	}
+	if mode == "" {
+		mode = "build"
 	}
 	snapshot := map[string]any{
 		"protocolVersion": 1,
@@ -1563,7 +1587,7 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 			"thought":       "low",
 			"thoughtLevels": []any{},
 			"followupMode":  "queue",
-			"mode":          "build",
+			"mode":          mode,
 		},
 		"modelTransition": nil,
 		"usage": map[string]any{
@@ -1644,6 +1668,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				Text     string `json:"text"`
 				Provider string `json:"provider"`
 				Model    string `json:"model"`
+				Mode     string `json:"mode"`
 				Config   struct {
 					Provider string `json:"provider"`
 					Model    string `json:"model"`
@@ -1738,6 +1763,32 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				fmt.Printf("zcode: engine switchModelConfig session=%s provider=%s model=%s\n", sid, provider, model)
 			}
 		}
+	case "switchCollaborationMode":
+		// The phone's mode picker (变更前确认/自动编辑/计划模式/完全访问) sends
+		// {mode: confirm|edit|plan|yolo}. Forward it to the engine's
+		// session/setMode so it actually takes effect.
+		sid := req.Envelope.SessionID
+		if sid == "" {
+			sid, _ = ps.get()
+		}
+		mode := req.Envelope.Payload.Mode
+		// The engine accepts confirm/edit/plan/yolo; map anything unknown away.
+		switch mode {
+		case "confirm", "edit", "plan", "yolo":
+		default:
+			mode = "confirm"
+		}
+		if sid != "" {
+			if engClient.SetMode(sid, mode) {
+				fmt.Printf("zcode: engine setMode session=%s mode=%s\n", sid, mode)
+			}
+			// Remember the phone's selected mode so permission requests below
+			// can decide whether to auto-approve or ask.
+			ps.mu.Lock()
+			ps.collabMode = mode
+			ps.mu.Unlock()
+			ack["modeChanged"] = mode
+		}
 	default:
 		fmt.Printf("zcode: engine command type %q unhandled (ignored)\n", req.Envelope.Type)
 	}
@@ -1767,17 +1818,40 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		engClient.RespondToRequest(ev.ID, result)
 		fmt.Println("zcode: engine prefs ok")
 	case "interaction/requestPermission":
-		// The engine requests permission for a tool (e.g. the browser-use
-		// plugin opening a browser). The phone already asked to run the task,
-		// so auto-approve. The broker result schema S2 is
+		// The engine requests permission for a tool (e.g. browser-use opening
+		// a browser, or Edit/Write changing a file). The phone already asked
+		// to run the task, so in edit/plan/yolo modes we auto-approve. In
+		// confirm mode (变更前确认) file-modifying tools must NOT be silently
+		// allowed — deny them so the engine reports the change needs approval.
+		// The broker result schema S2 is
 		// {decision, reason?, modifiedInput?, permissionUpdates?}.strict() —
 		// any extra field (even resolvedAt) fails strict and the engine
 		// silently retries the permission request forever.
+		var pp struct {
+			ToolName string `json:"toolName"`
+			Action   string `json:"action"`
+		}
+		_ = json.Unmarshal(ev.Params, &pp)
+		ps.mu.Lock()
+		mode := ps.collabMode
+		ps.mu.Unlock()
+		tool := pp.ToolName
+		if tool == "" {
+			tool = pp.Action
+		}
+		if mode == "confirm" && (tool == "Edit" || tool == "Write" || tool == "edit_file" || tool == "write_file") {
+			engClient.RespondToRequest(ev.ID, map[string]any{
+				"decision": "deny",
+				"reason":   "变更前确认模式: 文件修改需要用户批准",
+			})
+			fmt.Printf("zcode: denied %s (confirm mode)\n", tool)
+			return
+		}
 		engClient.RespondToRequest(ev.ID, map[string]any{
 			"decision": "allow",
 			"reason":   "Auto-approved by zcode-quick-web-forward (phone requested this task)",
 		})
-		fmt.Println("zcode: auto-approved permission request")
+		fmt.Printf("zcode: auto-approved permission request (mode=%s tool=%s)\n", mode, tool)
 	case "interaction/browserList":
 		// Report the browser host so the engine's browser-use plugin has a
 		// real browser to drive.
