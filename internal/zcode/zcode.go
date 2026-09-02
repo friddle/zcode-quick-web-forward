@@ -90,6 +90,43 @@ func TaskExists(taskID string) bool {
 	return n > 0
 }
 
+// sessionTranscriptDir stores per-task conversation transcripts we snapshot
+// when a turn completes. The engine keeps sessions in memory only, so this is
+// what lets the phone open a task's history after the daemon restarts.
+func sessionTranscriptDir() string {
+	return filepath.Join(Home(), "v2", "zqf-transcripts")
+}
+
+func transcriptPath(taskID string) string {
+	return filepath.Join(sessionTranscriptDir(), taskID+".json")
+}
+
+// SaveSessionTranscript persists a raw session/read result so history can be
+// restored without the live engine. store is the whole tx map (messages etc).
+func SaveSessionTranscript(taskID string, tx map[string]any) error {
+	if err := os.MkdirAll(sessionTranscriptDir(), 0o755); err != nil {
+		return err
+	}
+	b, err := json.Marshal(tx)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(transcriptPath(taskID), b, 0o644)
+}
+
+// LoadSessionTranscript returns the stored transcript for a task, or nil.
+func LoadSessionTranscript(taskID string) map[string]any {
+	b, err := os.ReadFile(transcriptPath(taskID))
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	return m
+}
+
 // ListTasks returns tasks from the real task index, newest first. kind filters
 // by archive/pin state ("" = all non-deleted).
 func ListTasks(workspaceKey, kind string) ([]Task, error) {

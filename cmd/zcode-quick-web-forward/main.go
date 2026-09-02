@@ -1688,8 +1688,13 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 				if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {
 					rows = messageRows(tx, sid, ps.nextOrdinal)
 					fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
+				} else if stored := zcode.LoadSessionTranscript(sid); stored != nil {
+					// Engine session gone (daemon restarted): restore from the
+					// transcript snapshot we saved when the turn completed.
+					rows = messageRows(stored, sid, ps.nextOrdinal)
+					fmt.Printf("zcode: recovery from transcript session=%s rows=%d (engine: %v)\n", sid, len(rows), err)
 				} else {
-					fmt.Printf("zcode: recovery read failed: %v\n", err)
+					fmt.Printf("zcode: recovery read failed: %v (no transcript)\n", err)
 				}
 			}
 			// workspacePath: prefer the one persisted for this task in sqlite.
@@ -1745,6 +1750,15 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	if err != nil {
 		fmt.Printf("zcode: syncConversation read failed: %v\n", err)
 		return
+	}
+	// Snapshot the transcript to disk so the phone can reopen this task's
+	// history even after the engine restarts (its sessions are in-memory).
+	if saved, _ := json.Marshal(tx); len(saved) > 0 {
+		if err := zcode.SaveSessionTranscript(sessionID, tx); err != nil {
+			fmt.Printf("zcode: transcript save failed: %v\n", err)
+		} else {
+			fmt.Printf("zcode: transcript saved session=%s bytes=%d\n", sessionID, len(saved))
+		}
 	}
 	// Persist the engine-generated session title (engine titles the task, e.g.
 	// "List files in /home/friddle") so the phone list shows real names.
