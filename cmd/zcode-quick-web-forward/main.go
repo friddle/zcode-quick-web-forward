@@ -1616,6 +1616,36 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 				go pushConversationFrame(engine, send, ps, ack)
 			}
 		}
+		// When a text message was accepted, render the user's message in the
+		// conversation immediately (the engine's transcript only comes back at
+		// turn end, so without this the phone stays blank while it runs).
+		if txt, ok := ack["userTextSent"].(string); ok && txt != "" {
+			sid, _ := ps.get()
+			if sid != "" {
+				go func() {
+					time.Sleep(200 * time.Millisecond)
+					ps.mu.Lock()
+					convID, convSub, ws := ps.convListener, ps.convSubscription, ps.workspacePath
+					ps.mu.Unlock()
+					if convID == 0 {
+						return
+					}
+					now := time.Now().UnixMilli()
+					row := map[string]any{
+						"rowId":        1,
+						"turnId":       "turn-" + sid,
+						"createdAt":    now,
+						"createdAtSeq": 1,
+						"kind":         "userText",
+						"text":         txt,
+						"state":        "complete",
+					}
+					b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{row}, ps.collabMode))
+					engine.SendChannelEvent(convID, b, send)
+					fmt.Printf("zcode: pushed user text snapshot session=%s text=%q\n", sid, txt)
+				}()
+			}
+		}
 		// A collaboration-mode switch needs a snapshot push so the phone's
 		// picker reflects the new mode (the engine doesn't relay setMode).
 		if mode, ok := ack["modeChanged"].(string); ok && mode != "" {
@@ -2231,6 +2261,9 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				ack["message"] = "engine stdin closed"
 			}
 			fmt.Printf("zcode: engine session/send %s text=%q\n", sid, text)
+			// Tell the caller to render the user's message immediately so the
+			// phone isn't blank while the engine works.
+			ack["userTextSent"] = text
 		}
 	case "switchModelConfig":
 		// Switch the current session's model. The payload is
