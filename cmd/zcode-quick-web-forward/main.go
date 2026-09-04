@@ -557,7 +557,53 @@ func stripFlags(args []string, names ...string) []string {
 	}
 	return out
 }
+// remoteLockFile keeps the flock fd alive for the process lifetime: an
+// unreachable os.File is closed by its finalizer, which would silently drop
+// the lock.
+var remoteLockFile *os.File
+
+// acquireRemoteLock enforces one engine+relay instance per user. Two running
+// instances share the same relay device identity (webremote-state.json) and the
+// relay allows a single device connection per sid, so they would kick each
+// other off in a loop and break every phone task mid-flight. The lock lives in
+// the cache dir — not next to r.log — so instances started from different
+// working directories still collide here first.
+func acquireRemoteLock() {
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return // no cache dir resolvable; proceed without the guard
+	}
+	dir := filepath.Join(cache, "zcode-quick-web-forward")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, "remote.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		holder := strings.TrimSpace(string(mustReadFile(path)))
+		if holder == "" {
+			holder = "unknown"
+		}
+		fatal("另一个 zcode-quick-web-forward 实例已在运行 (pid %s): 两个实例共用同一设备身份, 会在中继上互相踢线。请先执行 zcode-quick-web-forward remote --stop。", holder)
+	}
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(fmt.Sprintf("%d\n", os.Getpid())), 0)
+	remoteLockFile = f
+}
+
+func mustReadFile(path string) []byte {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 func doRemoteOpts(o commonOpts) {
+	acquireRemoteLock()
 	rt := resolveRuntime(o.runtimePath)
 	node := o.ensureNode()
 	region := o.regionName()
