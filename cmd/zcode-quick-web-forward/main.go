@@ -1474,9 +1474,27 @@ func translateChannelMethod(c *relay.ChannelCall, workspaces []string) (method, 
 	case "zcode-session/setWorkspaceDefaultThoughtLevel":
 		return "workspace/setDefaultThoughtLevel", withWorkspace(map[string]any{})
 	case "zcode-session/closeDeferredDraftSession", "zcode-session/closeSession":
-		return "session/close", string(raw)
+		// Engine schemas are strict (unknown keys like workspacePath fail with
+		// ZodError -32602) — forward only the fields session/close accepts.
+		var in struct {
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		body := map[string]any{}
+		if in.SessionID != "" {
+			body["sessionId"] = in.SessionID
+		}
+		b, _ := json.Marshal(body)
+		return "session/close", string(b)
 	case "zcode-session/readSession":
-		return "session/read", string(raw)
+		// Same strictness: the phone adds workspacePath/workspaceIdentity,
+		// which session/read rejects.
+		var in struct {
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		b, _ := json.Marshal(map[string]any{"sessionId": in.SessionID})
+		return "session/read", string(b)
 	case "zcode-session/resolveRuntimeModelForV4":
 		// Resolve a runtime model for a model ref; answer with a minimal
 		// structure so the phone continues (the model itself is already
@@ -2501,11 +2519,14 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			sid, _ = ps.get()
 		}
 		mode := req.Envelope.Payload.Mode
-		// The engine accepts confirm/edit/plan/yolo; map anything unknown away.
+		// The engine's session/setMode enum is plan|build|edit|yolo|auto; the
+		// phone's "confirm" (变更前确认) maps to "build". Unknown → build.
 		switch mode {
-		case "confirm", "edit", "plan", "yolo":
+		case "edit", "plan", "yolo":
+		case "confirm":
+			mode = "build"
 		default:
-			mode = "confirm"
+			mode = "build"
 		}
 		if sid != "" {
 			if engClient.SetMode(sid, mode) {

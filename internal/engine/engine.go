@@ -164,14 +164,15 @@ func (c *Client) RespondToRequest(reqID any, result any) bool {
 }
 
 // SetMode switches the session's collaboration mode (confirm/edit/plan/yolo).
+// expectedRevision is omitted: the engine's strict schema wants a number and
+// rejects null, and we don't track revisions.
 func (c *Client) SetMode(sessionID, mode string) bool {
 	return c.Write(map[string]any{
 		"id":     0,
 		"method": "session/setMode",
 		"params": map[string]any{
-			"sessionId":       sessionID,
-			"mode":            mode,
-			"expectedRevision": nil,
+			"sessionId": sessionID,
+			"mode":      mode,
 		},
 	})
 }
