@@ -1131,6 +1131,15 @@ type phoneSessions struct {
 	// collabMode is the phone's current collaboration mode
 	// (confirm/edit/plan/yolo). confirm means Edit/Write need asking.
 	collabMode string
+	// turnRunning mirrors whether the live session has a turn in flight.
+	turnRunning bool
+	// pendingQueue holds sendText submissions that arrived while a turn was
+	// still running. The phone renders them as queued bubbles (projection
+	// queue.items); they drain FIFO on turn.terminal.
+	pendingQueue []queuedSend
+	// lastRows are the rows of the last conversation snapshot pushed for the
+	// live session, so queue updates can re-send a consistent projection.
+	lastRows []any
 	// listeners records EventListen ids by purpose so events can be pushed to
 	// them (provider registry changes, workspace events, controller frames).
 	listeners map[string]int
@@ -1227,6 +1236,93 @@ func (p *phoneSessions) setSession(id, ws string) {
 		}
 	}
 	p.mu.Unlock()
+}
+
+// queuedSend is one sendText that arrived while a turn was still running.
+type queuedSend struct {
+	text            string
+	sourceCommandID string
+	queueItemID     string
+	clientID        string
+	admittedAt      int64
+}
+
+// queueItemPayload renders a queued send in the phone's official queue-item
+// shape (strict zod: delivery/order/steer/dispatch are all required).
+func queueItemPayload(q queuedSend, pos int) map[string]any {
+	return map[string]any{
+		"sourceCommandId": q.sourceCommandID,
+		"queueItemId":     q.queueItemID,
+		"clientId":        q.clientID,
+		"kind":            "sendText",
+		"text":            q.text,
+		"attachments":     []any{},
+		"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
+		"order":           map[string]any{"admissionSeq": pos + 1, "queuePosition": pos},
+		"steer":           map[string]any{"state": "notRequested"},
+		"dispatch":        map[string]any{"state": "queued"},
+		"admittedAt":      q.admittedAt,
+	}
+}
+
+// enqueueSend appends a submission to the pending queue.
+func (p *phoneSessions) enqueueSend(q queuedSend) {
+	p.mu.Lock()
+	p.pendingQueue = append(p.pendingQueue, q)
+	p.mu.Unlock()
+}
+
+// popQueuedSend removes and returns the next queued submission, if any.
+func (p *phoneSessions) popQueuedSend() (queuedSend, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.pendingQueue) == 0 {
+		return queuedSend{}, false
+	}
+	q := p.pendingQueue[0]
+	p.pendingQueue = p.pendingQueue[1:]
+	return q, true
+}
+
+// queueItemsPayload renders the pending queue (positions are 0-based).
+func (p *phoneSessions) queueItemsPayload() []any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]any, 0, len(p.pendingQueue))
+	for i, q := range p.pendingQueue {
+		out = append(out, queueItemPayload(q, i))
+	}
+	return out
+}
+
+// setTurnRunning records whether the live session has a turn in flight.
+func (p *phoneSessions) setTurnRunning(v bool) {
+	p.mu.Lock()
+	p.turnRunning = v
+	p.mu.Unlock()
+}
+
+// turnIsRunning reports whether a turn is in flight for the live session.
+func (p *phoneSessions) turnIsRunning() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.turnRunning
+}
+
+// rememberRows stores the rows of the last conversation snapshot.
+func (p *phoneSessions) rememberRows(rows []any) {
+	p.mu.Lock()
+	p.lastRows = rows
+	p.mu.Unlock()
+}
+
+// snapshotRows returns a copy of the last conversation snapshot rows.
+func (p *phoneSessions) snapshotRows() []any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]any, len(p.lastRows))
+	copy(out, p.lastRows)
+	return out
 }
 
 // runtimeTask adds a session created by the engine so it shows in the phone.
@@ -1826,7 +1922,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		reply(ack)
 		go pushSubscriptionFrames(engine, send, ps, c, engClient)
 	case "zcode-agent/sendConversationCommandV4":
-		ack := bridgeSendCommand(c, engClient, ps, workspaces)
+		ack := bridgeSendCommand(c, engClient, ps, workspaces, engine, send)
 		reply(ack)
 		if sess, ok := ack["result"].(map[string]any); ok {
 			if s, _ := sess["sessionId"].(string); s != "" {
@@ -1841,26 +1937,45 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 			sid, _ := ps.get()
 			if sid != "" {
 				go func() {
-					time.Sleep(200 * time.Millisecond)
+					time.Sleep(150 * time.Millisecond)
 					ps.mu.Lock()
 					convID, convSub, ws := ps.convListener, ps.convSubscription, ps.workspacePath
+					indexID := ps.indexListener
 					ps.mu.Unlock()
-					if convID == 0 {
-						return
-					}
 					now := time.Now().UnixMilli()
-					row := map[string]any{
+					turnID := "turn-" + sid
+					// Immediate send feedback, mirroring the desktop: a running
+					// turn header (the "已工作" indicator) plus the user's
+					// message row, and the projection flipped to running.
+					hdr := map[string]any{
 						"rowId":        1,
-						"turnId":       "turn-" + sid,
+						"turnId":       turnID,
 						"createdAt":    now,
 						"createdAtSeq": 1,
+						"kind":         "turnHeader",
+						"origin":       "userInput",
+						"state":        "running",
+						"startedAt":    now,
+					}
+					row := map[string]any{
+						"rowId":        2,
+						"turnId":       turnID,
+						"createdAt":    now,
+						"createdAtSeq": 2,
 						"kind":         "userInput",
 						"text":         txt,
 						"origin":       "realUser",
 					}
-					b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{row}, ps.collabMode, "running"))
+					b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{hdr, row}, ps.collabMode, "running"))
+					ps.rememberRows([]any{hdr, row})
 					engine.SendChannelEvent(convID, b, send)
-					fmt.Printf("zcode: pushed user text snapshot session=%s text=%q\n", sid, txt)
+					fmt.Printf("zcode: pushed running-turn snapshot session=%s text=%q\n", sid, txt)
+					// Flip the sidebar entry to running as well.
+					if indexID > 0 {
+						ib, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+						engine.SendChannelEvent(indexID, ib, send)
+						fmt.Println("zcode: pushed sessions-index snapshot")
+					}
 				}()
 			}
 		}
@@ -2034,6 +2149,7 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 		return
 	}
 	b, _ := json.Marshal(conversationSnapshotFrame(phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phaseForSession(ps, phoneSid)))
+	ps.rememberRows(rows)
 	engine.SendChannelEvent(convID, b, sender.send)
 	fmt.Printf("zcode: synced conversation engine=%s phone=%s rows=%d\n", engineSid, phoneSid, len(rows))
 }
@@ -2583,7 +2699,7 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 
 // bridgeSendCommand bridges a phone conversation command (createSession /
 // sendText) to the real engine. Returns the ack to send back to the phone.
-func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *phoneSessions, workspaces []string) map[string]any {
+func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *phoneSessions, workspaces []string, engine *relay.BridgeEngine, send func(any)) map[string]any {
 	ack := map[string]any{
 		"commandId":          uuidNew(),
 		"status":             "accepted",
@@ -2605,6 +2721,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 	var req struct {
 		Envelope struct {
 			CommandID string `json:"commandId"`
+			ClientID  string `json:"clientId"`
 			SessionID string `json:"sessionId"`
 			Type      string `json:"type"`
 			Payload   struct {
@@ -2699,6 +2816,41 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			text = req.Envelope.Payload.FirstInput.Text
 		}
 		if sid != "" && text != "" {
+			// While a turn is still running the submission must QUEUE (the
+			// desktop shows it as a waiting bubble and dispatches it when the
+			// turn ends). Sending straight through would interleave into the
+			// running turn.
+			if ps.turnIsRunning() {
+				q := queuedSend{
+					text:            text,
+					sourceCommandID: req.Envelope.CommandID,
+					clientID:        req.Envelope.ClientID,
+					admittedAt:      time.Now().UnixMilli(),
+				}
+				if q.sourceCommandID == "" {
+					q.sourceCommandID = uuidNew()
+				}
+				q.queueItemID = uuidNew()
+				ps.enqueueSend(q)
+				ack["status"] = "accepted"
+				ack["queued"] = true
+				fmt.Printf("zcode: sendText queued session=%s text=%q\n", sid, text)
+				go func(sid string) {
+					time.Sleep(150 * time.Millisecond)
+					ps.mu.Lock()
+					convID, convSub, ws := ps.convListener, ps.convSubscription, ps.workspacePath
+					ps.mu.Unlock()
+					if convID == 0 {
+						return
+					}
+					frame := conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), ps.snapshotRows(), ps.collabMode, "running")
+					frame["queue"] = map[string]any{"items": ps.queueItemsPayload(), "autoDrain": true}
+					b, _ := json.Marshal(frame)
+					engine.SendChannelEvent(convID, b, send)
+					fmt.Printf("zcode: pushed queue snapshot session=%s pending=%d\n", sid, len(ps.queueItemsPayload()))
+				}(sid)
+				return ack
+			}
 			// The phone may send into a historical task whose engine session
 			// died on a daemon restart. Resolve to the live engine session; if
 			// none is active, rebuild one and continue from the saved
@@ -2717,6 +2869,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					ack["status"] = "failed"
 					ack["message"] = "engine stdin closed"
 				}
+				ps.setTurnRunning(true)
 				fmt.Printf("zcode: engine session/send %s (phone=%s) text=%q\n", engineSid, sid, text)
 				ack["userTextSent"] = text
 				// First real message in a bare draft: persist the task now.
@@ -2738,6 +2891,12 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					}
 					// Promote the runtime entry so the row shows in the list.
 					ps.runtimeTask(sid, ws, text, false)
+				} else {
+					// A follow-up re-activates the task — flip it back to
+					// running so the sidebar/waiting display reflects it.
+					if err := zcode.SetTaskStatus(sid, "running"); err != nil {
+						fmt.Printf("zcode: task status sync failed: %v\n", err)
+					}
 				}
 			}
 		}
@@ -2942,12 +3101,78 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					}
 				}
 			}(phoneSid)
+			// The turn is over: queued submissions (sent while this turn was
+			// running) may now dispatch.
+			ps.setTurnRunning(false)
 			// A turn finished: pull the full transcript (assistant text, tool
 			// outputs like ls results) and push it as conversation rows so the
 			// phone actually sees the reply. Run async — this goroutine IS the
 			// stdout reader, and ReadSession must not block it (the reply
 			// arrives on the same stream after this event).
 			go syncConversation(engClient, engine, sender, ps, p.Session, phoneSid)
+			// Auto-drain: dispatch the next queued submission once the final
+			// transcript push has landed (syncConversation reads the engine
+			// first, so give it a head start).
+			go func(engSid, psid string) {
+				time.Sleep(1800 * time.Millisecond)
+				ps.mu.Lock()
+				live := ps.sessionId == psid && !ps.turnRunning
+				ps.mu.Unlock()
+				if !live {
+					return
+				}
+				q, ok := ps.popQueuedSend()
+				if !ok {
+					return
+				}
+				if !engClient.SendMessage(engSid, q.text) {
+					ps.enqueueSend(q) // engine gone — put it back
+					return
+				}
+				ps.setTurnRunning(true)
+				if zcode.TaskExists(psid) {
+					_ = zcode.SetTaskStatus(psid, "running")
+				}
+				time.Sleep(200 * time.Millisecond)
+				ps.mu.Lock()
+				convID, convSub, ws := ps.convListener, ps.convSubscription, ps.workspacePath
+				indexID := ps.indexListener
+				ps.mu.Unlock()
+				now := time.Now().UnixMilli()
+				turnID := "turn-" + psid
+				hdr := map[string]any{
+					"rowId":        1,
+					"turnId":       turnID,
+					"createdAt":    now,
+					"createdAtSeq": 1,
+					"kind":         "turnHeader",
+					"origin":       "userInput",
+					"state":        "running",
+					"startedAt":    now,
+				}
+				row := map[string]any{
+					"rowId":        2,
+					"turnId":       turnID,
+					"createdAt":    now,
+					"createdAtSeq": 2,
+					"kind":         "userInput",
+					"text":         q.text,
+					"origin":       "realUser",
+				}
+				rows := append(ps.snapshotRows(), []any{hdr, row}...)
+				ps.rememberRows(rows)
+				if convID > 0 {
+					frame := conversationSnapshotFrame(psid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")
+					frame["queue"] = map[string]any{"items": ps.queueItemsPayload(), "autoDrain": true}
+					b, _ := json.Marshal(frame)
+					engine.SendChannelEvent(convID, b, sender.send)
+					fmt.Printf("zcode: drained queued send session=%s text=%q\n", psid, q.text)
+				}
+				if indexID > 0 {
+					ib, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+					engine.SendChannelEvent(indexID, ib, sender.send)
+				}
+			}(p.Session, phoneSid)
 		}
 	}
 }

@@ -229,6 +229,18 @@ func GetTask(taskID string) (Task, bool, error) {
 	return t, true, nil
 }
 
+// SetTaskStatus flips a task's status without touching its title (used when a
+// follow-up message re-activates a completed task).
+func SetTaskStatus(taskID, status string) error {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(Home(), "v2", "tasks-index.sqlite")+"?_pragma=busy_timeout(3000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec("UPDATE tasks SET task_status = ?, updated_at = ? WHERE task_id = ?", status, time.Now().UnixMilli(), taskID)
+	return err
+}
+
 // SetTaskFlags persists the web UI's archive/delete/pin actions to the task
 // index. nil leaves a flag unchanged — the pointer matters because false is a
 // meaningful value (unarchive/unpin/restore). Without this the UI removed the
