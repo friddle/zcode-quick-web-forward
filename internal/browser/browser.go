@@ -34,22 +34,22 @@ type Browser struct {
 
 // Tab is one chromium page/target.
 type Tab struct {
-	ID      string
-	Title   string
-	URL     string
-	wsURL   string
-	viewID  int
+	ID     string
+	Title  string
+	URL    string
+	wsURL  string
+	viewID int
 }
 
 // Instance is the browser descriptor returned by list().
 type Instance struct {
-	ID            string                `json:"id"`
-	Generation    int64                 `json:"generation"`
-	Type          string                `json:"type"`
-	Name          string                `json:"name"`
-	Capabilities  map[string]any        `json:"capabilities"`
-	Metadata      map[string]any        `json:"metadata,omitempty"`
-	APIOverrides  map[string]bool       `json:"apiSupportOverrides,omitempty"`
+	ID           string          `json:"id"`
+	Generation   int64           `json:"generation"`
+	Type         string          `json:"type"`
+	Name         string          `json:"name"`
+	Capabilities map[string]any  `json:"capabilities"`
+	Metadata     map[string]any  `json:"metadata,omitempty"`
+	APIOverrides map[string]bool `json:"apiSupportOverrides,omitempty"`
 }
 
 // FindChromium locates a Playwright chromium executable.
@@ -157,7 +157,7 @@ func (b *Browser) List() []Instance {
 		Name:       "ZCode In-app Browser",
 		Capabilities: map[string]any{
 			"browser": []map[string]any{{
-				"id": "visibility",
+				"id":          "visibility",
 				"description": "Use to show or hide the browser to the user, and to determine the browser's current visibility.",
 			}},
 			"tab": []any{},
@@ -173,11 +173,11 @@ func (b *Browser) List() []Instance {
 // refreshTabs lists chromium CDP targets and maps them to tabs.
 func (b *Browser) refreshTabs() {
 	var targets []struct {
-		ID     string `json:"id"`
-		Type   string `json:"type"`
-		Title  string `json:"title"`
-		URL    string `json:"url"`
-		WsURL  string `json:"webSocketDebuggerUrl"`
+		ID    string `json:"id"`
+		Type  string `json:"type"`
+		Title string `json:"title"`
+		URL   string `json:"url"`
+		WsURL string `json:"webSocketDebuggerUrl"`
 	}
 	resp, err := http.Get(b.debuggerURL + "/json")
 	if err != nil {
@@ -213,10 +213,10 @@ func (b *Browser) Tabs() []map[string]any {
 	out := []map[string]any{}
 	for _, t := range b.tabs {
 		out = append(out, map[string]any{
-			"tabId":    t.ID,
-			"title":    t.Title,
-			"url":      t.URL,
-			"viewId":   t.viewID,
+			"tabId":     t.ID,
+			"title":     t.Title,
+			"url":       t.URL,
+			"viewId":    t.viewID,
 			"browserId": b.id,
 		})
 	}
@@ -244,13 +244,25 @@ func (b *Browser) Execute(command map[string]any) map[string]any {
 			return fail("execution_error", err.Error())
 		}
 		return map[string]any{"ok": true, "tab": tab, "elapsedMs": elapsed()}
+	case "activateTab", "setViewportSize":
+		tabID, _ := command["tabId"].(string)
+		tab := b.tabByID(tabID)
+		if tab == nil {
+			return fail("execution_error", "no such tab: "+tabID)
+		}
+		return map[string]any{"ok": true, "tab": tabPayload(tab), "state": b.getState(), "elapsedMs": elapsed()}
 	case "navigate":
 		url, _ := command["url"].(string)
 		tabID, _ := command["tabId"].(string)
 		if err := b.NavigateTab(tabID, url); err != nil {
 			return fail("execution_error", err.Error())
 		}
-		return map[string]any{"ok": true, "state": b.getState(), "elapsedMs": elapsed()}
+		// The engine's tab binding resolves from the "tab" field; give it both.
+		tab := b.tabByID(tabID)
+		if tab == nil {
+			return map[string]any{"ok": true, "state": b.getState(), "elapsedMs": elapsed()}
+		}
+		return map[string]any{"ok": true, "tab": tabPayload(tab), "state": b.getState(), "elapsedMs": elapsed()}
 	case "getState":
 		return map[string]any{"ok": true, "state": b.getState(), "elapsedMs": elapsed()}
 	case "screenshot":
@@ -317,14 +329,42 @@ func (b *Browser) userTabsPayload() []any {
 	return out
 }
 
+// tabByID resolves a tab descriptor by CDP target id, refreshing the list
+// first so newly appeared targets are visible.
+func (b *Browser) tabByID(id string) *Tab {
+	b.refreshTabs()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if t, ok := b.tabs[id]; ok {
+		return t
+	}
+	return nil
+}
+
 // newTab creates a new page target via the CDP /json/new endpoint and returns
 // the tab descriptor the engine expects (Ikt: tabId/url/title/viewport).
+// Chromium 111+ requires PUT for /json/new; fall back to GET for older builds.
 func (b *Browser) newTab() (map[string]any, error) {
-	resp, err := http.Get(b.debuggerURL + "/json/new?about:blank")
+	target := b.debuggerURL + "/json/new?about:blank"
+	resp, err := func() (*http.Response, error) {
+		req, err := http.NewRequest(http.MethodPut, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		return http.DefaultClient.Do(req)
+	}()
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		_ = resp.Body.Close()
+		resp, err = http.Get(target)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+	}
 	var t struct {
 		ID    string `json:"id"`
 		Type  string `json:"type"`
