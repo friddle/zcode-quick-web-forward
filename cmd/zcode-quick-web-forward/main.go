@@ -1157,8 +1157,29 @@ type phoneSessions struct {
 	thoughtLevelsOverride []string
 	// ctxUsed/ctxMax hold the engine's live context usage (runtime.contextUsage).
 	ctxUsed, ctxMax int64
-	// rowIDSeq backs nextRowID (live-pushed row ids).
+	// rowIDSeq backs nextRowID (live-pushed row ids). Seeded high so live
+	// rows never collide with transcript snapshot row ids (messageRows mint
+	// 1..N per snapshot — a colliding row.appended breaks the client's rows
+	// window and suppresses the anchored question card).
 	rowIDSeq int
+	// pendingInteractions holds engine interaction/requestUserInput calls
+	// (AskUserQuestion) waiting for the user's answer, keyed by interactionId
+	// (= the engine's requestId). They ride the projection's
+	// pendingInteractions list; the phone answers via the resolveInteraction
+	// conversation command.
+	pendingInteractions map[string]*pendingInteraction
+}
+
+// pendingInteraction is one engine question awaiting a user answer.
+type pendingInteraction struct {
+	InteractionID string
+	EngineReqID   json.RawMessage
+	SessionID     string
+	ToolCallID    string
+	Prompt        string
+	Questions     []map[string]any // {question, options:[{optionId,label}]}
+	Input         map[string]any   // the engine's original request input (questions verbatim)
+	RowID         int              // conversation row showing the question
 }
 
 func (p *phoneSessions) recordListener(kind string, id int) {
@@ -1492,10 +1513,13 @@ func (p *phoneSessions) setModelConfig(provider, model, thought string) {
 }
 
 // nextRowID mints strictly-increasing conversation row ids for live rows
-// (queue bubbles, model-change markers).
+// (queue bubbles, model-change markers, question cards).
 func (p *phoneSessions) nextRowID() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.rowIDSeq < 100000 {
+		p.rowIDSeq = 100000
+	}
 	p.rowIDSeq++
 	return p.rowIDSeq
 }
@@ -1515,6 +1539,108 @@ func (p *phoneSessions) setContextUsage(used, max int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.ctxUsed, p.ctxMax = used, max
+}
+
+// addPendingInteraction records an engine question awaiting an answer.
+func (p *phoneSessions) addPendingInteraction(pi *pendingInteraction) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pendingInteractions == nil {
+		p.pendingInteractions = map[string]*pendingInteraction{}
+	}
+	p.pendingInteractions[pi.InteractionID] = pi
+}
+
+// removePendingInteraction drops a question once it has been answered.
+func (p *phoneSessions) removePendingInteraction(interactionID string) {
+	p.mu.Lock()
+	delete(p.pendingInteractions, interactionID)
+	p.mu.Unlock()
+}
+
+// getPendingInteraction looks a question up by interactionId.
+func (p *phoneSessions) getPendingInteraction(interactionID string) *pendingInteraction {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pendingInteractions[interactionID]
+}
+
+// oldestPendingInteractionFor returns the earliest pending question for a
+// session, if any. The engine is blocked while one is open, so a typed
+// composer message counts as the answer.
+func (p *phoneSessions) oldestPendingInteractionFor(sessionID string) *pendingInteraction {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var best *pendingInteraction
+	for _, pi := range p.pendingInteractions {
+		if pi.SessionID != sessionID {
+			continue
+		}
+		if best == nil || pi.RowID < best.RowID {
+			best = pi
+		}
+	}
+	return best
+}
+
+// pendingInteractionsPayload renders the pending questions in the official
+// projection entry shape (wl schema: interactionId/kind/anchorRowId/createdAt/
+// payload{kind:"userInput",prompt,freeText,options,questions,...}).
+func (p *phoneSessions) pendingInteractionsPayload() []any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]any, 0, len(p.pendingInteractions))
+	now := time.Now().UnixMilli()
+	for _, pi := range p.pendingInteractions {
+		questions := make([]any, 0, len(pi.Questions))
+		flatOptions := []any{}
+		for i, q := range pi.Questions {
+			opts, _ := q["options"].([]map[string]any)
+			qo := make([]any, 0, len(opts))
+			for _, o := range opts {
+				// Client schema (bl) requires value+label per option; the
+				// quick-reply chips (payload.options) use optionId+label.
+				qo = append(qo, map[string]any{"value": o["optionId"], "label": o["label"]})
+			}
+			entry := map[string]any{"question": q["question"], "options": qo}
+			if h, _ := q["header"].(string); h != "" {
+				entry["header"] = h
+			}
+			questions = append(questions, entry)
+			// The interaction-level option list mirrors the first question —
+			// the phone renders it as the quick-reply chips.
+			if i == 0 {
+				for _, o := range opts {
+					flatOptions = append(flatOptions, map[string]any{
+						"optionId": o["optionId"], "label": o["label"],
+					})
+				}
+			}
+		}
+		payload := map[string]any{
+			"kind":     "userInput",
+			"prompt":   pi.Prompt,
+			"freeText": len(pi.Questions) == 0,
+			"toolName": "AskUserQuestion",
+		}
+		if pi.ToolCallID != "" {
+			payload["toolCallId"] = pi.ToolCallID
+		}
+		if len(flatOptions) > 0 {
+			payload["options"] = flatOptions
+		}
+		if len(questions) > 0 {
+			payload["questions"] = questions
+		}
+		out = append(out, map[string]any{
+			"interactionId": pi.InteractionID,
+			"kind":          "userInput",
+			"anchorRowId":   pi.RowID,
+			"createdAt":     now,
+			"payload":       payload,
+		})
+	}
+	return out
 }
 
 // usageCfg builds the projection's usage block from the engine's live
@@ -3067,7 +3193,7 @@ func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub,
 		"modelTransition": nil,
 		"usage":           ps.usageCfg(),
 		"queue":               map[string]any{"items": []any{}, "autoDrain": true},
-		"pendingInteractions": []any{},
+		"pendingInteractions": ps.pendingInteractionsPayload(),
 		"pendingCommands":     []any{},
 		"backgroundWorks":     []any{},
 		"subagents": map[string]any{
@@ -3141,6 +3267,13 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				Model    string `json:"model"`
 				Thought  string `json:"thought"`
 				Mode     string `json:"mode"`
+				InteractionID string `json:"interactionId"`
+				Answer   struct {
+					OptionID string         `json:"optionId"`
+					FreeText string         `json:"freeText"`
+					Action   string         `json:"action"`
+					Content  map[string]any `json:"content"`
+				} `json:"answer"`
 				Config   struct {
 					Provider string `json:"provider"`
 					Model    string `json:"model"`
@@ -3228,6 +3361,16 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			text = req.Envelope.Payload.FirstInput.Text
 		}
 		if sid != "" && text != "" {
+			// A pending AskUserQuestion blocks the engine mid-turn: a typed
+			// composer message is the user's answer, not a new task.
+			if pi := ps.oldestPendingInteractionFor(sid); pi != nil {
+				resolveInteractionCommand(engClient, engine, send, ps, pi.InteractionID, "", text, "accept", nil)
+				ack["status"] = "accepted"
+				if cmdID := req.Envelope.CommandID; cmdID != "" {
+					ack["result"] = map[string]any{"type": "inputAccepted", "delivery": "startNow", "inputId": cmdID}
+				}
+				return ack
+			}
 			// While a turn is still running the submission must QUEUE (the
 			// desktop shows it as a waiting bubble and dispatches it when the
 			// turn ends). Sending straight through would interleave into the
@@ -3444,10 +3587,144 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				}
 			}()
 		}
+	case "resolveInteraction":
+		// The phone answered an AskUserQuestion (pendingInteraction).
+		answer := req.Envelope.Payload.Answer
+		ack, done := resolveInteractionCommand(engClient, engine, send, ps, req.Envelope.Payload.InteractionID, answer.OptionID, answer.FreeText, answer.Action, answer.Content)
+		if !done {
+			return ack
+		}
 	default:
 		fmt.Printf("zcode: engine command type %q unhandled (ignored)\n", req.Envelope.Type)
 	}
 	return ack
+}
+
+// answerContentFlattens the client's answer content. The official client sends
+// {answers:{question:choice}, answer_0:choice, answer:choice} — normalize it
+// to question→choice pairs the engine's AskUserQuestion expects.
+func flattenAnswerContent(content map[string]any) map[string]string {
+	flat := map[string]string{}
+	if raw, ok := content["answers"].(map[string]any); ok {
+		for q, a := range raw {
+			if s, ok := a.(string); ok {
+				flat[q] = s
+			}
+		}
+	}
+	for k, v := range content {
+		if k == "answers" {
+			continue
+		}
+		if s, ok := v.(string); ok && s != "" {
+			flat[k] = s // e.g. answer_0 / answer — matched per question below
+		}
+	}
+	return flat
+}
+
+// resolveInteractionCommand delivers the user's answer for a pending
+// AskUserQuestion to the engine and refreshes the projection. done=false means
+// the interaction no longer exists (already answered / stale).
+func resolveInteractionCommand(engClient *enginepkg.Client, engine *relay.BridgeEngine, send func(any), ps *phoneSessions, interactionID, optionID, freeText, action string, content map[string]any) (map[string]any, bool) {
+	ack := map[string]any{}
+	pi := ps.getPendingInteraction(interactionID)
+	if pi == nil {
+		ack["status"] = "failed"
+		ack["message"] = "该问题已失效（可能已回答或会话已重建）"
+		return ack, false
+	}
+	// One answer value per question: the flattened content (question→choice)
+	// wins, then the chosen option's label, then free text.
+	flat := flattenAnswerContent(content)
+	answers := map[string]any{}
+	for i, q := range pi.Questions {
+		qn, _ := q["question"].(string)
+		if qn == "" {
+			continue
+		}
+		if v, ok := flat[qn]; ok && v != "" {
+			answers[qn] = v
+			continue
+		}
+		if optionID != "" {
+			opts, _ := q["options"].([]map[string]any)
+			label := ""
+			for _, o := range opts {
+				if o["optionId"] == optionID {
+					label, _ = o["label"].(string)
+					break
+				}
+			}
+			if label != "" {
+				answers[qn] = label
+				continue
+			}
+		}
+		if freeText != "" {
+			answers[qn] = freeText
+			continue
+		}
+		// answer_0/answer style fallbacks from the official client.
+		for _, k := range []string{fmt.Sprintf("answer_%d", i), "answer"} {
+			if v, ok := flat[k]; ok && v != "" {
+				answers[qn] = v
+				break
+			}
+		}
+	}
+	// The engine parses the response with userInputResponseToBrokerResult
+	// (JAo): {action:"accept", content:{answers:{question:choice}}} → the
+	// tool input gets the answers merged in; any other action is a denial.
+	var brokerResult map[string]any
+	if action == "decline" || action == "cancel" || len(answers) == 0 {
+		act := action
+		if act == "" {
+			act = "cancel"
+		}
+		brokerResult = map[string]any{"action": act}
+	} else {
+		content := map[string]any{"answers": answers}
+		for _, a := range answers {
+			content["answer"] = a // single-question convenience mirror
+			break
+		}
+		brokerResult = map[string]any{"action": "accept", "content": content}
+	}
+	engClient.RespondToRequest(pi.EngineReqID, brokerResult)
+	ps.removePendingInteraction(interactionID)
+	fmt.Printf("zcode: interaction %s answered (action=%s answers=%d)\n", interactionID, brokerResult["action"], len(answers))
+
+	// Refresh the projection: question row flips to answered, the
+	// pendingInteractions list drops the entry.
+	ps.mu.Lock()
+	convID, convSub := ps.convListener, ps.convSubscription
+	ps.mu.Unlock()
+	if convID > 0 {
+		now := time.Now().UnixMilli()
+		answerText := ""
+		for _, v := range answers {
+			answerText, _ = v.(string)
+		}
+		deltas := []any{
+			map[string]any{"op": "state.updated", "patch": map[string]any{"pendingInteractions": ps.pendingInteractionsPayload()}},
+		}
+		if pi.RowID > 0 {
+			deltas = append([]any{map[string]any{"op": "row.upserted", "row": map[string]any{
+				"rowId": pi.RowID, "entityId": pi.ToolCallID,
+				"kind": "toolCall", "status": "success",
+				"inputText": pi.Prompt,
+				"output":    map[string]any{"text": answerText},
+				"endedAt":   now,
+			}}}, deltas...)
+		}
+		if b, err := json.Marshal(conversationDeltaFrame(pi.SessionID, convSub, ps.nextOrdinal(), deltas)); err == nil {
+			engine.SendChannelEvent(convID, b, send)
+		}
+	}
+	ack["status"] = "accepted"
+	ack["result"] = map[string]any{"type": "resolveInteraction", "interactionId": interactionID}
+	return ack, true
 }
 
 // handleEngineEvent processes engine->client notifications: it answers
@@ -3507,6 +3784,94 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			"reason":   "Auto-approved by zcode-quick-web-forward (phone requested this task)",
 		})
 		fmt.Printf("zcode: auto-approved permission request (mode=%s tool=%s)\n", mode, tool)
+	case "interaction/requestUserInput":
+		// AskUserQuestion: the engine is blocked on a user decision. Surface
+		// it as a pendingInteraction (question card in the phone) plus a
+		// pendingApproval toolCall row in the transcript; the phone answers
+		// via the resolveInteraction command (see bridgeSendCommand).
+		var rq struct {
+			RequestID string `json:"requestId"`
+			SessionID string `json:"sessionId"`
+			ToolCallID string `json:"toolCallId"`
+			TurnID    string `json:"turnId"`
+			Prompt    string `json:"prompt"`
+			Input     struct {
+				Questions []struct {
+					Question string `json:"question"`
+					Header   string `json:"header"`
+					Options  []struct {
+						Label string `json:"label"`
+						Value string `json:"value"`
+					} `json:"options"`
+				} `json:"questions"`
+			} `json:"input"`
+		}
+		_ = json.Unmarshal(ev.Params, &rq)
+		// The engine's verbatim input object — the answer must echo it back
+		// with the answers merged in (broker "modify" → modifiedInput).
+		var raw struct {
+			Input map[string]any `json:"input"`
+		}
+		_ = json.Unmarshal(ev.Params, &raw)
+		interactionID := rq.RequestID
+		if interactionID == "" {
+			interactionID = uuidNew()
+		}
+		pi := &pendingInteraction{
+			InteractionID: interactionID,
+			EngineReqID:   ev.ID,
+			SessionID:     rq.SessionID,
+			ToolCallID:    rq.ToolCallID,
+			Prompt:        rq.Prompt,
+			Input:         raw.Input,
+		}
+		for _, q := range rq.Input.Questions {
+			qm := map[string]any{"question": q.Question}
+			if q.Header != "" {
+				qm["header"] = q.Header
+			}
+			opts := make([]map[string]any, 0, len(q.Options))
+			for _, o := range q.Options {
+				id := o.Value
+				if id == "" {
+					id = o.Label
+				}
+				opts = append(opts, map[string]any{"optionId": id, "label": o.Label})
+			}
+			qm["options"] = opts
+			pi.Questions = append(pi.Questions, qm)
+		}
+		if pi.Prompt == "" && len(pi.Questions) > 0 {
+			pi.Prompt = pi.Questions[0]["question"].(string)
+		}
+		if ps.getPendingInteraction(interactionID) != nil {
+			return // engine retry of an interaction we already surfaced
+		}
+		pi.RowID = ps.nextRowID()
+		ps.addPendingInteraction(pi)
+
+		ps.mu.Lock()
+		convID, convSub := ps.convListener, ps.convSubscription
+		ps.mu.Unlock()
+		// Patch only: the transcript's own tool row (rendered from the engine
+		// transcript) covers the visual, the pendingInteractions patch drives
+		// the interactive question card. Bundling a synthetic row.appended
+		// here made the client drop the whole frame.
+		if b, err := json.Marshal(conversationDeltaFrame(rq.SessionID, convSub, ps.nextOrdinal(), []any{
+			map[string]any{"op": "state.updated", "patch": map[string]any{"pendingInteractions": ps.pendingInteractionsPayload()}},
+		})); err == nil && convID > 0 {
+			engine.SendChannelEvent(convID, b, sender.send)
+			// The client renders the interactive question card from the
+			// snapshot's pendingInteractions, not from the delta (verified
+			// empirically) — follow the patch with a fresh recovery snapshot.
+			if sb, serr := json.Marshal(conversationSnapshotFrame(ps, rq.SessionID, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), ps.snapshotRows(), ps.collabMode, "running")); serr == nil {
+				engine.SendChannelEvent(convID, sb, sender.send)
+				fmt.Printf("zcode: pushed pendingInteractions patch conv=%d entries=%d (+snapshot)\n", convID, len(ps.pendingInteractionsPayload()))
+			}
+		} else {
+			fmt.Printf("zcode: pendingInteractions push skipped conv=%d err=%v\n", convID, err)
+		}
+		fmt.Printf("zcode: pending interaction %s session=%s questions=%d (waiting for answer)\n", interactionID, rq.SessionID, len(pi.Questions))
 	case "interaction/browserList":
 		// Report the browser host so the engine's browser-use plugin has a
 		// real browser to drive.
