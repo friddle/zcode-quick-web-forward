@@ -2443,16 +2443,23 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		if title == "" {
 			title = req.Envelope.Payload.Text
 		}
+		typedTitle := title // "" for a bare draft — see below
 		if title == "" {
 			title = "新任务"
 		}
 		ps.runtimeTask(sid, ws, title)
-		// Persist to the real task index so the task survives reconnects/restarts
-		// (the phone's task list is read from that sqlite).
-		if err := zcode.UpsertTask(ws, ws, sid, title, "running"); err != nil {
-			fmt.Printf("zcode: task persist failed: %v\n", err)
-		} else {
-			fmt.Printf("zcode: task persisted %s\n", sid)
+		// Persist to the real task index so the task survives reconnects and
+		// restarts — but only when the user actually typed something. The web
+		// client fires a bare createSession (no firstInput) for every fresh
+		// composer / page load; persisting those drafts littered the task list
+		// with phantom 新任务 entries. Bare drafts are persisted on their
+		// first sendText instead (see the sendText case).
+		if typedTitle != "" {
+			if err := zcode.UpsertTask(ws, ws, sid, title, "running"); err != nil {
+				fmt.Printf("zcode: task persist failed: %v\n", err)
+			} else {
+				fmt.Printf("zcode: task persisted %s\n", sid)
+			}
 		}
 		ack["result"] = map[string]any{
 			"type":      "createSession",
@@ -2489,6 +2496,24 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				}
 				fmt.Printf("zcode: engine session/send %s (phone=%s) text=%q\n", engineSid, sid, text)
 				ack["userTextSent"] = text
+				// First real message in a bare draft: persist the task now.
+				// (Drafts stay runtime-only until this point — see createSession.)
+				if !zcode.TaskExists(sid) {
+					ws, _ := taskMeta(ps, sid)
+					if ws == "" {
+						ps.mu.Lock()
+						ws = ps.workspacePath
+						ps.mu.Unlock()
+					}
+					if ws == "" && len(workspaces) > 0 {
+						ws = workspaces[0]
+					}
+					if err := zcode.UpsertTask(ws, ws, sid, text, "running"); err != nil {
+						fmt.Printf("zcode: task persist failed: %v\n", err)
+					} else {
+						fmt.Printf("zcode: task persisted %s (first send)\n", sid)
+					}
+				}
 			}
 		}
 	case "switchModelConfig":
