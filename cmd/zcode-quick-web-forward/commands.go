@@ -135,6 +135,19 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			"sessionId": sid,
 		}
 		fmt.Printf("zcode: engine created session %s title=%q\n", sid, title)
+		// Official semantics: a createSession carrying firstInput starts the
+		// turn immediately — the text is the user's first message, not just a
+		// title. Dropping it left the phone stuck on "sending".
+		if typedTitle != "" && sid != "" {
+			if !engClient.SendMessage(sid, typedTitle) {
+				ack["status"] = "failed"
+				ack["message"] = "engine stdin closed"
+			} else {
+				ps.setTurnRunning(sid, true)
+				fmt.Printf("zcode: engine session/send %s (firstInput) text=%q\n", sid, typedTitle)
+				ack["userTextSent"] = typedTitle
+			}
+		}
 	case "sendText", "":
 		sid := req.Envelope.SessionID
 		if sid == "" {
