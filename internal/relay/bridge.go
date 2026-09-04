@@ -26,9 +26,13 @@ const (
 	maxPhysicalFrameBytes = 1024
 	maxMessageBytes       = 16 * 1024 * 1024
 	maxFragments          = 64
-	// dataBudget is a conservative base64 payload budget per frame; the
-	// whole JSON envelope stays comfortably under maxPhysicalFrameBytes.
-	dataBudget = 512
+	// dataBudget is the raw payload budget per rpc-frame (base64 inflates it
+	// ~4/3 on the wire). 512 starved large messages: a 100KB conversation
+	// transcript needs ~112 fragments > maxFragments, so the whole recovery
+	// snapshot was silently dropped and the phone rendered an empty chat.
+	// 48KB per frame keeps envelopes ~65KB (well within websocket norms) and
+	// lifts the per-message ceiling to 64*48KB = 3MB.
+	dataBudget = 48 * 1024
 )
 
 type frameIdentity struct {
