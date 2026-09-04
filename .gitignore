@@ -11,3 +11,8 @@
 # local
 .DS_Store
 .playwright-mcp/
+# local web-remote daemon runtime logs
+r.log
+r.log.pid
+# mirrored official frontend assets (fetched, not ours to ship)
+scripts/web-remote-mirror/remote/
