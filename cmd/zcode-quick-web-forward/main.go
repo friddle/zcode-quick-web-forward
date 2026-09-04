@@ -1045,6 +1045,9 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 	if ps != nil && kind == "" {
 		for _, rt := range ps.runtimeTaskList() {
 			m, _ := rt.(map[string]any)
+			if d, _ := m["draft"].(bool); d {
+				continue // composer drafts aren't tasks yet
+			}
 			sid, _ := m["taskId"].(string)
 			if sid == "" || seen[sid] {
 				continue // already surfaced from the persisted task index
@@ -1214,8 +1217,12 @@ func (p *phoneSessions) setSession(id, ws string) {
 				"workspaceKey":  ws,
 				"workspacePath": ws,
 				"displayStatus": "running",
-				"createdAt":     now,
-				"updatedAt":     now,
+				// Sessions the phone merely points at (a fresh composer, an
+				// opened conversation) are drafts until real input arrives;
+				// drafts stay out of the task list.
+				"draft":     true,
+				"createdAt": now,
+				"updatedAt": now,
 			}
 		}
 	}
@@ -1223,7 +1230,9 @@ func (p *phoneSessions) setSession(id, ws string) {
 }
 
 // runtimeTask adds a session created by the engine so it shows in the phone.
-func (p *phoneSessions) runtimeTask(sessionID, workspace, title string) {
+// draft=true marks a bare composer draft: kept out of the task list until the
+// first message promotes it (see bridgeSendCommand sendText).
+func (p *phoneSessions) runtimeTask(sessionID, workspace, title string, draft bool) {
 	p.mu.Lock()
 	if p.runtimeTasks == nil {
 		p.runtimeTasks = map[string]map[string]any{}
@@ -1239,6 +1248,7 @@ func (p *phoneSessions) runtimeTask(sessionID, workspace, title string) {
 		"workspaceLabel": pathLabel(workspace),
 		"workspaceKind":  "local",
 		"displayStatus":  "running",
+		"draft":          draft,
 		"createdAt":      now,
 		"updatedAt":      now,
 	}
@@ -2447,7 +2457,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		if title == "" {
 			title = "新任务"
 		}
-		ps.runtimeTask(sid, ws, title)
+		ps.runtimeTask(sid, ws, title, typedTitle == "")
 		// Persist to the real task index so the task survives reconnects and
 		// restarts — but only when the user actually typed something. The web
 		// client fires a bare createSession (no firstInput) for every fresh
@@ -2513,6 +2523,8 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					} else {
 						fmt.Printf("zcode: task persisted %s (first send)\n", sid)
 					}
+					// Promote the runtime entry so the row shows in the list.
+					ps.runtimeTask(sid, ws, text, false)
 				}
 			}
 		}
