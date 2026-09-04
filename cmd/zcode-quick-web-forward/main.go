@@ -1854,11 +1854,11 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 						"turnId":       "turn-" + sid,
 						"createdAt":    now,
 						"createdAtSeq": 1,
-						"kind":         "userText",
+						"kind":         "userInput",
 						"text":         txt,
-						"state":        "complete",
+						"origin":       "realUser",
 					}
-					b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{row}, ps.collabMode))
+					b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{row}, ps.collabMode, "running"))
 					engine.SendChannelEvent(convID, b, send)
 					fmt.Printf("zcode: pushed user text snapshot session=%s text=%q\n", sid, txt)
 				}()
@@ -1875,7 +1875,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					convID, convSub := ps.convListener, ps.convSubscription
 					ps.mu.Unlock()
 					if convID > 0 {
-						b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), nil, mode))
+						b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), nil, mode, "running"))
 						engine.SendChannelEvent(convID, b, send)
 						fmt.Printf("zcode: pushed mode snapshot session=%s mode=%s\n", sid, mode)
 					}
@@ -1955,7 +1955,7 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 					}
 				}
 			}
-			b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
+			b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phaseForSession(ps, sid)))
 			engine.SendChannelEvent(ps.convListener, b, send)
 			fmt.Printf("zcode: pushed recovery snapshot session=%s rows=%d\n", sid, len(rows))
 		}
@@ -1977,7 +1977,7 @@ func pushConversationFrame(engine *relay.BridgeEngine, send func(any), ps *phone
 	if convID == 0 {
 		return
 	}
-	frame := conversationSnapshotFrame(sessionID, ws, convSub, "initial", ps.nextOrdinal(), nil, ps.collabMode)
+	frame := conversationSnapshotFrame(sessionID, ws, convSub, "initial", ps.nextOrdinal(), nil, ps.collabMode, phaseForSession(ps, sessionID))
 	b, _ := json.Marshal(frame)
 	engine.SendChannelEvent(convID, b, send)
 	fmt.Printf("zcode: pushed conversation snapshot session=%s\n", sessionID)
@@ -2033,14 +2033,15 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 		fmt.Printf("zcode: syncConversation empty rows session=%s\n", phoneSid)
 		return
 	}
-	b, _ := json.Marshal(conversationSnapshotFrame(phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode))
+	b, _ := json.Marshal(conversationSnapshotFrame(phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phaseForSession(ps, phoneSid)))
 	engine.SendChannelEvent(convID, b, sender.send)
 	fmt.Printf("zcode: synced conversation engine=%s phone=%s rows=%d\n", engineSid, phoneSid, len(rows))
 }
 
 // messageRows converts a session/read transcript into conversation snapshot
-// rows (assistant text + tool outputs + user text) so the phone renders the
-// full reply.
+// rows using the phone's official row model (turnHeader / userInput /
+// assistantText / reasoning / toolCall — see the client's row zod union), so
+// the UI renders thinking, tool cards and answers like the desktop app.
 func messageRows(tx map[string]any, sessionID string, ordinal func() int) []any {
 	var msgs []any
 	if m, ok := tx["messages"].([]any); ok {
@@ -2048,86 +2049,270 @@ func messageRows(tx map[string]any, sessionID string, ordinal func() int) []any 
 	} else if m, ok := tx["rows"].([]any); ok {
 		msgs = m
 	}
-	out := make([]any, 0, len(msgs))
+	out := make([]any, 0, len(msgs)*2)
+	rowID := 0
+	turn := 0
+	now := time.Now().UnixMilli()
+	newRow := func(turnID string, ts int64) map[string]any {
+		rowID++
+		if ts <= 0 {
+			ts = now
+		}
+		return map[string]any{
+			"rowId":        rowID,
+			"turnId":       turnID,
+			"createdAt":    ts,
+			"createdAtSeq": rowID,
+		}
+	}
+	// legacy flat rows (kind userText/assistantText + text, no parts)
 	for _, raw := range msgs {
 		m, _ := raw.(map[string]any)
 		if m == nil {
 			continue
 		}
-		role, _ := m["role"].(string)
+		if _, hasParts := m["parts"]; hasParts {
+			continue
+		}
 		kind, _ := m["kind"].(string)
 		content, _ := m["content"].(string)
+		text, _ := m["text"].(string)
 		if content == "" {
-			content = messageTextFromParts(m["parts"], m["contentParts"])
+			content = text
 		}
 		if content == "" {
 			continue
 		}
 		rowKind := "assistantText"
-		if role == "user" || kind == "userText" {
-			rowKind = "userText"
+		if kind == "userText" || kind == "userInput" {
+			rowKind = "userInput"
 		}
-		now := time.Now().UnixMilli()
+		rowID++
 		out = append(out, map[string]any{
-			"rowId":               0,
+			"rowId":               rowID,
 			"turnId":              "turn-" + sessionID,
 			"createdAt":           now,
-			"createdAtSeq":        1,
+			"createdAtSeq":        rowID,
 			"kind":                rowKind,
 			"assistantResponseId": "ar-" + sessionID,
 			"text":                content,
 			"state":               "complete",
 		})
 	}
+	turnID := func() string {
+		if turn < 1 {
+			turn = 1
+		}
+		return fmt.Sprintf("turn-%s-%d", shortSessionID(sessionID), turn)
+	}
+	for _, raw := range msgs {
+		m, _ := raw.(map[string]any)
+		if m == nil {
+			continue
+		}
+		parts, hasParts := m["parts"].([]any)
+		if !hasParts {
+			continue // legacy flat row — handled above
+		}
+		role, _ := m["role"].(string)
+		info, _ := m["info"].(map[string]any)
+		ts := int64(0)
+		endedAt := int64(0)
+		if tm, ok := info["time"].(map[string]any); ok {
+			if c, ok := tm["created"].(float64); ok {
+				ts = int64(c)
+			}
+			if c, ok := tm["completed"].(float64); ok {
+				endedAt = int64(c)
+				if ts == 0 {
+					ts = endedAt
+				}
+			}
+		}
+		resp, _ := info["messageId"].(string)
+		if resp == "" {
+			resp = "ar-" + sessionID
+		}
+		if role == "user" {
+			turn++
+			text := collectEngineText(parts)
+			h := newRow(turnID(), ts)
+			h["kind"] = "turnHeader"
+			h["origin"] = "userInput"
+			h["state"] = "completedSuccess"
+			h["startedAt"] = ts
+			out = append(out, h)
+			if text != "" {
+				r := newRow(turnID(), ts)
+				r["kind"] = "userInput"
+				r["text"] = text
+				r["origin"] = "realUser"
+				out = append(out, r)
+			}
+			continue
+		}
+		// assistant message: map part runs to reasoning / assistantText /
+		// toolCall rows, preserving order.
+		var textRun, reasonRun []string
+		flushText := func() {
+			if len(textRun) == 0 {
+				return
+			}
+			r := newRow(turnID(), ts)
+			r["kind"] = "assistantText"
+			r["assistantResponseId"] = resp
+			r["text"] = strings.Join(textRun, "\n")
+			r["state"] = "complete"
+			out = append(out, r)
+			textRun = nil
+		}
+		flushReasoning := func() {
+			if len(reasonRun) == 0 {
+				return
+			}
+			r := newRow(turnID(), ts)
+			r["kind"] = "reasoning"
+			r["assistantResponseId"] = resp
+			r["text"] = strings.Join(reasonRun, "\n")
+			r["state"] = "complete"
+			out = append(out, r)
+			reasonRun = nil
+		}
+		for _, p := range parts {
+			pm, _ := p.(map[string]any)
+			if pm == nil {
+				continue
+			}
+			switch pm["type"] {
+			case "reasoning":
+				flushText()
+				txt, _ := pm["text"].(string)
+				if txt != "" {
+					reasonRun = append(reasonRun, txt)
+				}
+			case "text":
+				flushReasoning()
+				txt, _ := pm["text"].(string)
+				if txt != "" {
+					textRun = append(textRun, txt)
+				}
+			case "tool":
+				flushText()
+				flushReasoning()
+				out = append(out, toolCallRow(pm, newRow(turnID(), ts), resp))
+			}
+		}
+		flushText()
+		flushReasoning()
+	}
 	return out
 }
 
-// messageTextFromParts extracts joined text from a message's parts array
-// (assistant messages carry {type:"text",text:...} or {type:"tool",...}).
-func messageTextFromParts(parts any, contentParts any) string {
-	extract := func(p any) string {
-		pm, _ := p.(map[string]any)
-		if pm == nil {
-			return ""
+// toolCallRow maps an engine tool part ({callId, state:{title, input, output,
+// startedAt, completedAt, error}}) to the phone's toolCall row.
+func toolCallRow(part map[string]any, base map[string]any, assistantResponseID string) map[string]any {
+	st, _ := part["state"].(map[string]any)
+	toolName, _ := st["title"].(string)
+	if toolName == "" {
+		if tn, ok := part["toolName"].(string); ok {
+			toolName = tn
 		}
-		t, _ := pm["type"].(string)
-		if t == "text" {
-			if txt, ok := pm["text"].(string); ok {
-				return txt
-			}
-			return ""
-		}
-		if t == "tool" {
-			// {type:"tool", title:"Bash", state:{input:{command}, output}}
-			var cmd, output string
-			if st, ok := pm["state"].(map[string]any); ok {
-				if inp, ok := st["input"].(map[string]any); ok {
-					cmd, _ = inp["command"].(string)
-				}
-				output, _ = st["output"].(string)
-			}
-			if cmd == "" && output == "" {
-				return ""
-			}
-			return "```\n" + cmd + "\n```\n```\n" + output + "\n```"
-		}
-		return ""
 	}
-	var sb strings.Builder
-	for _, list := range []any{parts, contentParts} {
-		if arr, ok := list.([]any); ok {
-			for _, p := range arr {
-				if s := extract(p); s != "" {
-					sb.WriteString(s)
-					sb.WriteString("\n")
-				}
-			}
+	if toolName == "" {
+		toolName = "Tool"
+	}
+	callID, _ := part["callId"].(string)
+	if callID == "" {
+		pid, _ := part["partId"].(string)
+		callID = pid
+	}
+	if callID == "" {
+		callID = fmt.Sprintf("call-%s-%d", assistantResponseID, base["rowId"])
+	}
+	input, _ := st["input"].(map[string]any)
+	inputText := ""
+	for _, k := range []string{"command", "query", "prompt", "file_path", "path"} {
+		if s, ok := input[k].(string); ok && s != "" {
+			inputText = s
+			break
 		}
+	}
+	if inputText == "" && input != nil {
+		if b, err := json.Marshal(input); err == nil && len(b) <= 512 {
+			inputText = string(b)
+		}
+	}
+	outputText, _ := st["output"].(string)
+	status := "success"
+	if e, ok := st["error"].(string); ok && e != "" {
+		status = "error"
+	}
+	base["kind"] = "toolCall"
+	base["assistantResponseId"] = assistantResponseID
+	base["toolCallId"] = callID
+	base["toolName"] = toolName
+	base["status"] = status
+	base["inputText"] = inputText
+	if input != nil {
+		base["input"] = input
+	}
+	output := map[string]any{"text": outputText}
+	base["output"] = output
+	if s, ok := st["startedAt"].(float64); ok {
+		base["startedAt"] = int64(s)
+	}
+	if c, ok := st["completedAt"].(float64); ok {
+		base["endedAt"] = int64(c)
+	}
+	return base
+}
+
+// collectEngineText joins the text parts of an engine message.
+func collectEngineText(parts []any) string {
+	var sb strings.Builder
+	for _, p := range parts {
+		pm, _ := p.(map[string]any)
+		if pm == nil || pm["type"] != "text" {
+			continue
+		}
+		txt, _ := pm["text"].(string)
+		if txt == "" {
+			continue
+		}
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(txt)
 	}
 	return sb.String()
 }
 
+func shortSessionID(id string) string {
+	if i := strings.Index(id, "-"); i > 0 {
+		return id[:i]
+	}
+	return id
+}
+
 // sessionsIndexFrame builds a sessions-index snapshot wire frame.
+// phaseForStatus maps a task's display status to the phone's session phase
+// enum (draft|prewarming|running|completedSuccess|completedInterrupted|error)
+// and whether the session has ended.
+func phaseForStatus(display string) (string, bool) {
+	switch display {
+	case "running", "in-progress", "active":
+		return "running", false
+	case "error", "failed":
+		return "error", true
+	case "completed", "completedInterrupted":
+		return "completedInterrupted", true
+	case "idle", "cancelled", "paused":
+		return "draft", true
+	default: // completed / completedSuccess and unknown
+		return "completedSuccess", true
+	}
+}
+
 func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 	idx := "0"
 	tasks, _ := zcode.ListTasks("", "")
@@ -2138,14 +2323,18 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 			continue
 		}
 		seen[t.TaskID] = true
+		phase, ended := phaseForStatus(displayStatus(t.Status))
 		sessions = append(sessions, map[string]any{
-			"sessionId":      t.TaskID,
-			"workspaceId":    t.WorkspaceKey,
-			"title":          t.Title,
-			"titleSource":    "generated",
-			"phase":          "idle",
-			"createdAt":      t.CreatedAt,
-			"lastActivityAt": t.UpdatedAt,
+			"sessionId":            t.TaskID,
+			"workspaceId":          t.WorkspaceKey,
+			"title":                t.Title,
+			"titleSource":          "generated",
+			"phase":                phase,
+			"sessionEnded":         ended,
+			"hasBackgroundWork":    false,
+			"createdAt":            t.CreatedAt,
+			"lastActivityAt":       t.UpdatedAt,
+			"lastAssistantPreview": "",
 		})
 	}
 	if ps != nil {
@@ -2159,13 +2348,16 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 			title, _ := m["title"].(string)
 			ws, _ := m["workspacePath"].(string)
 			sessions = append(sessions, map[string]any{
-				"sessionId":      sid,
-				"workspaceId":    ws,
-				"title":          title,
-				"titleSource":    "generated",
-				"phase":          "running",
-				"createdAt":      m["createdAt"],
-				"lastActivityAt": m["updatedAt"],
+				"sessionId":            sid,
+				"workspaceId":          ws,
+				"title":                title,
+				"titleSource":          "generated",
+				"phase":                "running",
+				"sessionEnded":         false,
+				"hasBackgroundWork":    false,
+				"createdAt":            m["createdAt"],
+				"lastActivityAt":       m["updatedAt"],
+				"lastAssistantPreview": "",
 			})
 		}
 	}
@@ -2278,7 +2470,25 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 // conversationSnapshotFrame builds a conversation snapshot wire frame matching
 // the phone's strict Hoe schema. deliveryKind is "initial" (fresh subscribe) or
 // "recovery" (resync). ordinal must strictly increase per subscription.
-func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any, mode string) map[string]any {
+// phaseForSession resolves the projection phase for a session: the live
+// session is running, anything else falls back to its persisted task status.
+func phaseForSession(ps *phoneSessions, sessionID string) string {
+	if ps != nil {
+		ps.mu.Lock()
+		live := ps.sessionId == sessionID
+		ps.mu.Unlock()
+		if live {
+			return "running"
+		}
+	}
+	if t, ok, err := zcode.GetTask(sessionID); err == nil && ok {
+		phase, _ := phaseForStatus(displayStatus(t.Status))
+		return phase
+	}
+	return "completedSuccess"
+}
+
+func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any, mode, phase string) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
 	}
@@ -2291,6 +2501,9 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 	if mode == "" {
 		mode = "build"
 	}
+	if phase == "" {
+		phase = "running"
+	}
 	snapshot := map[string]any{
 		"protocolVersion": 1,
 		"sessionId":       sessionID,
@@ -2298,7 +2511,7 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 		"seq":             1,
 		"revision":        0,
 		"control": map[string]any{
-			"phase":          "running",
+			"phase":          phase,
 			"sessionEnded":   false,
 			"canStop":        false,
 			"stopState":      "idle",
