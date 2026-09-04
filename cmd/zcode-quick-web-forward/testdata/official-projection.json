@@ -1,0 +1,355 @@
+{
+ "_source": "official desktop web-remote session, captured 2026-09-04 (see docs/web-remote-protocol.md)",
+ "snapshot": {
+  "keys": [
+   "availability",
+   "backgroundWorks",
+   "config",
+   "control",
+   "goal",
+   "inputRouting",
+   "logEpoch",
+   "meta",
+   "modelTransition",
+   "pendingCommands",
+   "pendingInteractions",
+   "plan",
+   "protocolVersion",
+   "queue",
+   "revision",
+   "rows",
+   "seq",
+   "sessionId",
+   "subagents",
+   "usage",
+   "workspaceHookAdmission"
+  ],
+  "control": {
+   "phase": "draft",
+   "sessionEnded": false,
+   "canStop": false,
+   "stopState": "idle",
+   "stopTargetKind": "unknown",
+   "activeWorks": [],
+   "lastError": null,
+   "apiRetry": null
+  },
+  "config": {
+   "provider": "builtin:bigmodel-coding-plan",
+   "model": "GLM-5.3-Flash",
+   "thought": "high",
+   "thoughtLevels": [
+    "low",
+    "high",
+    "max"
+   ],
+   "followupMode": "queue",
+   "mode": "yolo"
+  },
+  "inputRouting": {
+   "mode": "startNow"
+  },
+  "usage": {
+   "contextWindow": {
+    "usedTokens": 0,
+    "maxTokens": 1000000,
+    "autoCompactThresholdTokens": null
+   },
+   "cumulative": {
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "cacheReadTokens": 0,
+    "cacheWriteTokens": 0
+   }
+  },
+  "queue": {
+   "items": [],
+   "autoDrain": true
+  },
+  "availability": {
+   "fork": {
+    "allowed": false,
+    "reasonCode": "forkTargetNotStable"
+   },
+   "compact": {
+    "allowed": false,
+    "reasonCode": "idleCannotCompact"
+   },
+   "switchModelConfig": {
+    "allowed": true
+   },
+   "setFollowupMode": {
+    "allowed": true
+   },
+   "queueEdit": {
+    "allowed": true
+   },
+   "sendQueuedNow": {
+    "allowed": false,
+    "reasonCode": "sendQueuedNowRequiresRunning"
+   },
+   "pauseGoal": {
+    "allowed": false,
+    "reasonCode": "noGoalToPause"
+   },
+   "resumeGoal": {
+    "allowed": false,
+    "reasonCode": "noGoalToResume"
+   }
+  }
+ },
+ "statePatches": {
+  "running": {
+   "control": {
+    "phase": "running",
+    "sessionEnded": false,
+    "canStop": true,
+    "stopState": "stoppable",
+    "stopTargetKind": "assistant",
+    "activeWorks": [
+     {
+      "kind": "primaryTurn",
+      "foregroundExecutionId": "runtime_command_39",
+      "startedAt": 1788514690268
+     }
+    ],
+    "lastError": null,
+    "apiRetry": null
+   },
+   "availability": {
+    "fork": {
+     "allowed": true
+    },
+    "compact": {
+     "allowed": true
+    },
+    "switchModelConfig": {
+     "allowed": true
+    },
+    "setFollowupMode": {
+     "allowed": true
+    },
+    "queueEdit": {
+     "allowed": true
+    },
+    "sendQueuedNow": {
+     "allowed": true
+    },
+    "pauseGoal": {
+     "allowed": false,
+     "reasonCode": "noGoalToPause"
+    },
+    "resumeGoal": {
+     "allowed": false,
+     "reasonCode": "noGoalToResume"
+    }
+   },
+   "inputRouting": {
+    "mode": "enqueue"
+   }
+  },
+  "completed": {
+   "control": {
+    "phase": "completedSuccess",
+    "sessionEnded": true,
+    "canStop": false,
+    "stopState": "idle",
+    "stopTargetKind": "unknown",
+    "activeWorks": [],
+    "lastError": null,
+    "apiRetry": null
+   },
+   "availability": {
+    "fork": {
+     "allowed": true
+    },
+    "compact": {
+     "allowed": true
+    },
+    "switchModelConfig": {
+     "allowed": true
+    },
+    "setFollowupMode": {
+     "allowed": true
+    },
+    "queueEdit": {
+     "allowed": true
+    },
+    "sendQueuedNow": {
+     "allowed": false,
+     "reasonCode": "sendQueuedNowRequiresRunning"
+    },
+    "pauseGoal": {
+     "allowed": false,
+     "reasonCode": "noGoalToPause"
+    },
+    "resumeGoal": {
+     "allowed": false,
+     "reasonCode": "noGoalToResume"
+    }
+   },
+   "inputRouting": {
+    "mode": "startNow"
+   }
+  }
+ },
+ "taskRecord": {
+  "address": {
+   "workspacePath": "/Users/friddle/Project/tmp/zcode-quick-web-forward",
+   "taskId": "sess_ffc61716-8cac-46ee-9a30-d39a7cbcbf79"
+  },
+  "meta": {
+   "taskId": "sess_ffc61716-8cac-46ee-9a30-d39a7cbcbf79",
+   "traceId": "11ca8708-0f22-456e-8307-c3245b7604bc",
+   "title": "SSH远程启动服务并用MCP Playwright自动化",
+   "titleOverridden": false,
+   "workspacePath": "/Users/friddle/Project/tmp/zcode-quick-web-forward",
+   "createdAt": 1788498070233,
+   "updatedAt": 1788514615179,
+   "mode": "build",
+   "model": "builtin:bigmodel-coding-plan/GLM-5.3-Flash",
+   "thoughtLevel": "high",
+   "provider": "glm",
+   "status": "running",
+   "target": null
+  },
+  "membership": {
+   "pinned": false,
+   "archived": false,
+   "active": true
+  },
+  "sourceAvailability": "online",
+  "liveStatus": "running",
+  "activity": {
+   "phase": "running",
+   "lastActivityAt": 1788514615179,
+   "hasBackgroundWork": false
+  }
+ },
+ "acks": [
+  {
+   "commandId": "01a06bc8-1df0-710d-8a61-7f38202217a7",
+   "status": "accepted",
+   "revisionAtDecision": 0,
+   "result": {
+    "type": "createSession",
+    "sessionId": "sess_ec2f3a77-d99e-4c10-8a19-a8baafae2606"
+   }
+  },
+  {
+   "commandId": "01a06bc8-62fc-7f2b-a621-30dc6b62ef05",
+   "status": "accepted",
+   "revisionAtDecision": 0,
+   "result": {
+    "type": "inputAccepted",
+    "delivery": "startNow",
+    "inputId": "01a06bc8-62fc-7f2b-a621-30dc6b62ef05"
+   }
+  }
+ ],
+ "rowKinds": {
+  "assistantText": {
+   "rowId": 1071,
+   "turnId": "msg_mtmpsiv4_a479342f-9ddf-47e7-9ae9-160e4bdaacb2",
+   "entityId": "msg_mtmqgtz2_0f75c9a1-6233-47e7-a5d0-b8f991940656",
+   "productTurnId": "msg_mtmpsiv4_a479342f-9ddf-47e7-9ae9-160e4bdaacb2",
+   "visibility": "visible",
+   "createdAt": 1788513021830,
+   "createdAtSeq": 40604,
+   "actions": {
+    "canFork": true
+   },
+   "kind": "assistantText",
+   "assistantResponseId": "msg_mtmqgtz2_0f75c9a1-6233-47e7-a5d0-b8f991940656",
+   "state": "complete"
+  },
+  "turnHeader": {
+   "rowId": 1072,
+   "turnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "entityId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "productTurnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "visibility": "visible",
+   "createdAt": 1788513050075,
+   "createdAtSeq": 41091,
+   "kind": "turnHeader",
+   "origin": "userInput",
+   "executionKind": "agent",
+   "sourceCommandId": "01a06baf-5d3d-7e73-8a02-f0f27bb9fea0",
+   "historyRoundCount": 3,
+   "state": "completedSuccess",
+   "startedAt": 1788513050075,
+   "endedAt": 1788513109333,
+   "activeMs": 59261
+  },
+  "userInput": {
+   "rowId": 1073,
+   "turnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "entityId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "productTurnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "visibility": "visible",
+   "createdAt": 1788513050075,
+   "createdAtSeq": 41091,
+   "kind": "userInput",
+   "origin": "realUser",
+   "sourceCommandId": "01a06baf-5d3d-7e73-8a02-f0f27bb9fea0",
+   "rootSourceCommandId": "01a06baf-5d3d-7e73-8a02-f0f27bb9fea0",
+   "clientId": "client-01a0487d-63bf-7999-9775-236581793796"
+  },
+  "reasoning": {
+   "rowId": 1074,
+   "turnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "entityId": "msg_mtmqhpn2_248a0dee-53df-4bd0-a7c9-f6e4678e6270",
+   "productTurnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "visibility": "visible",
+   "createdAt": 1788513057389,
+   "createdAtSeq": 41096,
+   "kind": "reasoning",
+   "assistantResponseId": "msg_mtmqhpn2_248a0dee-53df-4bd0-a7c9-f6e4678e6270",
+   "state": "complete"
+  },
+  "toolCall": {
+   "rowId": 1076,
+   "turnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "entityId": "call_97af5bdaa7bd44dea23329e9",
+   "productTurnId": "msg_mtmqhpln_0d52c0f4-e25f-43a5-a262-c586ab8b5ea3",
+   "visibility": "visible",
+   "createdAt": 1788513064726,
+   "createdAtSeq": 41340,
+   "kind": "toolCall",
+   "assistantResponseId": "msg_mtmqhpn2_248a0dee-53df-4bd0-a7c9-f6e4678e6270",
+   "toolCallId": "call_97af5bdaa7bd44dea23329e9",
+   "toolName": "Bash",
+   "status": "success",
+   "inputText": "{\"command\":\"shasum -a 256 /tmp/zqf-linux-amd64 | cut -c1-16; ssh -o BatchMode=yes friddle@100.124.32.41 'shasum -a 256 ~/.local/bin/zcode-quick-web-forward | cut -c1-16; pgrep -cf \\\"[z]code-quick-web\\\"; grep -o \\\"t=[0-9]*\\\" /home/friddle/nas/zcode-quick-web-forward/r.log | tail -1'; git log --oneline -1\",\"description\":\"Verify deployed binary matches latest build\",\"timeout\":30000}",
+   "input": {
+    "command": "shasum -a 256 /tmp/zqf-linux-amd64 | cut -c1-16; ssh -o BatchMode=yes friddle@100.124.32.41 'shasum -a 256 ~/.local/bin/zcode-quick-web-forward | cut -c1-16; pgrep -cf \"[z]code-quick-web\"; grep -o \"t=[0-9]*\" /home/friddle/nas/zcode-quick-web-forward/r.log | tail -1'; git log --oneline -1",
+    "description": "Verify deployed binary matches latest build",
+    "timeout": 30000
+   },
+   "output": {
+    "text": "821a121f4941f9f6\nPseudo-terminal will not be allocated because stdin is not a terminal.\r\n821a121f4941f9f6\n4\nt=\n6d5d111 web-remote: emit official conversation row model (thinking / tool cards)"
+   },
+   "startedAt": 1788513067230,
+   "endedAt": 1788513067806
+  },
+  "timelineMarker": {
+   "rowId": 39,
+   "turnId": "msg_mtmhpr1m_1c6e6033-44cf-4219-aa79-95b180d21feb",
+   "entityId": "model-change:msg_mtmhpr1m_1c6e6033-44cf-4219-aa79-95b180d21feb:builtin:bigmodel-coding-plan/GLM-5.3->builtin:bigmodel-coding-plan/GLM-5.3-Flash",
+   "productTurnId": "msg_mtmhpr1m_1c6e6033-44cf-4219-aa79-95b180d21feb",
+   "visibility": "visible",
+   "createdAt": 1788498308650,
+   "createdAtSeq": 115,
+   "kind": "timelineMarker",
+   "lane": "lightBoundary",
+   "marker": {
+    "type": "modelChange",
+    "fromProvider": "builtin:bigmodel-coding-plan",
+    "fromModel": "GLM-5.3",
+    "toProvider": "builtin:bigmodel-coding-plan",
+    "toModel": "GLM-5.3-Flash",
+    "toThought": "high"
+   }
+  }
+ }
+}

@@ -1524,7 +1524,8 @@ func (p *phoneSessions) usageCfg() map[string]any {
 	used, max := p.ctxUsed, p.ctxMax
 	p.mu.Unlock()
 	if max <= 0 {
-		max = 1 << 20
+		// Engine default for the GLM models until runtime.contextUsage lands.
+		max = 1000000
 	}
 	return map[string]any{
 		"contextWindow": map[string]any{
@@ -3706,7 +3707,7 @@ func providerPayload() []any {
 				"name":            m,
 				"kinds":           []any{"anthropic", "openai-compatible"},
 				"modalities":      map[string]any{"input": []any{"text"}, "output": []any{"text"}},
-				"contextWindow":   1 << 20,
+				"contextWindow":   1000000, // engine default for the GLM models
 				"maxOutputTokens": 8192,
 				"deleted":         false,
 			})
