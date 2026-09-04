@@ -1148,6 +1148,17 @@ type phoneSessions struct {
 	// session died on daemon restart) executes against a real engine session
 	// while the phone keeps seeing its original task id.
 	resumeAlias map[string]string
+	// curProvider/curModel/curThought mirror the live session's model config
+	// so the conversation projection (config.thought / thoughtLevels) and the
+	// model-change timeline markers report what actually runs.
+	curProvider, curModel, curThought string
+	// thoughtLevelsOverride carries the engine's per-session reasoning-effort
+	// options (settings.thoughtLevel.available) when known.
+	thoughtLevelsOverride []string
+	// ctxUsed/ctxMax hold the engine's live context usage (runtime.contextUsage).
+	ctxUsed, ctxMax int64
+	// rowIDSeq backs nextRowID (live-pushed row ids).
+	rowIDSeq int
 }
 
 func (p *phoneSessions) recordListener(kind string, id int) {
@@ -1363,6 +1374,30 @@ func (p *phoneSessions) runtimeTaskList() []any {
 	return out
 }
 
+// removeRuntimeTask drops a session from the runtime task map (deleteSession).
+func (p *phoneSessions) removeRuntimeTask(sessionID string) {
+	p.mu.Lock()
+	delete(p.runtimeTasks, sessionID)
+	p.mu.Unlock()
+}
+
+// liveTaskIDs returns the set of task ids whose sessions are currently live
+// (the open session while a turn runs, plus any running runtime tasks).
+func (p *phoneSessions) liveTaskIDs() map[string]bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string]bool{}
+	if p.turnRunning && p.sessionId != "" {
+		out[p.sessionId] = true
+	}
+	for id, t := range p.runtimeTasks {
+		if s, _ := t["displayStatus"].(string); s == "running" {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 // taskMeta returns the workspace path + title known for a session id (looks in
 // the runtime map first, then the on-disk task index).
 func taskMeta(ps *phoneSessions, sid string) (ws, title string) {
@@ -1438,6 +1473,121 @@ func (p *phoneSessions) convSub() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.convSubscription
+}
+
+// setModelConfig records the live session's model selection (from
+// createSession / switchModelConfig) for the conversation projection.
+func (p *phoneSessions) setModelConfig(provider, model, thought string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if provider != "" {
+		p.curProvider = provider
+	}
+	if model != "" {
+		p.curModel = model
+	}
+	if thought != "" {
+		p.curThought = thought
+	}
+}
+
+// nextRowID mints strictly-increasing conversation row ids for live rows
+// (queue bubbles, model-change markers).
+func (p *phoneSessions) nextRowID() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rowIDSeq++
+	return p.rowIDSeq
+}
+
+// setThoughtLevels records the engine's reasoning-effort options for the
+// session's current model.
+func (p *phoneSessions) setThoughtLevels(levels []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(levels) > 0 {
+		p.thoughtLevelsOverride = levels
+	}
+}
+
+// setContextUsage records the engine's live context-window usage.
+func (p *phoneSessions) setContextUsage(used, max int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ctxUsed, p.ctxMax = used, max
+}
+
+// usageCfg builds the projection's usage block from the engine's live
+// contextUsage (runtime.contextUsage in the session/read reply).
+func (p *phoneSessions) usageCfg() map[string]any {
+	p.mu.Lock()
+	used, max := p.ctxUsed, p.ctxMax
+	p.mu.Unlock()
+	if max <= 0 {
+		max = 1 << 20
+	}
+	return map[string]any{
+		"contextWindow": map[string]any{
+			"usedTokens":                 used,
+			"maxTokens":                  max,
+			"autoCompactThresholdTokens": nil,
+		},
+		"cumulative": map[string]any{
+			"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0,
+		},
+	}
+}
+
+// thoughtLevelsFor mirrors the desktop's per-model reasoning-effort options
+// (the official client shows low/high/max for the GLM models). Used as the
+// fallback before the engine reports settings.thoughtLevel.available.
+func thoughtLevelsFor(model string) []string {
+	return []string{"low", "high", "max"}
+}
+
+// modelCfg returns the projection's config block: the real provider/model/
+// thought when known, the phone's expected fallbacks otherwise.
+func (p *phoneSessions) modelCfg() map[string]any {
+	p.mu.Lock()
+	provider, model, thought := p.curProvider, p.curModel, p.curThought
+	levels := p.thoughtLevelsOverride
+	mode := p.collabMode
+	p.mu.Unlock()
+	if provider == "" {
+		if defP, _ := zcode.DefaultModel(); defP != "" {
+			provider = defP
+		} else {
+			provider = "bigmodel"
+		}
+	}
+	if model == "" {
+		if _, defM := zcode.DefaultModel(); defM != "" {
+			model = defM
+		} else {
+			model = "GLM-5.3"
+		}
+	}
+	if thought == "" {
+		thought = "low"
+	}
+	if len(levels) == 0 {
+		levels = []string{"low", "high", "max"}
+	}
+	if mode == "" {
+		mode = "build"
+	}
+	lv := make([]any, 0, len(levels))
+	for _, l := range levels {
+		lv = append(lv, l)
+	}
+	return map[string]any{
+		"provider":      provider,
+		"model":         model,
+		"thought":       thought,
+		"thoughtLevels": lv,
+		"followupMode":  "queue",
+		"mode":          mode,
+	}
 }
 
 func handleChannelCall(engine *relay.BridgeEngine, send func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) func(*relay.ChannelCall) {
@@ -1850,6 +2000,24 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		return true
 	case "window-controller/subscribeControllerV4", "window-controller/getSnapshot", "window-controller/getControllerSnapshot":
 		reply([]any{})
+		// The official client renders the task list's live status from the
+		// controller/tasks-index topic. Push a snapshot when it subscribes
+		// (getSnapshot/getControllerSnapshot callers get the RPC ack only).
+		if c.Name == "subscribeControllerV4" {
+			go func() {
+				time.Sleep(250 * time.Millisecond)
+				if id := ps.listener("controllerFrame"); id > 0 {
+					b, _ := json.Marshal(tasksIndexFrame(ps))
+					engine.SendChannelEvent(id, b, send)
+					fmt.Println("zcode: pushed controller/tasks-index snapshot")
+				}
+			}()
+		}
+	case "zcode-agent/syncAppRuntimePreferences", "bots/syncAppRuntimePreferences":
+		// Fire-and-forget settings sync ({askUserQuestionAutoResolutionEnabled,
+		// modelIoFullRetentionEnabled}); acknowledge locally — forwarding it to
+		// the engine fails with Method not found.
+		reply(map[string]any{})
 	case "client-scenes/list":
 		reply([]any{})
 	case "subagents/list":
@@ -1936,6 +2104,8 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		if txt, ok := ack["userTextSent"].(string); ok && txt != "" {
 			sid, _ := ps.get()
 			if sid != "" {
+				cmdID, _ := ack["commandId"].(string)
+				clientID, _ := ack["clientId"].(string)
 				go func() {
 					time.Sleep(150 * time.Millisecond)
 					ps.mu.Lock()
@@ -1944,6 +2114,9 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					ps.mu.Unlock()
 					now := time.Now().UnixMilli()
 					turnID := "turn-" + sid
+					if cmdID == "" {
+						cmdID = "cmd-" + shortSessionID(sid)
+					}
 					// Immediate send feedback, mirroring the desktop: a running
 					// turn header (the "已工作" indicator) plus the user's
 					// message row, and the projection flipped to running.
@@ -1954,8 +2127,10 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 						"createdAtSeq": 1,
 						"kind":         "turnHeader",
 						"origin":       "userInput",
+						"executionKind": "agent",
 						"state":        "running",
 						"startedAt":    now,
+						"sourceCommandId": cmdID,
 					}
 					row := map[string]any{
 						"rowId":        2,
@@ -1965,16 +2140,29 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 						"kind":         "userInput",
 						"text":         txt,
 						"origin":       "realUser",
+						"sourceCommandId":      cmdID,
+						"rootSourceCommandId":  cmdID,
 					}
-					b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{hdr, row}, ps.collabMode, "running"))
+					if clientID != "" {
+						row["clientId"] = clientID
+					}
+					b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{hdr, row}, ps.collabMode, "running"))
 					ps.rememberRows([]any{hdr, row})
 					engine.SendChannelEvent(convID, b, send)
+					// The desktop's running-state control patch: stoppable,
+					// primaryTurn active work, follow-ups route to the queue.
+					cb, _ := json.Marshal(stateUpdatedFrame(sid, "running", convSub, ps.nextOrdinal()))
+					engine.SendChannelEvent(convID, cb, send)
 					fmt.Printf("zcode: pushed running-turn snapshot session=%s text=%q\n", sid, txt)
 					// Flip the sidebar entry to running as well.
 					if indexID > 0 {
 						ib, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
 						engine.SendChannelEvent(indexID, ib, send)
 						fmt.Println("zcode: pushed sessions-index snapshot")
+					}
+					if controllerID := ps.listener("controllerFrame"); controllerID > 0 {
+						cb, _ := json.Marshal(tasksIndexFrame(ps))
+						engine.SendChannelEvent(controllerID, cb, send)
 					}
 				}()
 			}
@@ -1990,7 +2178,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					convID, convSub := ps.convListener, ps.convSubscription
 					ps.mu.Unlock()
 					if convID > 0 {
-						b, _ := json.Marshal(conversationSnapshotFrame(sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), nil, mode, "running"))
+						b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), nil, mode, "running"))
 						engine.SendChannelEvent(convID, b, send)
 						fmt.Printf("zcode: pushed mode snapshot session=%s mode=%s\n", sid, mode)
 					}
@@ -2001,7 +2189,31 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		reply(map[string]any{"results": []any{}})
 	case "zcode-agent/unsubscribeConversationV4", "zcode-agent/unsubscribeSessionsIndexV4":
 		reply(map[string]any{})
-	case "zcode-agent/conversationRowsRangeV4", "zcode-agent/conversationPlansV4", "zcode-agent/conversationFileChangesV4", "zcode-agent/conversationFileRewindPreviewV4":
+	case "zcode-agent/conversationRowsRangeV4":
+		// Official reply shape: {rows, atSeq, atLogEpoch, hasMore}. Serve the
+		// remembered rows of the live session; empty for anything else.
+		var rq struct {
+			SessionID string `json:"sessionId"`
+		}
+		if raw, ok := c.Arg.(json.RawMessage); ok {
+			_ = json.Unmarshal(raw, &rq)
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			_ = json.Unmarshal(b, &rq)
+		}
+		rows, sid := ps.snapshotRows(), ""
+		if rq.SessionID != "" {
+			sid, _ = ps.get()
+			if sid != rq.SessionID {
+				rows = []any{}
+			}
+		}
+		reply(map[string]any{
+			"rows":       rows,
+			"atSeq":      len(rows),
+			"atLogEpoch": "0",
+			"hasMore":    false,
+		})
+	case "zcode-agent/conversationPlansV4", "zcode-agent/conversationFileChangesV4", "zcode-agent/conversationFileRewindPreviewV4":
 		reply(map[string]any{})
 	case "coding-plan-subscription/getStaticTeamProducts":
 		reply([]any{})
@@ -2070,7 +2282,7 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 					}
 				}
 			}
-			b, _ := json.Marshal(conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phaseForSession(ps, sid)))
+			b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phaseForSession(ps, sid)))
 			engine.SendChannelEvent(ps.convListener, b, send)
 			fmt.Printf("zcode: pushed recovery snapshot session=%s rows=%d\n", sid, len(rows))
 		}
@@ -2092,7 +2304,7 @@ func pushConversationFrame(engine *relay.BridgeEngine, send func(any), ps *phone
 	if convID == 0 {
 		return
 	}
-	frame := conversationSnapshotFrame(sessionID, ws, convSub, "initial", ps.nextOrdinal(), nil, ps.collabMode, phaseForSession(ps, sessionID))
+	frame := conversationSnapshotFrame(ps, sessionID, ws, convSub, "initial", ps.nextOrdinal(), nil, ps.collabMode, phaseForSession(ps, sessionID))
 	b, _ := json.Marshal(frame)
 	engine.SendChannelEvent(convID, b, send)
 	fmt.Printf("zcode: pushed conversation snapshot session=%s\n", sessionID)
@@ -2104,6 +2316,7 @@ func pushConversationFrame(engine *relay.BridgeEngine, send func(any), ps *phone
 // engine session (may be a rebuilt continuation); phoneSid is the task id the
 // phone displays (may differ when resuming a historical task).
 func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, sender *relaySender, ps *phoneSessions, engineSid, phoneSid string) {
+	fmt.Printf("zcode: syncConversation enter engine=%s phone=%s\n", engineSid, phoneSid)
 	if phoneSid == "" {
 		phoneSid = engineSid
 	}
@@ -2119,18 +2332,15 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 		fmt.Printf("zcode: syncConversation read failed: %v\n", err)
 		return
 	}
-	// Snapshot the transcript to disk so the phone can reopen this task's
-	// history even after the engine restarts (its sessions are in-memory).
-	if saved, _ := json.Marshal(tx); len(saved) > 0 {
-		if err := zcode.SaveSessionTranscript(phoneSid, tx); err != nil {
-			fmt.Printf("zcode: transcript save failed: %v\n", err)
-		} else {
-			fmt.Printf("zcode: transcript saved session=%s bytes=%d\n", phoneSid, len(saved))
-		}
-	}
-	// Persist the engine-generated session title (engine titles the task, e.g.
-	// "List files in /home/friddle") so the phone list shows real names.
+	// The session/read reply carries the session's real model settings,
+	// reasoning-effort options and context usage — feed the projection with
+	// them instead of static defaults.
 	if s, ok := tx["session"].(map[string]any); ok {
+		if m, ok := s["model"].(map[string]any); ok {
+			pi, _ := m["providerId"].(string)
+			mi, _ := m["modelId"].(string)
+			ps.setModelConfig(pi, mi, "")
+		}
 		if t, _ := s["title"].(string); t != "" {
 			if ws, _ := s["workspace"].(map[string]any); ws != nil {
 				if wp, _ := ws["workspacePath"].(string); wp != "" {
@@ -2143,12 +2353,56 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 			}
 		}
 	}
+	if st, ok := tx["settings"].(map[string]any); ok {
+		if tl, ok := st["thoughtLevel"].(map[string]any); ok {
+			cur, _ := tl["current"].(string)
+			ps.setModelConfig("", "", cur)
+			if opts, ok := tl["available"].([]any); ok && len(opts) > 0 {
+				levels := make([]string, 0, len(opts))
+				for _, o := range opts {
+					if om, _ := o.(map[string]any); om != nil {
+						if v, _ := om["value"].(string); v != "" {
+							levels = append(levels, v)
+						}
+					}
+				}
+				ps.setThoughtLevels(levels)
+			}
+		}
+	}
+	if rt, ok := tx["runtime"].(map[string]any); ok {
+		if cu, ok := rt["contextUsage"].(map[string]any); ok {
+			used, _ := cu["used"].(float64)
+			size, _ := cu["size"].(float64)
+			if used > 0 || size > 0 {
+				ps.setContextUsage(int64(used), int64(size))
+			}
+		}
+	}
+	// Snapshot the transcript to disk so the phone can reopen this task's
+	// history even after the engine restarts (its sessions are in-memory).
+	if saved, _ := json.Marshal(tx); len(saved) > 0 {
+		if err := zcode.SaveSessionTranscript(phoneSid, tx); err != nil {
+			fmt.Printf("zcode: transcript save failed: %v\n", err)
+		} else {
+			fmt.Printf("zcode: transcript saved session=%s bytes=%d\n", phoneSid, len(saved))
+		}
+	}
+	// Persist the engine-generated session title (engine titles the task, e.g.
+	// "List files in /home/friddle") so the phone list shows real names.
+	// (Handled above while reading tx["session"] for the model settings.)
 	rows := messageRows(tx, phoneSid, ps.nextOrdinal)
 	if len(rows) == 0 {
 		fmt.Printf("zcode: syncConversation empty rows session=%s\n", phoneSid)
 		return
 	}
-	b, _ := json.Marshal(conversationSnapshotFrame(phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phaseForSession(ps, phoneSid)))
+	// The turn just ended: the projection must leave "running" — the live
+	// session stays open (follow-ups), so it completes, not drafts.
+	phase := "completedSuccess"
+	if ps.turnIsRunning() {
+		phase = "running"
+	}
+	b, _ := json.Marshal(conversationSnapshotFrame(ps, phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phase))
 	ps.rememberRows(rows)
 	engine.SendChannelEvent(convID, b, sender.send)
 	fmt.Printf("zcode: synced conversation engine=%s phone=%s rows=%d\n", engineSid, phoneSid, len(rows))
@@ -2252,17 +2506,33 @@ func messageRows(tx map[string]any, sessionID string, ordinal func() int) []any 
 		if role == "user" {
 			turn++
 			text := collectEngineText(parts)
+			// Stable per-turn command id — the official rows always carry the
+			// originating sendConversationCommandV4 commandId chain.
+			cmdID := fmt.Sprintf("cmd-%s-%d", shortSessionID(sessionID), turn)
+			ended := endedAt
+			if ended == 0 {
+				ended = ts
+			}
 			h := newRow(turnID(), ts)
 			h["kind"] = "turnHeader"
 			h["origin"] = "userInput"
+			h["executionKind"] = "agent"
 			h["state"] = "completedSuccess"
 			h["startedAt"] = ts
+			h["endedAt"] = ended
+			if ended > ts {
+				h["activeMs"] = ended - ts
+			}
+			h["historyRoundCount"] = turn
+			h["sourceCommandId"] = cmdID
 			out = append(out, h)
 			if text != "" {
 				r := newRow(turnID(), ts)
 				r["kind"] = "userInput"
 				r["text"] = text
 				r["origin"] = "realUser"
+				r["sourceCommandId"] = cmdID
+				r["rootSourceCommandId"] = cmdID
 				out = append(out, r)
 			}
 			continue
@@ -2504,10 +2774,128 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 	}
 }
 
-// stateUpdatedFrame wraps an engine state.updated as a conversation frame delta.
-func stateUpdatedFrame(sessionID, status, convSub string, ordinal int) map[string]any {
+// taskIndexItem renders one task in the official controller/tasks-index
+// record shape: address + meta + membership + sourceAvailability + liveStatus
+// + activity (the sidebar's live status reads from this, not from listTasks).
+func taskIndexItem(t zcode.Task, extraLive map[string]bool) map[string]any {
+	phase, _ := phaseForStatus(displayStatus(t.Status))
+	live := phase
+	if extraLive[t.TaskID] {
+		live = "running"
+		phase = "running"
+	}
+	// meta.model is "<providerId>/<modelId>"; fall back to the configured
+	// default model when the task index has none stored.
+	model := t.Model
+	if model == "" {
+		if p, m := zcode.DefaultModel(); p != "" {
+			model = p + "/" + m
+		}
+	}
+	provider := "glm"
+	if i := strings.Index(model, "/"); i > 0 {
+		provider = strings.ToLower(model[:i])
+	}
+	return map[string]any{
+		"address": map[string]any{
+			"workspacePath": t.WorkspacePath,
+			"taskId":        t.TaskID,
+		},
+		"meta": map[string]any{
+			"taskId":          t.TaskID,
+			"traceId":         t.TaskID,
+			"title":           t.Title,
+			"titleOverridden": false,
+			"workspacePath":   t.WorkspacePath,
+			"createdAt":       t.CreatedAt,
+			"updatedAt":       t.UpdatedAt,
+			"mode":            "build",
+			"model":           model,
+			"thoughtLevel":    "low",
+			"provider":        provider,
+			"status":          displayStatus(t.Status),
+			"target":          nil,
+		},
+		"membership":         map[string]any{"pinned": t.Pinned, "archived": t.Archived, "active": !t.Archived},
+		"sourceAvailability": "online",
+		"liveStatus":         live,
+		"activity": map[string]any{
+			"phase":            phase,
+			"lastActivityAt":   t.UpdatedAt,
+			"hasBackgroundWork": false,
+		},
+	}
+}
+
+// tasksIndexFrame builds the controller/tasks-index snapshot the official
+// client subscribes to (window-controller.subscribeControllerV4 →
+// onDynamicControllerFrame). Note: this topic uses a FLAT envelope (no
+// wireVersion wrapper — unlike conversation/sessions-index frames).
+func tasksIndexFrame(ps *phoneSessions) map[string]any {
+	tasks, _ := zcode.ListTasks("", "")
+	live := map[string]bool{}
+	if ps != nil {
+		live = ps.liveTaskIDs()
+	}
+	items := make([]any, 0, len(tasks)+1)
+	for _, t := range tasks {
+		if strings.HasPrefix(t.WorkspaceKey, "remote:") {
+			continue
+		}
+		items = append(items, taskIndexItem(t, live))
+	}
+	return map[string]any{
+		"topic":          "controller/tasks-index",
+		"subscriptionId": uuidNew(),
+		"logEpoch":       "0",
+		"fromSeq":        0,
+		"toSeq":          1,
+		"sentAt":         time.Now().UnixMilli(),
+		"payload": map[string]any{
+			"kind": "snapshot",
+			"snapshot": map[string]any{
+				"protocolVersion": 1,
+				"logEpoch":        "0",
+				"tasks":           items,
+			},
+		},
+	}
+}
+
+// stateUpdatedFrame wraps a projection state change as a conversation frame
+// delta. Shape mirrors the official desktop's state.updated ops: a flat patch
+// of top-level snapshot keys (control / availability / inputRouting).
+func stateUpdatedFrame(sessionID, phase, convSub string, ordinal int) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
+	}
+	ended := phase != "running" && phase != "prewarming" && phase != "draft"
+	control := map[string]any{
+		"phase": phase, "sessionEnded": false,
+		"canStop": false, "stopState": "idle", "stopTargetKind": "unknown",
+		"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
+	}
+	availability := map[string]any{
+		"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
+		"switchModelConfig": map[string]any{"allowed": true}, "setFollowupMode": map[string]any{"allowed": true},
+		"queueEdit": map[string]any{"allowed": true},
+		"sendQueuedNow": map[string]any{"allowed": false, "reasonCode": "sendQueuedNowRequiresRunning"},
+		"pauseGoal":     map[string]any{"allowed": false, "reasonCode": "noGoalToPause"},
+		"resumeGoal":    map[string]any{"allowed": false, "reasonCode": "noGoalToResume"},
+	}
+	routing := map[string]any{"mode": "startNow"}
+	if !ended {
+		// A turn is in flight: the desktop flips the projection to running —
+		// stoppable, a primaryTurn activeWork, follow-ups route to the queue.
+		control["phase"] = phase
+		control["canStop"] = true
+		control["stopState"] = "stoppable"
+		control["stopTargetKind"] = "assistant"
+		control["activeWorks"] = []any{map[string]any{
+			"kind": "primaryTurn", "foregroundExecutionId": "runtime_command_local", "startedAt": time.Now().UnixMilli(),
+		}}
+		availability["sendQueuedNow"] = map[string]any{"allowed": true}
+		routing = map[string]any{"mode": "enqueue"}
 	}
 	return map[string]any{
 		"wireVersion":         3,
@@ -2529,12 +2917,40 @@ func stateUpdatedFrame(sessionID, status, convSub string, ordinal int) map[strin
 					map[string]any{
 						"op": "state.updated",
 						"patch": map[string]any{
-							"control": map[string]any{
-								"phase": status,
-							},
+							"control":      control,
+							"availability": availability,
+							"inputRouting": routing,
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+// conversationDeltaFrame wraps arbitrary projection deltas (row.appended /
+// state.updated / row.delta ops) as one conversation frame.
+func conversationDeltaFrame(sessionID, convSub string, ordinal int, deltas []any) map[string]any {
+	if convSub == "" {
+		convSub = sessionID + ":sub"
+	}
+	return map[string]any{
+		"wireVersion":         3,
+		"kind":                "complete",
+		"deliveryKind":        "online",
+		"logicalFrameId":      uuidNew(),
+		"logicalFrameOrdinal": ordinal,
+		"topic":               "conversation/" + sessionID,
+		"subscriptionId":      convSub,
+		"frame": map[string]any{
+			"topic":          "conversation/" + sessionID,
+			"subscriptionId": convSub,
+			"fromSeq":        1,
+			"toSeq":          2,
+			"sentAt":         time.Now().UnixMilli(),
+			"payload": map[string]any{
+				"kind":   "deltas",
+				"deltas": deltas,
 			},
 		},
 	}
@@ -2587,11 +3003,12 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 // the phone's strict Hoe schema. deliveryKind is "initial" (fresh subscribe) or
 // "recovery" (resync). ordinal must strictly increase per subscription.
 // phaseForSession resolves the projection phase for a session: the live
-// session is running, anything else falls back to its persisted task status.
+// session counts as running only while a turn is in flight, anything else
+// falls back to its persisted task status.
 func phaseForSession(ps *phoneSessions, sessionID string) string {
 	if ps != nil {
 		ps.mu.Lock()
-		live := ps.sessionId == sessionID
+		live := ps.sessionId == sessionID && ps.turnRunning
 		ps.mu.Unlock()
 		if live {
 			return "running"
@@ -2604,7 +3021,7 @@ func phaseForSession(ps *phoneSessions, sessionID string) string {
 	return "completedSuccess"
 }
 
-func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any, mode, phase string) map[string]any {
+func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any, mode, phase string) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
 	}
@@ -2620,46 +3037,35 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 	if phase == "" {
 		phase = "running"
 	}
+	// Control/availability/inputRouting mirror the official desktop's
+	// projection. canStop/activeWorks stay empty in snapshots (they ride the
+	// state.updated control patches pushed on turn start/end).
+	control := map[string]any{
+		"phase": phase, "sessionEnded": false,
+		"canStop": false, "stopState": "idle", "stopTargetKind": "unknown",
+		"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
+	}
 	snapshot := map[string]any{
 		"protocolVersion": 1,
 		"sessionId":       sessionID,
 		"logEpoch":        "0",
 		"seq":             1,
 		"revision":        0,
-		"control": map[string]any{
-			"phase":          phase,
-			"sessionEnded":   false,
-			"canStop":        false,
-			"stopState":      "idle",
-			"stopTargetKind": "assistant",
-			"activeWorks":    []any{},
-			"lastError":      nil,
-			"apiRetry":       nil,
-		},
+		"control":         control,
 		"availability": map[string]any{
 			"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
 			"switchModelConfig": map[string]any{"allowed": true}, "setFollowupMode": map[string]any{"allowed": true},
-			"queueEdit": map[string]any{"allowed": true}, "sendQueuedNow": map[string]any{"allowed": true},
-			"pauseGoal": map[string]any{"allowed": true}, "resumeGoal": map[string]any{"allowed": true},
+			"queueEdit": map[string]any{"allowed": true},
+			"sendQueuedNow": map[string]any{"allowed": false, "reasonCode": "sendQueuedNowRequiresRunning"},
+			"pauseGoal":     map[string]any{"allowed": false, "reasonCode": "noGoalToPause"},
+			"resumeGoal":    map[string]any{"allowed": false, "reasonCode": "noGoalToResume"},
 		},
 		"inputRouting": map[string]any{"mode": "startNow"},
 		"meta":         map[string]any{"title": "", "titleSource": "default"},
-		"config": map[string]any{
-			"provider":      "bigmodel",
-			"model":         "GLM-5.3",
-			"thought":       "low",
-			"thoughtLevels": []any{},
-			"followupMode":  "queue",
-			"mode":          mode,
-		},
+		"config":       ps.modelCfg(),
 		"modelTransition": nil,
-		"usage": map[string]any{
-			"contextWindow": nil,
-			"cumulative": map[string]any{
-				"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0,
-			},
-		},
-		"queue":               map[string]any{"items": []any{}, "autoDrain": false},
+		"usage":           ps.usageCfg(),
+		"queue":               map[string]any{"items": []any{}, "autoDrain": true},
 		"pendingInteractions": []any{},
 		"pendingCommands":     []any{},
 		"backgroundWorks":     []any{},
@@ -2732,6 +3138,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				Text     string `json:"text"`
 				Provider string `json:"provider"`
 				Model    string `json:"model"`
+				Thought  string `json:"thought"`
 				Mode     string `json:"mode"`
 				Config   struct {
 					Provider string `json:"provider"`
@@ -2747,6 +3154,9 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 	fmt.Printf("zcode: bridgeSendCommand raw=%s\n", arg)
 	if req.Envelope.CommandID != "" {
 		ack["commandId"] = req.Envelope.CommandID
+	}
+	if req.Envelope.ClientID != "" {
+		ack["clientId"] = req.Envelope.ClientID
 	}
 
 	switch req.Envelope.Type {
@@ -2779,6 +3189,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			}
 		}
 		ps.setSession(sid, ws)
+		ps.setModelConfig(provider, model, "")
 		title := req.Envelope.Payload.FirstInput.Text
 		if title == "" {
 			title = req.Envelope.Payload.Text
@@ -2834,6 +3245,10 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				ps.enqueueSend(q)
 				ack["status"] = "accepted"
 				ack["queued"] = true
+				// Official ack shape: inputAccepted with the queue delivery.
+				ack["result"] = map[string]any{
+					"type": "inputAccepted", "delivery": "queue", "inputId": q.sourceCommandID,
+				}
 				fmt.Printf("zcode: sendText queued session=%s text=%q\n", sid, text)
 				go func(sid string) {
 					time.Sleep(150 * time.Millisecond)
@@ -2843,7 +3258,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					if convID == 0 {
 						return
 					}
-					frame := conversationSnapshotFrame(sid, ws, convSub, "recovery", ps.nextOrdinal(), ps.snapshotRows(), ps.collabMode, "running")
+					frame := conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), ps.snapshotRows(), ps.collabMode, "running")
 					frame["queue"] = map[string]any{"items": ps.queueItemsPayload(), "autoDrain": true}
 					b, _ := json.Marshal(frame)
 					engine.SendChannelEvent(convID, b, send)
@@ -2872,6 +3287,11 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				ps.setTurnRunning(true)
 				fmt.Printf("zcode: engine session/send %s (phone=%s) text=%q\n", engineSid, sid, text)
 				ack["userTextSent"] = text
+				if cmdID := req.Envelope.CommandID; cmdID != "" {
+					ack["result"] = map[string]any{
+						"type": "inputAccepted", "delivery": "startNow", "inputId": cmdID,
+					}
+				}
 				// First real message in a bare draft: persist the task now.
 				// (Drafts stay runtime-only until this point — see createSession.)
 				if !zcode.TaskExists(sid) {
@@ -2918,6 +3338,46 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			if engClient.Write(map[string]any{"id": 0, "method": "session/setModel", "params": body}) {
 				fmt.Printf("zcode: engine switchModelConfig session=%s provider=%s model=%s\n", sid, provider, model)
 			}
+			// Reasoning effort travels as its own engine call — the desktop
+			// sends session/setThoughtLevel with the picker's value.
+			if thought := req.Envelope.Payload.Thought; thought != "" {
+				if engClient.Write(map[string]any{"id": 0, "method": "session/setThoughtLevel", "params": map[string]any{
+					"sessionId": sid, "thoughtLevel": thought,
+				}}) {
+					fmt.Printf("zcode: engine setThoughtLevel session=%s level=%s\n", sid, thought)
+				}
+			}
+			ps.setModelConfig(provider, model, req.Envelope.Payload.Thought)
+			// Mirror the desktop: a model switch appends a timelineMarker row
+			// (modelChange) and updates the projection's config block.
+			go func(sessionID, fromP, fromM, toP, toM, toT string) {
+				time.Sleep(300 * time.Millisecond)
+				ps.mu.Lock()
+				convID, convSub := ps.convListener, ps.convSubscription
+				ps.mu.Unlock()
+				if convID == 0 {
+					return
+				}
+				now := time.Now().UnixMilli()
+				rowID := ps.nextRowID()
+				marker := map[string]any{
+					"rowId": rowID, "turnId": "turn-" + sessionID,
+					"entityId": fmt.Sprintf("model-change:%d:%s/%s->%s/%s", now, fromP, fromM, toP, toM),
+					"createdAt": now, "createdAtSeq": rowID,
+					"kind": "timelineMarker", "lane": "lightBoundary",
+					"marker": map[string]any{
+						"type": "modelChange",
+						"fromProvider": fromP, "fromModel": fromM,
+						"toProvider": toP, "toModel": toM, "toThought": toT,
+					},
+				}
+				b, _ := json.Marshal(conversationDeltaFrame(sessionID, convSub, ps.nextOrdinal(), []any{
+					map[string]any{"op": "row.appended", "row": marker},
+					map[string]any{"op": "state.updated", "patch": map[string]any{"config": ps.modelCfg()}},
+				}))
+				engine.SendChannelEvent(convID, b, send)
+				fmt.Printf("zcode: pushed model-change marker session=%s -> %s/%s thought=%s\n", sessionID, toP, toM, toT)
+			}(sid, "", "", provider, model, req.Envelope.Payload.Thought)
 		}
 	case "switchCollaborationMode":
 		// The phone's mode picker (变更前确认/自动编辑/计划模式/完全访问) sends
@@ -2947,6 +3407,41 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			ps.collabMode = mode
 			ps.mu.Unlock()
 			ack["modeChanged"] = mode
+		}
+	case "deleteSession":
+		// The client deletes a task by sending this conversation command.
+		// Close the engine session and drop the task from the index + runtime
+		// list, then refresh the sidebar.
+		sid := req.Envelope.SessionID
+		if sid == "" {
+			sid, _ = ps.get()
+		}
+		if sid != "" {
+			engineSid := ps.engineFor(sid)
+			engClient.Write(map[string]any{"id": 0, "method": "session/close", "params": map[string]any{"sessionId": engineSid}})
+			deleted := true
+			if err := zcode.SetTaskFlags(sid, &deleted, nil, nil); err != nil {
+				fmt.Printf("zcode: deleteSession task flag failed: %v\n", err)
+			}
+			ps.removeRuntimeTask(sid)
+			ack["status"] = "accepted"
+			ack["result"] = map[string]any{"type": "deleteSession", "sessionId": sid}
+			fmt.Printf("zcode: deleteSession session=%s (engine=%s closed)\n", sid, engineSid)
+			go func() {
+				time.Sleep(200 * time.Millisecond)
+				ps.mu.Lock()
+				controllerID := ps.listeners["controllerFrame"]
+				indexID := ps.indexListener
+				ps.mu.Unlock()
+				if controllerID > 0 {
+					b, _ := json.Marshal(tasksIndexFrame(ps))
+					engine.SendChannelEvent(controllerID, b, send)
+				}
+				if indexID > 0 {
+					b, _ := json.Marshal(sessionsIndexFrame(ps.convSub(), ps))
+					engine.SendChannelEvent(indexID, b, send)
+				}
+			}()
 		}
 	default:
 		fmt.Printf("zcode: engine command type %q unhandled (ignored)\n", req.Envelope.Type)
@@ -3051,14 +3546,17 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			} `json:"patch"`
 			Revision int `json:"revision"`
 		}
-		if json.Unmarshal(ev.Params, &p) == nil && p.SessionID != "" {
+		if json.Unmarshal(ev.Params, &p) == nil && p.SessionID != "" && p.Patch.Status != "" {
 			ps.mu.Lock()
 			convID := ps.convListener
 			convSub := ps.convSubscription
 			ps.mu.Unlock()
 			phoneSid := ps.phoneFor(p.SessionID)
 			if convID > 0 {
-				b, _ := json.Marshal(stateUpdatedFrame(phoneSid, p.Patch.Status, convSub, ps.nextOrdinal()))
+				// Engine statuses (running/completed/idle/error…) map onto the
+				// projection's phase enum before pushing the control patch.
+				phase, _ := phaseForStatus(displayStatus(p.Patch.Status))
+				b, _ := json.Marshal(stateUpdatedFrame(phoneSid, phase, convSub, ps.nextOrdinal()))
 				engine.SendChannelEvent(convID, b, sender.send)
 			}
 		}
@@ -3104,6 +3602,26 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			// The turn is over: queued submissions (sent while this turn was
 			// running) may now dispatch.
 			ps.setTurnRunning(false)
+			// Mirror the desktop's completed-state patch: control back to idle,
+			// activeWorks cleared, follow-ups route startNow again. The
+			// controller tasks-index is refreshed too so the sidebar's live
+			// status leaves "running".
+			go func(psid, csub string) {
+				// One lock pass — listener() would re-lock the non-reentrant
+				// mutex and deadlock this goroutine (wedging the bridge).
+				ps.mu.Lock()
+				convID := ps.convListener
+				controllerID := ps.listeners["controllerFrame"]
+				ps.mu.Unlock()
+				if convID > 0 && psid != "" {
+					b, _ := json.Marshal(stateUpdatedFrame(psid, "completedSuccess", csub, ps.nextOrdinal()))
+					engine.SendChannelEvent(convID, b, sender.send)
+				}
+				if controllerID > 0 {
+					b, _ := json.Marshal(tasksIndexFrame(ps))
+					engine.SendChannelEvent(controllerID, b, sender.send)
+				}
+			}(phoneSid, ps.convSub())
 			// A turn finished: pull the full transcript (assistant text, tool
 			// outputs like ls results) and push it as conversation rows so the
 			// phone actually sees the reply. Run async — this goroutine IS the
@@ -3162,7 +3680,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				rows := append(ps.snapshotRows(), []any{hdr, row}...)
 				ps.rememberRows(rows)
 				if convID > 0 {
-					frame := conversationSnapshotFrame(psid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")
+					frame := conversationSnapshotFrame(ps, psid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")
 					frame["queue"] = map[string]any{"items": ps.queueItemsPayload(), "autoDrain": true}
 					b, _ := json.Marshal(frame)
 					engine.SendChannelEvent(convID, b, sender.send)
