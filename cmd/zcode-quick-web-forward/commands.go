@@ -159,12 +159,13 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			// desktop shows it as a waiting bubble and dispatches it when the
 			// turn ends). Sending straight through would interleave into the
 			// running turn.
-			if ps.turnIsRunning() {
+			if ps.turnRunningFor(ps.engineFor(sid)) {
 				q := queuedSend{
 					text:            text,
 					sourceCommandID: req.Envelope.CommandID,
 					clientID:        req.Envelope.ClientID,
 					admittedAt:      time.Now().UnixMilli(),
+					sessionId:       sid,
 				}
 				if q.sourceCommandID == "" {
 					q.sourceCommandID = uuidNew()
@@ -212,7 +213,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					ack["status"] = "failed"
 					ack["message"] = "engine stdin closed"
 				}
-				ps.setTurnRunning(true)
+				ps.setTurnRunning(engineSid, true)
 				fmt.Printf("zcode: engine session/send %s (phone=%s) text=%q\n", engineSid, sid, text)
 				ack["userTextSent"] = text
 				if cmdID := req.Envelope.CommandID; cmdID != "" {

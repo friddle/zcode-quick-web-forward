@@ -36,8 +36,10 @@ type phoneSessions struct {
 	// collabMode is the phone's current collaboration mode
 	// (confirm/edit/plan/yolo). confirm means Edit/Write need asking.
 	collabMode string
-	// turnRunning mirrors whether the live session has a turn in flight.
-	turnRunning bool
+	// runningSids tracks which engine sessions have a turn in flight.
+	// Multiple phone tasks can run turns concurrently; a send that targets a
+	// *different* session must not be queued behind it.
+	runningSids map[string]bool
 	// pendingQueue holds sendText submissions that arrived while a turn was
 	// still running. The phone renders them as queued bubbles (projection
 	// queue.items); they drain FIFO on turn.terminal.
@@ -182,6 +184,9 @@ type queuedSend struct {
 	queueItemID     string
 	clientID        string
 	admittedAt      int64
+	// sessionId is the phone-visible task this submission belongs to, so
+	// concurrent tasks drain their own queues instead of crossing wires.
+	sessionId string
 }
 
 // queueItemPayload renders a queued send in the phone's official queue-item
@@ -209,10 +214,20 @@ func (p *phoneSessions) enqueueSend(q queuedSend) {
 	p.mu.Unlock()
 }
 
-// popQueuedSend removes and returns the next queued submission, if any.
-func (p *phoneSessions) popQueuedSend() (queuedSend, bool) {
+// popQueuedSend removes and returns the next queued submission bound to one
+// phone session (empty sid takes the global head, for compatibility).
+func (p *phoneSessions) popQueuedSend(sid string) (queuedSend, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if sid != "" {
+		for i, q := range p.pendingQueue {
+			if q.sessionId == sid {
+				p.pendingQueue = append(p.pendingQueue[:i], p.pendingQueue[i+1:]...)
+				return q, true
+			}
+		}
+		return queuedSend{}, false
+	}
 	if len(p.pendingQueue) == 0 {
 		return queuedSend{}, false
 	}
@@ -232,18 +247,25 @@ func (p *phoneSessions) queueItemsPayload() []any {
 	return out
 }
 
-// setTurnRunning records whether the live session has a turn in flight.
-func (p *phoneSessions) setTurnRunning(v bool) {
-	p.mu.Lock()
-	p.turnRunning = v
-	p.mu.Unlock()
-}
-
-// turnIsRunning reports whether a turn is in flight for the live session.
-func (p *phoneSessions) turnIsRunning() bool {
+// setTurnRunning records whether one engine session has a turn in flight.
+func (p *phoneSessions) setTurnRunning(sid string, v bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.turnRunning
+	if p.runningSids == nil {
+		p.runningSids = map[string]bool{}
+	}
+	if v {
+		p.runningSids[sid] = true
+	} else {
+		delete(p.runningSids, sid)
+	}
+}
+
+// turnRunningFor reports whether a turn is in flight for one engine session.
+func (p *phoneSessions) turnRunningFor(sid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.runningSids[sid]
 }
 
 // rememberRows stores the rows of the last conversation snapshot.
@@ -313,8 +335,13 @@ func (p *phoneSessions) liveTaskIDs() map[string]bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := map[string]bool{}
-	if p.turnRunning && p.sessionId != "" {
-		out[p.sessionId] = true
+	for esid := range p.runningSids {
+		for phone, e := range p.resumeAlias {
+			if e == esid {
+				out[phone] = true
+			}
+		}
+		out[esid] = true
 	}
 	for id, t := range p.runtimeTasks {
 		if s, _ := t["displayStatus"].(string); s == "running" {

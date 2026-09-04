@@ -255,7 +255,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			}(phoneSid)
 			// The turn is over: queued submissions (sent while this turn was
 			// running) may now dispatch.
-			ps.setTurnRunning(false)
+			ps.setTurnRunning(p.Session, false)
 			// Mirror the desktop's completed-state patch: control back to idle,
 			// activeWorks cleared, follow-ups route startNow again. The
 			// controller tasks-index is refreshed too so the sidebar's live
@@ -287,13 +287,10 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			// first, so give it a head start).
 			go func(engSid, psid string) {
 				time.Sleep(1800 * time.Millisecond)
-				ps.mu.Lock()
-				live := ps.sessionId == psid && !ps.turnRunning
-				ps.mu.Unlock()
-				if !live {
+				if ps.turnRunningFor(engSid) || engClient == nil {
 					return
 				}
-				q, ok := ps.popQueuedSend()
+				q, ok := ps.popQueuedSend(psid)
 				if !ok {
 					return
 				}
@@ -301,7 +298,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					ps.enqueueSend(q) // engine gone — put it back
 					return
 				}
-				ps.setTurnRunning(true)
+				ps.setTurnRunning(engSid, true)
 				if zcode.TaskExists(psid) {
 					_ = zcode.SetTaskStatus(psid, "running")
 				}

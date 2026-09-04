@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	goruntime "runtime"
 	"time"
 
 	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
@@ -288,23 +289,52 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 			"defaultHomeDir": homeDir,
 		})
 	case "system/info":
+		homeDir, _ := os.UserHomeDir()
+		sysUser := ""
+		if u, err := userCurrentName(); err == nil {
+			sysUser = u
+		}
+		userName, displayName := sysUser, ""
+		if ui := loadZcodeUserInfo(); ui != nil {
+			userName = ui.displayUsername()
+			displayName = ui.displayUsername()
+		}
 		reply(map[string]any{
 			"version":       "0.7.0",
 			"appName":       "zcode-quick-web-forward",
-			"platform":      "linux",
-			"arch":          "amd64",
+			"platform":      platformKey(),
+			"arch":          goruntime.GOARCH,
 			"nodeVersion":   "",
 			"runtime":       "web-remote",
-			"home":          "",
-			"userName":      "",
-			"workspacePath": "/home/friddle/zqf-work",
+			"home":          homeDir,
+			"userName":      userName,
+			"displayName":   displayName,
+			"workspacePath": workspaceListFirst(workspaces),
 		})
 	case "setting/update":
 		reply(map[string]any{})
 	case "oauth/restoreCachedSessionState":
-		reply(map[string]any{})
+		if ui := loadZcodeUserInfo(); ui != nil {
+			reply(map[string]any{
+				"status":   "authenticated",
+				"provider": "zai",
+				"userInfo": map[string]any{
+					"username":    ui.displayUsername(),
+					"displayName": ui.displayUsername(),
+					"email":       ui.Email,
+					"avatar":      ui.Avatar,
+					"userId":      ui.UserID,
+				},
+			})
+		} else {
+			reply(map[string]any{"status": "not-authenticated", "userInfo": nil})
+		}
 	case "oauth/getActiveProvider":
-		reply(nil)
+		if loadZcodeUserInfo() != nil {
+			reply("zai")
+		} else {
+			reply(nil)
+		}
 	case "git/refresh":
 		reply([]any{})
 	case "coding-plan-subscription/getBillingDiscount", "coding-plan-subscription/getManualClaimPlanPreviews":
@@ -663,4 +693,15 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 	}
 	fmt.Printf("zcode: answered %s.%s from real state\n", c.ChannelName, c.Name)
 	return true
+}
+
+// workspaceListFirst returns the primary workspace path for system/info.
+func workspaceListFirst(workspaces []string) string {
+	if len(workspaces) > 0 {
+		return workspaces[0]
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	return "."
 }

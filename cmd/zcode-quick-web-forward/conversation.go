@@ -180,7 +180,7 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	// The turn just ended: the projection must leave "running" — the live
 	// session stays open (follow-ups), so it completes, not drafts.
 	phase := "completedSuccess"
-	if ps.turnIsRunning() {
+	if ps.turnRunningFor(ps.engineFor(phoneSid)) {
 		phase = "running"
 	}
 	b, _ := json.Marshal(conversationSnapshotFrame(ps, phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phase))

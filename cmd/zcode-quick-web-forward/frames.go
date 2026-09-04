@@ -320,7 +320,7 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 func phaseForSession(ps *phoneSessions, sessionID string) string {
 	if ps != nil {
 		ps.mu.Lock()
-		live := ps.sessionId == sessionID && ps.turnRunning
+		live := ps.turnRunningFor(ps.engineFor(sessionID))
 		ps.mu.Unlock()
 		if live {
 			return "running"
