@@ -29,18 +29,18 @@ func Home() string {
 
 // Task is one entry in the ZCode task index.
 type Task struct {
-	WorkspaceKey string `json:"workspaceKey"`
+	WorkspaceKey  string `json:"workspaceKey"`
 	WorkspacePath string `json:"workspacePath"`
-	TaskID       string `json:"taskId"`
-	Title        string `json:"title"`
-	Status       string `json:"status,omitempty"`
-	Mode         string `json:"mode,omitempty"`
-	Model        string `json:"model,omitempty"`
-	CreatedAt    int64  `json:"createdAt"`
-	UpdatedAt    int64  `json:"updatedAt"`
-	UnreadAt     *int64 `json:"unreadAt,omitempty"`
-	Pinned       bool   `json:"pinned"`
-	Archived     bool   `json:"archived"`
+	TaskID        string `json:"taskId"`
+	Title         string `json:"title"`
+	Status        string `json:"status,omitempty"`
+	Mode          string `json:"mode,omitempty"`
+	Model         string `json:"model,omitempty"`
+	CreatedAt     int64  `json:"createdAt"`
+	UpdatedAt     int64  `json:"updatedAt"`
+	UnreadAt      *int64 `json:"unreadAt,omitempty"`
+	Pinned        bool   `json:"pinned"`
+	Archived      bool   `json:"archived"`
 }
 
 // openTaskDB opens the tasks-index sqlite database.
@@ -147,6 +147,10 @@ func ListTasks(workspaceKey, kind string) ([]Task, error) {
 		where = append(where, "pinned = 1", "archived = 0")
 	case "archived":
 		where = append(where, "archived = 1")
+	case "deleted":
+		where[0] = "deleted = 1"
+	case "":
+		where = append(where, "archived = 0")
 	default:
 		where = append(where, "archived = 0")
 	}
@@ -189,6 +193,102 @@ func ListTaskIDs(kind string) ([]string, error) {
 		ids = append(ids, t.TaskID)
 	}
 	return ids, nil
+}
+
+// GetTask returns one task from the index by id.
+func GetTask(taskID string) (Task, bool, error) {
+	tasks, err := ListTasks("", "")
+	if err != nil {
+		return Task{}, false, err
+	}
+	for _, t := range tasks {
+		if t.TaskID == taskID {
+			return t, true, nil
+		}
+	}
+	// Deleted tasks are excluded from ListTasks; look those up directly so a
+	// deleteTask reply can still echo the (now deleted) row.
+	db, err := openTaskDB()
+	if err != nil {
+		return Task{}, false, err
+	}
+	defer db.Close()
+	var t Task
+	var status, mode, model sql.NullString
+	var unreadAt sql.NullInt64
+	row := db.QueryRow("SELECT workspace_key, workspace_path, task_id, title, task_status, mode, model, created_at, updated_at, unread_at, pinned, archived FROM tasks WHERE task_id = ?", taskID)
+	if err := row.Scan(&t.WorkspaceKey, &t.WorkspacePath, &t.TaskID, &t.Title,
+		&status, &mode, &model, &t.CreatedAt, &t.UpdatedAt, &unreadAt, &t.Pinned, &t.Archived); err != nil {
+		return Task{}, false, err
+	}
+	t.Status, t.Mode, t.Model = status.String, mode.String, model.String
+	if unreadAt.Valid {
+		v := unreadAt.Int64
+		t.UnreadAt = &v
+	}
+	return t, true, nil
+}
+
+// SetTaskFlags persists the web UI's archive/delete/pin actions to the task
+// index. nil leaves a flag unchanged — the pointer matters because false is a
+// meaningful value (unarchive/unpin/restore). Without this the UI removed the
+// task locally only, and every "deleted" task reappeared after a reload.
+func SetTaskFlags(taskID string, deleted, archived, pinned *bool) error {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(Home(), "v2", "tasks-index.sqlite")+"?_pragma=busy_timeout(3000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	sets, args := []string{}, []any{}
+	if deleted != nil {
+		sets, args = append(sets, "deleted = ?"), append(args, b2i(*deleted))
+	}
+	if archived != nil {
+		sets, args = append(sets, "archived = ?"), append(args, b2i(*archived))
+	}
+	if pinned != nil {
+		sets, args = append(sets, "pinned = ?"), append(args, b2i(*pinned))
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	args = append(args, taskID)
+	_, err = db.Exec("UPDATE tasks SET "+strings.Join(sets, ", ")+" WHERE task_id = ?", args...)
+	return err
+}
+
+// RenameTask changes a task's title and marks it overridden so the engine's
+// auto-titling does not clobber the user's name.
+func RenameTask(taskID, title string) error {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(Home(), "v2", "tasks-index.sqlite")+"?_pragma=busy_timeout(3000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec("UPDATE tasks SET title = ?, title_overridden = 1 WHERE task_id = ?", title, taskID)
+	return err
+}
+
+// SetTaskUnread marks a task unread (unread_at = now) or clears the marker.
+func SetTaskUnread(taskID string, unread bool) error {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(Home(), "v2", "tasks-index.sqlite")+"?_pragma=busy_timeout(3000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if unread {
+		_, err = db.Exec("UPDATE tasks SET unread_at = ? WHERE task_id = ?", time.Now().UnixMilli(), taskID)
+	} else {
+		_, err = db.Exec("UPDATE tasks SET unread_at = NULL WHERE task_id = ?", taskID)
+	}
+	return err
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // Workspaces returns the distinct local workspaces from the task index plus

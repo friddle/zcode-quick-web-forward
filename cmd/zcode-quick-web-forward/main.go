@@ -26,8 +26,8 @@ import (
 	"syscall"
 	"time"
 
-	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
 	"github.com/friddle/zcode-quick-web-forward/internal/browser"
+	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
 	"github.com/friddle/zcode-quick-web-forward/internal/nodejs"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 	"github.com/friddle/zcode-quick-web-forward/internal/runtime"
@@ -557,6 +557,7 @@ func stripFlags(args []string, names ...string) []string {
 	}
 	return out
 }
+
 // remoteLockFile keeps the flock fd alive for the process lifetime: an
 // unreachable os.File is closed by its finalizer, which would silently drop
 // the lock.
@@ -994,6 +995,33 @@ func workspaceListPayload(workspaces []string) []any {
 	return wsList
 }
 
+func boolPtr(b bool) *bool { return &b }
+
+// taskItemPayload renders one task-index row in the phone's expected item
+// shape (also echoed back from archive/delete/pin/rename mutations).
+func taskItemPayload(t zcode.Task) map[string]any {
+	item := map[string]any{
+		"taskId":         t.TaskID,
+		"title":          t.Title, // must be a string or the phone renders [object Object]
+		"workspacePath":  t.WorkspacePath,
+		"workspaceLabel": pathLabel(t.WorkspacePath),
+		"workspaceKind":  "local",
+		"displayStatus":  displayStatus(t.Status),
+		"createdAt":      t.CreatedAt,
+		"updatedAt":      t.UpdatedAt,
+	}
+	if t.Pinned {
+		item["pinned"] = true
+	}
+	if t.Archived {
+		item["archived"] = true
+	}
+	if t.UnreadAt != nil {
+		item["unreadAt"] = *t.UnreadAt
+	}
+	return item
+}
+
 func taskListPayload(kind string, ps *phoneSessions) []any {
 	tasks, err := zcode.ListTasks("", kind)
 	if err != nil {
@@ -1009,28 +1037,12 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 			continue
 		}
 		seen[t.TaskID] = true
-		item := map[string]any{
-			"taskId":          t.TaskID,
-			"title":           t.Title, // must be a string or the phone renders [object Object]
-			"workspacePath":   t.WorkspacePath,
-			"workspaceLabel":  pathLabel(t.WorkspacePath),
-			"workspaceKind":   "local",
-			"displayStatus":   displayStatus(t.Status),
-			"createdAt":       t.CreatedAt,
-			"updatedAt":       t.UpdatedAt,
-		}
-		if t.Pinned {
-			item["pinned"] = true
-		}
-		if t.Archived {
-			item["archived"] = true
-		}
-		if t.UnreadAt != nil {
-			item["unreadAt"] = *t.UnreadAt
-		}
-		out = append(out, item)
+		out = append(out, taskItemPayload(t))
 	}
-	if ps != nil {
+	// Runtime tasks (created this session, not yet in the index) only belong
+	// in the unfiltered list — adding them to pinned/archived/deleted views
+	// would surface unarchived tasks in those views.
+	if ps != nil && kind == "" {
 		for _, rt := range ps.runtimeTaskList() {
 			m, _ := rt.(map[string]any)
 			sid, _ := m["taskId"].(string)
@@ -1649,8 +1661,12 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		switch c.Name {
 		case "listPinnedTaskIds":
 			kind = "pinned"
-		case "listArchivedTaskIds", "listDeletedTaskIds":
+		case "listArchivedTaskIds":
 			kind = "archived"
+		case "listDeletedTaskIds":
+			// Must be the real deleted set: the UI subtracts these ids from
+			// merged views, so answering with archived ids would hide tasks.
+			kind = "deleted"
 		}
 		ids, _ := zcode.ListTaskIDs(kind)
 		anyIDs := make([]any, 0, len(ids))
@@ -1658,6 +1674,56 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 			anyIDs = append(anyIDs, id)
 		}
 		reply(anyIDs)
+	case "zcode-task/deleteTask", "zcode-task/archiveTask", "zcode-task/unarchiveTask",
+		"zcode-task/setTaskPinned", "zcode-task/setTaskUnread", "zcode-task/renameTask":
+		// The phone's task-list actions. Persisting here is what makes them
+		// survive reloads — the UI itself only removes the row optimistically.
+		var a struct {
+			TaskID        string `json:"taskId"`
+			WorkspacePath string `json:"workspacePath"`
+			Title         string `json:"title"`
+			Pinned        *bool  `json:"pinned"`
+			Unread        *bool  `json:"unread"`
+		}
+		switch v := c.Arg.(type) {
+		case map[string]any:
+			raw, _ := json.Marshal(v)
+			_ = json.Unmarshal(raw, &a)
+		case json.RawMessage:
+			_ = json.Unmarshal(v, &a)
+		}
+		if a.TaskID == "" {
+			reply(nil)
+			return true
+		}
+		var err error
+		switch c.Name {
+		case "deleteTask":
+			err = zcode.SetTaskFlags(a.TaskID, boolPtr(true), nil, nil)
+		case "archiveTask":
+			err = zcode.SetTaskFlags(a.TaskID, nil, boolPtr(true), nil)
+		case "unarchiveTask":
+			err = zcode.SetTaskFlags(a.TaskID, nil, boolPtr(false), nil)
+		case "setTaskPinned":
+			err = zcode.SetTaskFlags(a.TaskID, nil, nil, a.Pinned)
+		case "setTaskUnread":
+			err = zcode.SetTaskUnread(a.TaskID, a.Unread != nil && *a.Unread)
+		case "renameTask":
+			err = zcode.RenameTask(a.TaskID, a.Title)
+		}
+		if err != nil {
+			fmt.Printf("zcode: %s %s failed: %v\n", c.Name, a.TaskID, err)
+			reply(nil)
+			return true
+		}
+		fmt.Printf("zcode: task %s %s persisted\n", c.Name, a.TaskID)
+		if t, ok, gerr := zcode.GetTask(a.TaskID); gerr == nil && ok {
+			// Echo the updated row: the UI's .then() uses it as the new state.
+			reply(taskItemPayload(t))
+		} else {
+			reply(nil)
+		}
+		return true
 	case "window-controller/subscribeControllerV4", "window-controller/getSnapshot", "window-controller/getControllerSnapshot":
 		reply([]any{})
 	case "client-scenes/list":
@@ -1671,12 +1737,12 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		// .strict() rejects any extra field, all fields required, and
 		// deliveryProfile must pair with clientMode.
 		reply(map[string]any{
-			"kind":             "hello",
-			"protocolVersion":  3,
-			"connectionId":     uuidNew(),
-			"clientMode":       "web-remote-replayable",
-			"deliveryProfile":  "replayable",
-			"serverTime":       time.Now().UnixMilli(),
+			"kind":            "hello",
+			"protocolVersion": 3,
+			"connectionId":    uuidNew(),
+			"clientMode":      "web-remote-replayable",
+			"deliveryProfile": "replayable",
+			"serverTime":      time.Now().UnixMilli(),
 			"capabilities": map[string]any{
 				"nativeDialogs": true,
 				"localTerminal": true,
@@ -1975,14 +2041,14 @@ func messageRows(tx map[string]any, sessionID string, ordinal func() int) []any 
 		}
 		now := time.Now().UnixMilli()
 		out = append(out, map[string]any{
-			"rowId":              0,
-			"turnId":             "turn-" + sessionID,
-			"createdAt":          now,
-			"createdAtSeq":       1,
-			"kind":               rowKind,
+			"rowId":               0,
+			"turnId":              "turn-" + sessionID,
+			"createdAt":           now,
+			"createdAtSeq":        1,
+			"kind":                rowKind,
 			"assistantResponseId": "ar-" + sessionID,
-			"text":               content,
-			"state":              "complete",
+			"text":                content,
+			"state":               "complete",
 		})
 	}
 	return out
@@ -2076,13 +2142,13 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 		}
 	}
 	return map[string]any{
-		"wireVersion":           3,
-		"kind":                  "complete",
-		"deliveryKind":          "initial",
-		"logicalFrameId":        uuidNew(),
-		"logicalFrameOrdinal":   1,
-		"topic":                 "sessions-index/local",
-		"subscriptionId":        convSub,
+		"wireVersion":         3,
+		"kind":                "complete",
+		"deliveryKind":        "initial",
+		"logicalFrameId":      uuidNew(),
+		"logicalFrameOrdinal": 1,
+		"topic":               "sessions-index/local",
+		"subscriptionId":      convSub,
 		"frame": map[string]any{
 			"topic":          "sessions-index/local",
 			"subscriptionId": convSub,
@@ -2165,14 +2231,14 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 					map[string]any{
 						"op": "row.appended",
 						"row": map[string]any{
-							"rowId":           1,
-							"turnId":          "turn-" + sessionID,
-							"createdAt":       now,
-							"createdAtSeq":    1,
-							"kind":            "assistantText",
+							"rowId":               1,
+							"turnId":              "turn-" + sessionID,
+							"createdAt":           now,
+							"createdAtSeq":        1,
+							"kind":                "assistantText",
 							"assistantResponseId": "ar-" + sessionID,
-							"text":            text,
-							"state":           "streaming",
+							"text":                text,
+							"state":               "streaming",
 						},
 					},
 				},
@@ -2204,14 +2270,14 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 		"seq":             1,
 		"revision":        0,
 		"control": map[string]any{
-			"phase":           "running",
-			"sessionEnded":    false,
-			"canStop":         false,
-			"stopState":       "idle",
-			"stopTargetKind":  "assistant",
-			"activeWorks":     []any{},
-			"lastError":       nil,
-			"apiRetry":        nil,
+			"phase":          "running",
+			"sessionEnded":   false,
+			"canStop":        false,
+			"stopState":      "idle",
+			"stopTargetKind": "assistant",
+			"activeWorks":    []any{},
+			"lastError":      nil,
+			"apiRetry":       nil,
 		},
 		"availability": map[string]any{
 			"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
@@ -2236,15 +2302,15 @@ func conversationSnapshotFrame(sessionID, workspace, convSub, deliveryKind strin
 				"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0,
 			},
 		},
-		"queue":              map[string]any{"items": []any{}, "autoDrain": false},
+		"queue":               map[string]any{"items": []any{}, "autoDrain": false},
 		"pendingInteractions": []any{},
 		"pendingCommands":     []any{},
 		"backgroundWorks":     []any{},
 		"subagents": map[string]any{
 			"revision": 0, "childSessionIds": []any{}, "running": []any{}, "endedTotal": 0,
 		},
-		"goal":                  nil,
-		"plan":                  nil,
+		"goal":                   nil,
+		"plan":                   nil,
 		"workspaceHookAdmission": nil,
 		"rows": map[string]any{
 			"window":     rows,
@@ -2533,9 +2599,9 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 	case "interaction/browserExecute":
 		// Execute a browser command on the browser host.
 		var p struct {
-			RequestID  string         `json:"requestId"`
-			BrowserID  string         `json:"browserId"`
-			Command    map[string]any `json:"command"`
+			RequestID string         `json:"requestId"`
+			BrowserID string         `json:"browserId"`
+			Command   map[string]any `json:"command"`
 		}
 		if json.Unmarshal(ev.Params, &p) != nil {
 			return
@@ -2636,7 +2702,7 @@ func providerPayload() []any {
 			endpoints = map[string]any{
 				"baseURL": p.BaseURL,
 				"paths": map[string]any{
-					"anthropic":        "/api/anthropic",
+					"anthropic":         "/api/anthropic",
 					"openai-compatible": "/v1/chat/completions",
 				},
 			}
