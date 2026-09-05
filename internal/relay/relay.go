@@ -206,7 +206,20 @@ func keepAlive(ctx context.Context, ws *client, sid string, h Handler) {
 		ws.send(relayMsg{Type: "data", Payload: mustJSON(payload)})
 	}
 	var lastTerminal string
+	// Liveness watchdog: the relay can silently stop routing a device (no
+	// FIN, no data — e.g. after the phone reconnected elsewhere) while the
+	// TCP socket stays open. A read stuck on such a half-dead session never
+	// returns, so the Run loop never reconnects and every later pairing
+	// attempt times out ("Desktop did not respond"). If nothing at all
+	// arrives for 30s — heartbeats ack every 10s — tear the socket down.
+	watchdog := time.AfterFunc(30*time.Second, func() {
+		fmt.Fprintln(os.Stderr, "webremote: relay silent for 30s, reconnecting")
+		ws.close()
+	})
+	defer watchdog.Stop()
+	_ = watchdog // kept alive via resets below
 	ws.readLoop(func(msg relayMsg) bool {
+		watchdog.Reset(30 * time.Second)
 		if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
 			b, _ := json.Marshal(msg)
 			fmt.Fprintf(os.Stderr, "webremote debug << %s\n", b)

@@ -7,7 +7,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
@@ -18,7 +21,7 @@ import (
 // subscription ids so we can push conversation/sessions-index frames. The
 // subscriptionId must be stable across subscribe ack / pushed frames / resync.
 type phoneSessions struct {
-	mu sync.Mutex
+	mu debugMutex
 	// sessionId currently open in the phone (minted by createSession ack)
 	sessionId string
 	// workspacePath of the current bridge
@@ -647,4 +650,30 @@ func (p *phoneSessions) modelCfg() map[string]any {
 		"followupMode":  "queue",
 		"mode":          mode,
 	}
+}
+
+// debugMutex wraps sync.Mutex recording the holder's stack, so a wedged
+// phoneSessions lock can be diagnosed from a goroutine dump or /tmp log
+// instead of silently freezing the phone bridge.
+type debugMutex struct {
+	mu     sync.Mutex
+	holder atomic.Value // string: holder stack snapshot
+}
+
+func (d *debugMutex) Lock() {
+	t0 := time.Now()
+	d.mu.Lock()
+	b := make([]byte, 4096)
+	n := runtime.Stack(b, false)
+	d.holder.Store(string(b[:n]))
+	if wait := time.Since(t0); wait > 2*time.Second {
+		if h, ok := d.holder.Load().(string); ok {
+			fmt.Fprintf(os.Stderr, "zcode: phoneSessions.mu waited %v (previous holder below)\n%s", wait, h)
+		}
+	}
+}
+
+func (d *debugMutex) Unlock() {
+	d.holder.Store("")
+	d.mu.Unlock()
 }
