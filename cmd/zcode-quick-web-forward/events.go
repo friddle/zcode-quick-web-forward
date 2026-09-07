@@ -273,6 +273,21 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			b, _ := json.Marshal(stateUpdatedFrame(ps, phoneSid, phase, convSub, ps.nextOrdinal()))
 			engine.SendChannelEvent(convID, b, sender.send)
 		}
+	case "session/event":
+		// Rich event stream pushed after session/subscribe: model.streaming
+		// carries REAL text/reasoning/tool-input deltas, tool.updated carries
+		// real results — the content parity channel (telemetry only counts).
+		var p struct {
+			Session string `json:"sessionId"`
+		}
+		if json.Unmarshal(ev.Params, &p) != nil || p.Session == "" {
+			return
+		}
+		rawParams := map[string]any{}
+		_ = json.Unmarshal(ev.Params, &rawParams)
+		if phoneSid := ps.phoneFor(p.Session); phoneSid != "" {
+			handleSessionEvent(engine, sender.send, ps, p.Session, phoneSid, rawParams)
+		}
 	case "v4/telemetry/event":
 		// Telemetry drives everything the phone sees while a turn RUNS: tool
 		// lifecycle becomes live tool cards, stream.chunk counters become
@@ -367,6 +382,12 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				if ps.turnRunningFor(engSid) || engClient == nil {
 					return
 				}
+				// Serial mode first: a queued NEW task may be waiting; only
+				// drain the same-conversation queue when none is.
+				if ps.queuedGlobalCount() > 0 {
+					dispatchGlobalQueue(engClient, engine, sender.send, ps)
+					return
+				}
 				q, ok := ps.popQueuedSend(psid)
 				if !ok {
 					return
@@ -376,6 +397,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					return
 				}
 				ps.setTurnRunning(engSid, true)
+				engClient.SubscribeSession(engSid)
 				if zcode.TaskExists(psid) {
 					_ = zcode.SetTaskStatus(psid, "running")
 				}
@@ -385,22 +407,22 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				indexID := ps.indexListener
 				ps.mu.Unlock()
 				now := time.Now().UnixMilli()
-				turnID := "turn-" + psid
+				turnID := ps.beginTurn(psid)
 				hdr := map[string]any{
-					"rowId":        1,
+					"rowId":        ps.nextRowID(),
 					"turnId":       turnID,
 					"createdAt":    now,
-					"createdAtSeq": 1,
+					"createdAtSeq": now,
 					"kind":         "turnHeader",
 					"origin":       "userInput",
 					"state":        "running",
 					"startedAt":    now,
 				}
 				row := map[string]any{
-					"rowId":        2,
+					"rowId":        ps.nextRowID(),
 					"turnId":       turnID,
 					"createdAt":    now,
-					"createdAtSeq": 2,
+					"createdAtSeq": now,
 					"kind":         "userInput",
 					"text":         q.text,
 					"origin":       "realUser",
@@ -419,6 +441,14 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					engine.SendChannelEvent(indexID, ib, sender.send)
 				}
 			}(p.Session, phoneSid)
+			// Also give the serial queue a (later) chance in case the
+			// per-conversation drain above didn't pick anything up.
+			go func() {
+				time.Sleep(4 * time.Second)
+				if !ps.turnRunningFor(p.Session) {
+					dispatchGlobalQueue(engClient, engine, sender.send, ps)
+				}
+			}()
 		}
 	}
 }

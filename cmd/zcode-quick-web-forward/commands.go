@@ -118,6 +118,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		}
 		ps.setSession(sid, ws)
 		ps.setModelConfig(provider, model, "")
+		engClient.SubscribeSession(sid)
 		title := req.Envelope.Payload.FirstInput.Text
 		if title == "" {
 			title = req.Envelope.Payload.Text
@@ -150,11 +151,62 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		// turn immediately — the text is the user's first message, not just a
 		// title. Dropping it left the phone stuck on "sending".
 		if typedTitle != "" && sid != "" {
+			// Serial execution (多任务排队): while ANOTHER task's turn is
+			// running, a new task waits — its text dispatches automatically
+			// when the running turn ends (see dispatchGlobalQueue).
+			if ps.anyTurnRunning() {
+				ps.enqueueGlobalTask(globalQueuedTask{engineSid: sid, phoneSid: sid, text: typedTitle, queuedAt: time.Now().UnixMilli()})
+				if err := zcode.UpsertTask(ws, ws, sid, title, "queued"); err != nil {
+					fmt.Printf("zcode: queued task persist failed: %v\n", err)
+				}
+				pushWorkspaceList(send, ps)
+				ack["userTextSent"] = typedTitle
+				ack["queuedTask"] = true
+				ack["result"] = map[string]any{
+					"type": "createSession", "sessionId": sid,
+				}
+				fmt.Printf("zcode: task QUEUED session=%s (serial mode, %d waiting) text=%q\n", sid, ps.queuedGlobalCount(), typedTitle)
+				// Push a queued bubble so the open conversation shows the wait.
+				go func(sid, text string) {
+					time.Sleep(150 * time.Millisecond)
+					now := time.Now().UnixMilli()
+					turnID := ps.beginTurn(sid)
+					hdr := map[string]any{
+						"rowId": ps.nextRowID(), "turnId": turnID,
+						"createdAt": now, "createdAtSeq": now,
+						"kind": "turnHeader", "origin": "userInput",
+						"executionKind": "agent", "state": "running", "startedAt": now,
+					}
+					row := map[string]any{
+						"rowId": ps.nextRowID(), "turnId": turnID,
+						"createdAt": now, "createdAtSeq": now,
+						"kind": "userInput", "text": text, "origin": "realUser",
+					}
+					note := map[string]any{
+						"rowId": ps.nextRowID(), "turnId": turnID,
+						"createdAt": now + 1, "createdAtSeq": now + 1,
+						"kind": "assistantText", "assistantResponseId": "queue-note-" + sid,
+						"text": "⏳ 已排队 — 等待上一个任务完成后自动开始", "state": "complete",
+					}
+					rows := append(ps.snapshotRows(), hdr, row, note)
+					ps.rememberRows(rows)
+					ps.mu.Lock()
+					convID, convSub, convWs := ps.convListener, ps.convSubscription, ps.workspacePath
+					ps.mu.Unlock()
+					if convID > 0 {
+						frame := conversationSnapshotFrame(ps, sid, convWs, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")
+						b, _ := json.Marshal(frame)
+						engine.SendChannelEvent(convID, b, send)
+					}
+				}(sid, typedTitle)
+				return ack
+			}
 			if !engClient.SendMessage(sid, typedTitle) {
 				ack["status"] = "failed"
 				ack["message"] = "engine stdin closed"
 			} else {
 				ps.setTurnRunning(sid, true)
+				engClient.SubscribeSession(sid)
 				fmt.Printf("zcode: engine session/send %s (firstInput) text=%q\n", sid, typedTitle)
 				ack["userTextSent"] = typedTitle
 			}
@@ -238,6 +290,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					ack["message"] = "engine stdin closed"
 				}
 				ps.setTurnRunning(engineSid, true)
+				engClient.SubscribeSession(engineSid)
 				fmt.Printf("zcode: engine session/send %s (phone=%s) text=%q\n", engineSid, sid, text)
 				ack["userTextSent"] = text
 				if cmdID := req.Envelope.CommandID; cmdID != "" {
@@ -315,7 +368,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				now := time.Now().UnixMilli()
 				rowID := ps.nextRowID()
 				marker := map[string]any{
-					"rowId": rowID, "turnId": "turn-" + sessionID,
+					"rowId": rowID, "turnId": ps.currentTurnID(sessionID),
 					"entityId":  fmt.Sprintf("model-change:%d:%s/%s->%s/%s", now, fromP, fromM, toP, toM),
 					"createdAt": now, "createdAtSeq": rowID,
 					"kind": "timelineMarker", "lane": "lightBoundary",
@@ -362,6 +415,28 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			ps.mu.Unlock()
 			ack["modeChanged"] = mode
 		}
+	case "stop", "interrupt", "pause":
+		// The phone's 停止/暂停 controls: interrupt the running turn via the
+		// engine's session/stop (the desktop's canonical stop path). The
+		// interrupted turn arrives as turn.terminal status interrupted and the
+		// regular terminal path syncs state/queue.
+		sid := req.Envelope.SessionID
+		if sid == "" {
+			sid, _ = ps.get()
+		}
+		engSid := ps.engineFor(sid)
+		stopped := false
+		if engSid != "" && engClient != nil {
+			stopped = engClient.StopSession(engSid)
+		}
+		ack["status"] = "accepted"
+		ack["result"] = map[string]any{"type": "inputAccepted", "delivery": "startNow"}
+		if stopped {
+			fmt.Printf("zcode: stop requested session=%s (engine=%s)\n", sid, engSid)
+		} else {
+			fmt.Printf("zcode: stop requested session=%s — no live engine session\n", sid)
+		}
+
 	case "deleteSession":
 		// The client deletes a task by sending this conversation command.
 		// Close the engine session and drop the task from the index + runtime
@@ -507,6 +582,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		sid, _ := res["sessionId"].(string)
 		ps.setSession(sid, ws)
 		ps.setModelConfig(provider, model, "")
+		engClient.SubscribeSession(sid)
 		ack["result"] = map[string]any{"type": "createSelectionSideSession", "sessionId": sid}
 		fmt.Printf("zcode: side session created %s\n", sid)
 	case "resolveInteraction":
@@ -692,7 +768,7 @@ func pushAssistantNote(engine *relay.BridgeEngine, send func(any), ps *phoneSess
 	now := time.Now().UnixMilli()
 	rowID := ps.nextRowID()
 	row := map[string]any{
-		"rowId": rowID, "turnId": "turn-" + phoneSid,
+		"rowId": rowID, "turnId": ps.currentTurnID(phoneSid),
 		"createdAt": now, "createdAtSeq": rowID,
 		"kind": "assistantText", "assistantResponseId": "note-" + phoneSid,
 		"text": text, "state": "complete",
@@ -715,6 +791,31 @@ func pushAssistantNote(engine *relay.BridgeEngine, send func(any), ps *phoneSess
 // goroutine only waits for that and then lands the compact timelineMarker row
 // (marker.type compact + sourceCommandId) that reconciles the client's
 // optimistic command.
+// dispatchGlobalQueue starts the next queued task when a turn ends — the
+// serial execution mode (一个任务跑完,下一个自动开始). Called from the
+// turn.terminal path after the per-conversation queue drain.
+func dispatchGlobalQueue(engClient *enginepkg.Client, engine *relay.BridgeEngine, send func(any), ps *phoneSessions) {
+	if engClient == nil || ps.anyTurnRunning() {
+		return
+	}
+	t, ok := ps.popGlobalTask()
+	if !ok {
+		return
+	}
+	if !engClient.SendMessage(t.engineSid, t.text) {
+		ps.enqueueGlobalTask(t) // engine gone — put it back
+		fmt.Printf("zcode: dispatch failed (stdin closed), task re-queued session=%s\n", t.phoneSid)
+		return
+	}
+	ps.setTurnRunning(t.engineSid, true)
+	engClient.SubscribeSession(t.engineSid)
+	if err := zcode.SetTaskStatus(t.phoneSid, "running"); err != nil {
+		fmt.Printf("zcode: queued task status flip failed: %v\n", err)
+	}
+	pushWorkspaceList(send, ps)
+	fmt.Printf("zcode: dispatched QUEUED task session=%s text=%q (%d still waiting)\n", t.phoneSid, t.text, ps.queuedGlobalCount())
+}
+
 func runCompactTurn(engClient *enginepkg.Client, engine *relay.BridgeEngine, send func(any), ps *phoneSessions, engineSid, phoneSid, commandID string) {
 	startedAt := time.Now().UnixMilli()
 	res, err := engClient.Call("session/compact", map[string]any{
@@ -756,7 +857,7 @@ func runCompactTurn(engClient *enginepkg.Client, engine *relay.BridgeEngine, sen
 	}
 	rowID := ps.nextRowID()
 	marker := map[string]any{
-		"rowId": rowID, "turnId": "turn-" + phoneSid,
+		"rowId": rowID, "turnId": ps.currentTurnID(phoneSid),
 		"entityId":  "compact:" + commandID,
 		"createdAt": endedAt, "createdAtSeq": rowID,
 		"kind": "timelineMarker", "sourceCommandId": commandID,

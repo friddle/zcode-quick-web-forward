@@ -85,8 +85,8 @@ type phoneSessions struct {
 	// answeredCmds remembers recent conversation-command acks by commandId.
 	// The phone transport re-delivers a command when its ack races the client
 	// retry window; a repeat must replay the ack, never execute again.
-	answeredCmds   map[string]map[string]any
-	answeredOrder  []string
+	answeredCmds  map[string]map[string]any
+	answeredOrder []string
 	// workspaces is the bridge's workspace list, used to rebuild the phone's
 	// workspace/task landing list when tasks change.
 	workspaces []string
@@ -104,6 +104,14 @@ type phoneSessions struct {
 	// 帧断档 and re-subscribes, wiping freshly applied rows) — every snapshot
 	// resets to 1 and every deltas frame continues from there. Guarded by mu.
 	convoSeq int
+	// turnSeqs/curTurn track the per-phone-session turn counter and the live
+	// turn's row turnId (multi-turn sessions need unique turn ids or the
+	// client's timeline merges every turn into one segment). Guarded by mu.
+	turnSeqs map[string]int
+	curTurn  map[string]string
+	// globalQueue holds NEW tasks waiting for the previous task's turn to end
+	// (serial execution). Guarded by mu.
+	globalQueue []globalQueuedTask
 }
 
 // convoFrameSeq returns the (fromSeq, toSeq) for one conversation frame.
@@ -166,15 +174,15 @@ func (p *phoneSessions) setWorkspaces(ws []string) {
 
 // pendingInteraction is one engine question awaiting a user answer.
 type pendingInteraction struct {
-	InteractionID string
-	EngineReqID   json.RawMessage
-	SessionID     string
-	ToolCallID    string
-	Prompt        string
-	Questions     []map[string]any // {question, options:[{optionId,label}]}
-	Input         map[string]any   // the engine's original request input (questions verbatim)
-	RowID         int              // conversation row showing the question
-	IsPlanApproval bool            // ExitPlanMode-style card (approve/reject)
+	InteractionID  string
+	EngineReqID    json.RawMessage
+	SessionID      string
+	ToolCallID     string
+	Prompt         string
+	Questions      []map[string]any // {question, options:[{optionId,label}]}
+	Input          map[string]any   // the engine's original request input (questions verbatim)
+	RowID          int              // conversation row showing the question
+	IsPlanApproval bool             // ExitPlanMode-style card (approve/reject)
 }
 
 func (p *phoneSessions) recordListener(kind string, id int) {
@@ -370,6 +378,108 @@ func (p *phoneSessions) snapshotRows() []any {
 	out := make([]any, len(p.lastRows))
 	copy(out, p.lastRows)
 	return out
+}
+
+// appendRemembered extends the remembered conversation rows (send bubbles,
+// live tool cards, streaming text) without discarding earlier rows — recovery
+// snapshots replay these so a mid-turn subscriber sees the turn so far.
+func (p *phoneSessions) appendRemembered(rows []any) {
+	p.mu.Lock()
+	p.lastRows = append(p.lastRows, rows...)
+	p.mu.Unlock()
+}
+
+// rememberUpsert replaces a remembered row in place by rowId (live tool cards
+// flip running→success / gain output after the fact).
+func (p *phoneSessions) rememberUpsert(row map[string]any) {
+	id, _ := row["rowId"].(int)
+	p.mu.Lock()
+	for i, r := range p.lastRows {
+		if m, ok := r.(map[string]any); ok {
+			if mid, _ := m["rowId"].(int); mid == id {
+				p.lastRows[i] = row
+				break
+			}
+		}
+	}
+	p.mu.Unlock()
+}
+
+// beginTurn mints the phone-side row turnId for a new turn
+// ("turn-<shortSid>-<n>", matching the transcript mapper's per-turn
+// convention) and records it as the session's live turn.
+func (p *phoneSessions) beginTurn(phoneSid string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.turnSeqs == nil {
+		p.turnSeqs = map[string]int{}
+	}
+	p.turnSeqs[phoneSid]++
+	id := fmt.Sprintf("turn-%s-%d", shortSessionID(phoneSid), p.turnSeqs[phoneSid])
+	if p.curTurn == nil {
+		p.curTurn = map[string]string{}
+	}
+	p.curTurn[phoneSid] = id
+	return id
+}
+
+// currentTurnID returns the live turn's row turnId for a phone session so
+// live-streamed rows attach to the turn the phone can see.
+func (p *phoneSessions) currentTurnID(phoneSid string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if t, ok := p.curTurn[phoneSid]; ok && t != "" {
+		return t
+	}
+	return "turn-" + phoneSid
+}
+
+// globalQueuedTask is a NEW task waiting for the previous task's turn to end —
+// the serial execution mode (多任务排队,一个跑完才跑下一个).
+type globalQueuedTask struct {
+	engineSid string
+	phoneSid  string
+	text      string
+	queuedAt  int64
+}
+
+// enqueueGlobalTask parks a new task while another turn is running.
+func (p *phoneSessions) enqueueGlobalTask(t globalQueuedTask) {
+	p.mu.Lock()
+	p.globalQueue = append(p.globalQueue, t)
+	p.mu.Unlock()
+}
+
+// popGlobalTask dequeues the next waiting task.
+func (p *phoneSessions) popGlobalTask() (globalQueuedTask, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.globalQueue) == 0 {
+		return globalQueuedTask{}, false
+	}
+	t := p.globalQueue[0]
+	p.globalQueue = p.globalQueue[1:]
+	return t, true
+}
+
+// anyTurnRunning reports whether ANY engine session currently has a turn in
+// flight (the serial queue's busy signal).
+func (p *phoneSessions) anyTurnRunning() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, running := range p.runningSids {
+		if running {
+			return true
+		}
+	}
+	return false
+}
+
+// queuedGlobalCount reports the pending serial-queue depth.
+func (p *phoneSessions) queuedGlobalCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.globalQueue)
 }
 
 // runtimeTask adds a session created by the engine so it shows in the phone.

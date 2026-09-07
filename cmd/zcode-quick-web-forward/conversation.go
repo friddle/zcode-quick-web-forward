@@ -37,37 +37,47 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 	// history so the conversation is restored, not left empty.
 	if (c.Name == "resyncConversationV4" || c.Name == "resyncSessionsIndexV4" ||
 		c.Name == "subscribeConversationV4") && (c.Name != "subscribeSessionsIndexV4") {
-	// The recovery must target the session THE CLIENT ASKED about, not the
-	// bridge's "current" session: the phone juggles several conversations
-	// (e.g. deleting a stale draft) and a stale resync would otherwise
-	// clobber the freshly opened one.
-	var subReq struct {
-		SessionID string `json:"sessionId"`
-	}
-	if raw, ok := c.Arg.(json.RawMessage); ok {
-		_ = json.Unmarshal(raw, &subReq)
-	} else if b, err := json.Marshal(c.Arg); err == nil {
-		_ = json.Unmarshal(b, &subReq)
-	}
+		// The recovery must target the session THE CLIENT ASKED about, not the
+		// bridge's "current" session: the phone juggles several conversations
+		// (e.g. deleting a stale draft) and a stale resync would otherwise
+		// clobber the freshly opened one.
+		var subReq struct {
+			SessionID string `json:"sessionId"`
+		}
+		if raw, ok := c.Arg.(json.RawMessage); ok {
+			_ = json.Unmarshal(raw, &subReq)
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			_ = json.Unmarshal(b, &subReq)
+		}
 		sid := subReq.SessionID
 		if sid == "" {
 			sid, _ = ps.get()
 		}
 		if sid != "" {
-			rows := []any{}
-			if engClient != nil {
-				if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {
-					rows = messageRows(tx, sid, ps.nextOrdinal)
-					fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
-				} else if stored := zcode.LoadSessionTranscript(sid); stored != nil {
-					// Engine session gone (daemon restart): restore history
-					// from the transcript snapshot saved at the last turn end.
-					// (Continuing the task rebuilds a live session on send.)
-					rows = messageRows(stored, sid, ps.nextOrdinal)
-					fmt.Printf("zcode: recovery from transcript session=%s rows=%d\n", sid, len(rows))
-				} else {
-					fmt.Printf("zcode: recovery read failed: %v (no transcript)\n", err)
+			// Recovery rows: prefer the REMEMBERED rows — they include
+			// everything pushed so far this turn (send bubbles, live tool
+			// cards, streamed text, queue notes). The engine transcript lags
+			// until turn.terminal, so reading it mid-turn makes a subscriber
+			// that opens during a running task see only history. Transcripts
+			// are the fallback for after a daemon restart (memory empty).
+			rows := ps.snapshotRows()
+			if len(rows) == 0 {
+				if engClient != nil {
+					if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {
+						rows = messageRows(tx, sid, ps.nextOrdinal)
+						fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
+					} else if stored := zcode.LoadSessionTranscript(sid); stored != nil {
+						// Engine session gone (daemon restart): restore history
+						// from the transcript snapshot saved at the last turn end.
+						// (Continuing the task rebuilds a live session on send.)
+						rows = messageRows(stored, sid, ps.nextOrdinal)
+						fmt.Printf("zcode: recovery from transcript session=%s rows=%d\n", sid, len(rows))
+					} else {
+						fmt.Printf("zcode: recovery read failed: %v (no transcript)\n", err)
+					}
 				}
+			} else {
+				fmt.Printf("zcode: recovery from remembered rows session=%s rows=%d\n", sid, len(rows))
 			}
 			// workspacePath: prefer the one persisted for this task in sqlite.
 			ws := ps.workspacePath

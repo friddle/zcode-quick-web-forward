@@ -644,18 +644,21 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					indexID := ps.indexListener
 					ps.mu.Unlock()
 					now := time.Now().UnixMilli()
-					turnID := "turn-" + sid
+					turnID := ps.beginTurn(sid)
 					if cmdID == "" {
 						cmdID = "cmd-" + shortSessionID(sid)
 					}
 					// Immediate send feedback, mirroring the desktop: a running
 					// turn header (the "已工作" indicator) plus the user's
 					// message row, and the projection flipped to running.
+					// Row ids are real unique ids and the rows EXTEND the
+					// remembered set — a mid-turn subscriber must see prior
+					// turns plus this bubble in the recovery snapshot.
 					hdr := map[string]any{
-						"rowId":           1,
+						"rowId":           ps.nextRowID(),
 						"turnId":          turnID,
 						"createdAt":       now,
-						"createdAtSeq":    1,
+						"createdAtSeq":    now,
 						"kind":            "turnHeader",
 						"origin":          "userInput",
 						"executionKind":   "agent",
@@ -664,10 +667,10 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 						"sourceCommandId": cmdID,
 					}
 					row := map[string]any{
-						"rowId":               2,
+						"rowId":               ps.nextRowID(),
 						"turnId":              turnID,
 						"createdAt":           now,
-						"createdAtSeq":        2,
+						"createdAtSeq":        now,
 						"kind":                "userInput",
 						"text":                txt,
 						"origin":              "realUser",
@@ -677,8 +680,9 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					if clientID != "" {
 						row["clientId"] = clientID
 					}
-					b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{hdr, row}, ps.collabMode, "running"))
-					ps.rememberRows([]any{hdr, row})
+					rows := append(ps.snapshotRows(), hdr, row)
+					b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running"))
+					ps.rememberRows(rows)
 					engine.SendChannelEvent(convID, b, send)
 					// The desktop's running-state control patch: stoppable,
 					// primaryTurn active work, follow-ups route to the queue.
