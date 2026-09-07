@@ -316,13 +316,11 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 // "recovery" (resync). ordinal must strictly increase per subscription.
 // phaseForSession resolves the projection phase for a session: the live
 // session counts as running only while a turn is in flight, anything else
-// falls back to its persisted task status.
+// falls back to its persisted task status. (No manual ps.mu section here —
+// turnRunningFor/engineFor lock internally; nesting them self-deadlocks.)
 func phaseForSession(ps *phoneSessions, sessionID string) string {
 	if ps != nil {
-		ps.mu.Lock()
-		live := ps.turnRunningFor(ps.engineFor(sessionID))
-		ps.mu.Unlock()
-		if live {
+		if ps.turnRunningFor(ps.engineFor(sessionID)) {
 			return "running"
 		}
 	}
