@@ -399,3 +399,21 @@ func jsonRawMarshal(v any) json.RawMessage {
 	}
 	return b
 }
+
+// ChannelCallBytes serializes a decoded call back to wire form so it can be
+// forwarded to another endpoint speaking the same channel protocol (the
+// official host's service port).
+func ChannelCallBytes(c *ChannelCall) []byte {
+	var arg any
+	if c.Arg != nil {
+		arg = c.Arg
+	}
+	return buildMessage([]any{c.Kind, c.ID, c.ChannelName, c.Name}, arg)
+}
+
+// SendRawChannelBytes pushes raw channel-protocol bytes to the phone as
+// rpc-frames (used by the official-host bridge: the host's service-port
+// responses are already valid channel messages for the client).
+func (e *BridgeEngine) SendRawChannelBytes(b []byte, send func(any)) {
+	e.sendChannelBytes(b, send)
+}

@@ -82,7 +82,13 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, engClient, termSvc)
+			onCall := func(c *relay.ChannelCall) {
+				if officialHostActive() && forwardCallToOfficialHost(c) {
+					return // answered by the official host's service port
+				}
+				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
+			}
+			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, engClient, termSvc, onCall)
 		},
 	})
 }
@@ -122,7 +128,7 @@ func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
 	}
 }
 
-func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) {
+func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service, onCall func(*relay.ChannelCall)) {
 	var p struct {
 		ZcodeType string `json:"zcode_type"`
 		RequestID string `json:"requestId"`
@@ -131,7 +137,10 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		return
 	}
 	if p.ZcodeType == "rpc-frame" || p.ZcodeType == "rpc-frame-ack" {
-		engine.HandlePhonePayload(payload, reply, handleChannelCall(engine, reply, workspaces, ps, engClient, termSvc))
+		if onCall == nil {
+			onCall = handleChannelCall(engine, reply, workspaces, ps, engClient, termSvc)
+		}
+		engine.HandlePhonePayload(payload, reply, onCall)
 		return
 	}
 	if p.RequestID == "" {

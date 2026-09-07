@@ -162,7 +162,25 @@ func doRemoteOpts(o commonOpts) {
 			}
 		}()
 	}
-	startEngine()
+	// Official-host mode: the host spawns and owns the engine itself
+	// (ZCODE_AGENT_SERVER_COMMAND); our engine supervision stays idle.
+	restartEngineFn := startEngine
+	var officialStarted bool
+	if os.Getenv("ZCODE_OFFICIAL_HOST") != "" {
+		cache, _ := os.UserCacheDir()
+		mid := loadOrCreateDeviceMid(filepath.Join(cache, "zcode-quick-web-forward"))
+		defWS := ""
+		if len(workspaces) > 0 {
+			defWS = workspaces[0]
+		}
+		officialStarted = maybeStartOfficialHost(engine, node, scriptPath(rt), defWS, mid)
+		if officialStarted {
+			restartEngineFn = officialRestartEngine
+		}
+	}
+	if !officialStarted {
+		startEngine()
+	}
 
 	go func() {
 		if err := <-engineExited; err != nil && atomic.LoadInt32(&shuttingDown) == 0 {
@@ -173,7 +191,7 @@ func doRemoteOpts(o commonOpts) {
 		}
 	}()
 
-	go startWebRemote(origin, region, engine, sender, startEngine, workspaces, ps, engClient, termSvc)
+	go startWebRemote(origin, region, engine, sender, restartEngineFn, workspaces, ps, engClient, termSvc)
 	go watchStoredWorkspaces(o, ps, func(ws []string) {
 		sender.send(workspaceListPush(ws, ps))
 	})

@@ -31,15 +31,17 @@ type Host struct {
 	mu     sync.Mutex
 	stdin  *json.Encoder
 	stdout *bufio.Reader
+	exited chan struct{} // closed once cmd.Wait reaps the process
 
-	OnParentPort func(msg map[string]any)
-	OnPortData   func(portID string, value any)
-	OnLog        func(line string)
+	OnParentPort  func(msg map[string]any)
+	OnPortData    func(portID string, value any)
+	OnRawPortData func(portID string, b []byte)
+	OnLog         func(line string)
 }
 
 // Start launches `node shim.mjs` in dir. Node must be >= 18.
 func Start(nodeBin, dir string) (*Host, error) {
-	h := &Host{}
+	h := &Host{exited: make(chan struct{})}
 	cmd := exec.Command(nodeBin, "shim.mjs")
 	cmd.Dir = dir
 	stdin, err := cmd.StdinPipe()
@@ -57,6 +59,10 @@ func Start(nodeBin, dir string) (*Host, error) {
 	h.cmd = cmd
 	h.stdin = json.NewEncoder(stdin)
 	h.stdout = bufio.NewReaderSize(stdout, 1<<20)
+	go func() {
+		_ = cmd.Wait() // reap; without this Alive() lies and the child zombifies
+		close(h.exited)
+	}()
 	go h.readLoop()
 	return h, nil
 }
@@ -71,9 +77,8 @@ func (w stderrWriter) Write(p []byte) (int, error) {
 }
 
 func (h *Host) readLoop() {
-	r := bufio.NewReader(h.stdout)
 	for {
-		line, err := r.ReadString('\n')
+		line, err := h.stdout.ReadString('\n')
 		if line != "" {
 			var m struct {
 				T   string         `json:"t"`
@@ -94,6 +99,10 @@ func (h *Host) readLoop() {
 					}
 					if h.OnPortData != nil {
 						h.OnPortData(m.ID, v)
+					}
+				case "raw":
+					if raw, err := base64.StdEncoding.DecodeString(m.B64); err == nil && h.OnRawPortData != nil {
+						h.OnRawPortData(m.ID, raw)
 					}
 				}
 			}
@@ -132,12 +141,28 @@ func (h *Host) PortData(portID string, value any) {
 }
 
 // Alive reports whether the host process is still running.
-func (h *Host) Alive() bool { return h.cmd != nil && h.cmd.ProcessState == nil }
+func (h *Host) Alive() bool {
+	select {
+	case <-h.exited:
+		return false
+	default:
+		return h.cmd != nil
+	}
+}
+
+// PortOpen marks an emulated MessagePort started, flushing queued messages to
+// the host's listener (the shim queues deliveries until start()).
+func (h *Host) PortOpen(portID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_ = h.stdin.Encode(map[string]any{"t": "port-open", "id": portID})
+}
 
 func (h *Host) Stop() {
 	if h.cmd != nil && h.cmd.Process != nil {
 		_ = h.cmd.Process.Kill()
 	}
+	<-h.exited
 }
 
 // Env gathers the environment for the host process: engine command override,
@@ -160,4 +185,17 @@ func Env(engineCommand string, engineArgs []string, engineCwd, zcodeHome, label 
 func mustJSON(v []string) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// RawPortData delivers raw bytes to the emulated MessagePort. The official
+// host's service port speaks the binary channel serialization (the same
+// wire form as the relay's rpc-frames), not JSON.
+func (h *Host) RawPortData(portID string, b []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_ = h.stdin.Encode(map[string]any{
+		"t":   "raw",
+		"id":  portID,
+		"b64": base64.StdEncoding.EncodeToString(b),
+	})
 }

@@ -32,6 +32,10 @@ class FakePort extends EventEmitter {
     this.on('message', () => {}); // listener installed by host later
   }
   postMessage(data, transfer) {
+    if (data instanceof Uint8Array) {
+      write({ t: 'raw', id: this._id, b64: Buffer.from(data).toString('base64') });
+      return;
+    }
     write({ t: 'port', id: this._id, b64: enc(data) });
   }
   start() { this._started = true; for (const d of this._queue) this.emit('message', { data: d }); this._queue = []; }
@@ -102,6 +106,10 @@ rl.on('line', (line) => {
     let data = null;
     try { data = JSON.parse(Buffer.from(m.b64 ?? '', 'base64').toString('utf8')); } catch { data = null; }
     p.deliver(data);
+  } else if (m.t === 'raw') {
+    const p = ports.get(m.id);
+    if (!p) return;
+    p.deliver(new Uint8Array(Buffer.from(m.b64 ?? '', 'base64')));
   } else if (m.t === 'port-open') {
     const p = ports.get(m.id);
     if (p) p.start();
