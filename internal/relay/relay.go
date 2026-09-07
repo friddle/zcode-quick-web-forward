@@ -219,6 +219,12 @@ func keepAlive(ctx context.Context, ws *client, sid string, h Handler) {
 	// arrives for 30s — heartbeats ack every 10s — tear the socket down.
 	watchdog := time.AfterFunc(30*time.Second, func() {
 		fmt.Fprintln(os.Stderr, "webremote: relay silent for 30s, reconnecting")
+		// A silent relay usually means OUR side stopped answering (a wedged
+		// handler blocks the read loop, so nothing is processed or acked).
+		// Dump every goroutine stack so the wedge point is in the log.
+		buf := make([]byte, 4<<20)
+		n := goruntime.Stack(buf, true)
+		fmt.Fprintf(os.Stderr, "webremote: goroutine dump at silence:\n%s\n", buf[:n])
 		ws.close()
 	})
 	defer watchdog.Stop()
