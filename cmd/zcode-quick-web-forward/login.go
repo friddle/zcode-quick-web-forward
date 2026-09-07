@@ -183,6 +183,23 @@ func writeBigmodelKey(path, name, key string) {
 	}
 	opts["apiKey"] = key
 	p["options"] = opts
+	// The runtime rejects a bare options-only provider (model_config_missing);
+	// it needs kind/enabled/source and the model catalog to resolve model.main.
+	p["name"] = "BigModel"
+	p["kind"] = "anthropic"
+	p["enabled"] = true
+	p["source"] = "custom"
+	p["models"] = map[string]any{
+		"GLM-5.3": map[string]any{
+			"reasoning": map[string]any{
+				"enabled":        true,
+				"variants":       []string{"low", "max", "high"},
+				"defaultVariant": "max",
+			},
+			"limit":      map[string]any{"context": 1000000, "output": 128000},
+			"modalities": map[string]any{"input": []string{"text"}, "output": []string{"text"}},
+		},
+	}
 	prov[name] = p
 	m["provider"] = prov
 	if err := writeJSONMap(path, m); err != nil {
