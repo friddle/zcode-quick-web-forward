@@ -225,7 +225,7 @@ func handleLiveToolEvent(engine *relay.BridgeEngine, send func(v any), ps *phone
 
 	ps.mu.Lock()
 	lt := ps.liveTurnFor(engSid, turnID)
-	rowTurn := ps.currentTurnID(phoneSid)
+	rowTurn := ps.currentTurnIDLocked(phoneSid)
 	var deltas []any
 	switch phase {
 	case "scheduled", "started":
@@ -295,7 +295,7 @@ func handleLiveChunkEvent(engine *relay.BridgeEngine, send func(v any), ps *phon
 
 	ps.mu.Lock()
 	lt := ps.liveTurnFor(engSid, turnID)
-	rowTurn := ps.currentTurnID(phoneSid)
+	rowTurn := ps.currentTurnIDLocked(phoneSid)
 	var rowID int
 	var kind, text string
 	var lastAt *int64
@@ -353,7 +353,7 @@ func handleSessionEvent(engine *relay.BridgeEngine, send func(v any), ps *phoneS
 			}
 			ps.mu.Lock()
 			lt := ps.liveTurnFor(engSid, turnID)
-			rowTurn := ps.currentTurnID(phoneSid)
+			rowTurn := ps.currentTurnIDLocked(phoneSid)
 			var deltas []any
 			if kind == "text_delta" {
 				if lt.textMsgID != msgID {
@@ -393,7 +393,7 @@ func handleSessionEvent(engine *relay.BridgeEngine, send func(v any), ps *phoneS
 			}
 			ps.mu.Lock()
 			lt := ps.liveTurnFor(engSid, turnID)
-			rowTurn := ps.currentTurnID(phoneSid)
+			rowTurn := ps.currentTurnIDLocked(phoneSid)
 			sb := lt.toolInputs[toolCallID]
 			if sb == nil {
 				sb = &strings.Builder{}
@@ -443,7 +443,7 @@ func handleSessionEvent(engine *relay.BridgeEngine, send func(v any), ps *phoneS
 			}
 			ps.mu.Lock()
 			lt := ps.liveTurnFor(engSid, turnID)
-			rowTurn := ps.currentTurnID(phoneSid)
+			rowTurn := ps.currentTurnIDLocked(phoneSid)
 			var deltas []any
 			if meta, ok := lt.toolRows[toolCallID]; ok {
 				if meta.toolName != toolName && meta.toolName == "Tool" {
@@ -465,7 +465,7 @@ func handleSessionEvent(engine *relay.BridgeEngine, send func(v any), ps *phoneS
 		case "result", "error":
 			ps.mu.Lock()
 			lt := ps.liveTurnFor(engSid, turnID)
-			rowTurn := ps.currentTurnID(phoneSid)
+			rowTurn := ps.currentTurnIDLocked(phoneSid)
 			meta, ok := lt.toolRows[toolCallID]
 			if !ok {
 				ps.mu.Unlock()

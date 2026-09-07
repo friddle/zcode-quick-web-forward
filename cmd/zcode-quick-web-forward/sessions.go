@@ -428,6 +428,13 @@ func (p *phoneSessions) beginTurn(phoneSid string) string {
 func (p *phoneSessions) currentTurnID(phoneSid string) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.currentTurnIDLocked(phoneSid)
+}
+
+// currentTurnIDLocked is currentTurnID for callers already holding p.mu.
+// Go mutexes are not reentrant — calling the locking variant while holding
+// p.mu self-deadlocks and wedges every handler behind it.
+func (p *phoneSessions) currentTurnIDLocked(phoneSid string) string {
 	if t, ok := p.curTurn[phoneSid]; ok && t != "" {
 		return t
 	}
