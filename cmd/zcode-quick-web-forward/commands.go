@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
@@ -426,6 +427,86 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		ack["result"] = map[string]any{"type": "compact", "inputId": cmdID}
 		fmt.Printf("zcode: compact requested session=%s (phone=%s) cmd=%s\n", engineSid, sid, cmdID)
 		go runCompactTurn(engClient, engine, send, ps, engineSid, sid, cmdID)
+	case "sendGoalCommand", "resumeGoal":
+		// The phone's /goal command: the client sends sendGoalCommand
+		// {text, displayText} (or bare resumeGoal for /goal resume). Translate
+		// CLI-style text onto the engine's session/goal actions
+		// (show|set|replace|pause|resume|clear).
+		sid := req.Envelope.SessionID
+		if sid == "" {
+			sid, _ = ps.get()
+		}
+		if sid == "" {
+			ack["status"] = "failed"
+			ack["message"] = "没有当前会话"
+			return ack
+		}
+		engineSid := ps.engineFor(sid)
+		text := strings.TrimSpace(req.Envelope.Payload.Text)
+		action := "show"
+		if req.Envelope.Type == "resumeGoal" {
+			action = "resume"
+		} else {
+			switch strings.ToLower(text) {
+			case "pause":
+				action = "pause"
+			case "clear":
+				action = "clear"
+			case "show", "":
+				action = "show"
+			default:
+				action = "set"
+			}
+		}
+		params := map[string]any{"sessionId": engineSid, "action": action}
+		if action == "set" {
+			params["objective"] = text
+		}
+		if cmdID := req.Envelope.CommandID; cmdID != "" {
+			params["inputId"] = cmdID
+		}
+		res, err := engClient.Call("session/goal", params, 20*time.Second)
+		if err != nil {
+			ack["status"] = "failed"
+			ack["message"] = err.Error()
+			fmt.Printf("zcode: session/goal %s failed: %v\n", action, err)
+			return ack
+		}
+		ack["status"] = "accepted"
+		ack["result"] = map[string]any{"type": req.Envelope.Type}
+		fmt.Printf("zcode: session/goal action=%s session=%s\n", action, engineSid)
+		// show/pause/clear don't run a model turn — surface the engine's
+		// response text as an assistant row so the user sees the result.
+		if response, _ := res["response"].(string); response != "" {
+			go pushAssistantNote(engine, send, ps, sid, response)
+		} else {
+			go func() {
+				time.Sleep(600 * time.Millisecond)
+				syncConversation(engClient, engine, &relaySender{fn: send}, ps, engineSid, sid)
+			}()
+		}
+	case "createSelectionSideSession":
+		// The phone's /side (新建辅助对话): a fresh engine session in the same
+		// workspace, opened immediately as the phone's new conversation.
+		ws := req.Envelope.Payload.WorkspaceID
+		if ws == "" && len(workspaces) > 0 {
+			ws = workspaces[0]
+		}
+		provider, model := req.Envelope.Payload.Config.Provider, req.Envelope.Payload.Config.Model
+		if defP, defM := zcode.DefaultModel(); defP != "" && defM != "" {
+			provider, model = defP, defM
+		}
+		res, err := engClient.CreateSession(ws, ws, provider, model, 15*time.Second)
+		if err != nil {
+			ack["status"] = "failed"
+			ack["message"] = err.Error()
+			return ack
+		}
+		sid, _ := res["sessionId"].(string)
+		ps.setSession(sid, ws)
+		ps.setModelConfig(provider, model, "")
+		ack["result"] = map[string]any{"type": "createSelectionSideSession", "sessionId": sid}
+		fmt.Printf("zcode: side session created %s\n", sid)
 	case "resolveInteraction":
 		// The phone answered an AskUserQuestion (pendingInteraction).
 		answer := req.Envelope.Payload.Answer
@@ -564,6 +645,34 @@ func resolveInteractionCommand(engClient *enginepkg.Client, engine *relay.Bridge
 	ack["status"] = "accepted"
 	ack["result"] = map[string]any{"type": "resolveInteraction", "interactionId": interactionID}
 	return ack, true
+}
+
+// pushAssistantNote appends a synthetic assistant text row (a non-model note
+// such as the /goal show response) to the phone's conversation.
+func pushAssistantNote(engine *relay.BridgeEngine, send func(any), ps *phoneSessions, phoneSid, text string) {
+	ps.mu.Lock()
+	convID, convSub := ps.convListener, ps.convSubscription
+	ps.mu.Unlock()
+	if convID == 0 || text == "" {
+		return
+	}
+	now := time.Now().UnixMilli()
+	rowID := ps.nextRowID()
+	row := map[string]any{
+		"rowId": rowID, "turnId": "turn-" + phoneSid,
+		"createdAt": now, "createdAtSeq": rowID,
+		"kind": "assistantText", "assistantResponseId": "note-" + phoneSid,
+		"text": text, "state": "complete",
+	}
+	rows := append(ps.snapshotRows(), row)
+	ps.rememberRows(rows)
+	b, err := json.Marshal(conversationDeltaFrame(phoneSid, convSub, ps.nextOrdinal(), []any{
+		map[string]any{"op": "row.appended", "row": row},
+	}))
+	if err == nil {
+		engine.SendChannelEvent(convID, b, send)
+	}
+	fmt.Printf("zcode: assistant note pushed session=%s (%d chars)\n", phoneSid, len(text))
 }
 
 // runCompactTurn drives session/compact and settles the phone's compact
