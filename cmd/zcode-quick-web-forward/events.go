@@ -197,22 +197,50 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			SessionID string `json:"sessionId"`
 			Patch     struct {
 				Status string `json:"status"`
+				Mode   struct {
+					Current string `json:"current"`
+				} `json:"mode"`
 			} `json:"patch"`
 			Revision int `json:"revision"`
 		}
-		if json.Unmarshal(ev.Params, &p) == nil && p.SessionID != "" && p.Patch.Status != "" {
-			ps.mu.Lock()
-			convID := ps.convListener
-			convSub := ps.convSubscription
-			ps.mu.Unlock()
-			phoneSid := ps.phoneFor(p.SessionID)
-			if convID > 0 {
-				// Engine statuses (running/completed/idle/error…) map onto the
-				// projection's phase enum before pushing the control patch.
-				phase, _ := phaseForStatus(displayStatus(p.Patch.Status))
-				b, _ := json.Marshal(stateUpdatedFrame(phoneSid, phase, convSub, ps.nextOrdinal()))
-				engine.SendChannelEvent(convID, b, sender.send)
+		_ = json.Unmarshal(ev.Params, &p)
+		if p.SessionID == "" {
+			return
+		}
+		phoneSid := ps.phoneFor(p.SessionID)
+		ps.mu.Lock()
+		convID := ps.convListener
+		convSub := ps.convSubscription
+		ps.mu.Unlock()
+		// Engine-initiated mode changes (e.g. the agent leaving plan mode via
+		// ExitPlanMode) must flip the phone's mode picker too: mirror the
+		// engine's mode onto collabMode and push a config patch.
+		if m := p.Patch.Mode.Current; m != "" {
+			phoneMode := m
+			switch m {
+			case "build":
+				phoneMode = "confirm" // 变更前确认
+			case "auto":
+				phoneMode = "edit" // 自动编辑
 			}
+			ps.mu.Lock()
+			ps.collabMode = phoneMode
+			ps.mu.Unlock()
+			fmt.Printf("zcode: engine mode change %s -> phone %s (session=%s)\n", m, phoneMode, p.SessionID)
+			if convID > 0 {
+				if b, err := json.Marshal(conversationDeltaFrame(phoneSid, convSub, ps.nextOrdinal(), []any{
+					map[string]any{"op": "state.updated", "patch": map[string]any{"config": ps.modelCfg()}},
+				})); err == nil {
+					engine.SendChannelEvent(convID, b, sender.send)
+				}
+			}
+		}
+		if p.Patch.Status != "" && convID > 0 {
+			// Engine statuses (running/completed/idle/error…) map onto the
+			// projection's phase enum before pushing the control patch.
+			phase, _ := phaseForStatus(displayStatus(p.Patch.Status))
+			b, _ := json.Marshal(stateUpdatedFrame(phoneSid, phase, convSub, ps.nextOrdinal()))
+			engine.SendChannelEvent(convID, b, sender.send)
 		}
 	case "v4/telemetry/event":
 		// stream.chunk carries the assistant's streaming text.
