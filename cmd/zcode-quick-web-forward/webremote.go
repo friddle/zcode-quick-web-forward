@@ -222,17 +222,30 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 }
 
 func workspaceListPayload(workspaces []string) []any {
-	wsList := make([]any, 0, len(workspaces))
-	for _, w := range workspaces {
-		if strings.HasPrefix(w, "remote:") {
-			continue
+	seen := map[string]bool{}
+	wsList := make([]any, 0, len(workspaces)+4)
+	add := func(w string) {
+		if w == "" || seen[w] || strings.HasPrefix(w, "remote:") {
+			return
 		}
+		seen[w] = true
 		wsList = append(wsList, map[string]any{
 			"workspacePath":   w,
 			"label":           filepath.Base(w),
 			"kind":            "local",
 			"connectionState": "connected",
 		})
+	}
+	for _, w := range workspaces {
+		add(w)
+	}
+	// Projects discovered from the task index: a task created under a
+	// workspace that isn't in the configured list still gets its own card on
+	// the phone's landing page instead of silently missing.
+	if tasks, err := zcode.ListTasks("", ""); err == nil {
+		for _, t := range tasks {
+			add(t.WorkspacePath)
+		}
 	}
 	return wsList
 }
