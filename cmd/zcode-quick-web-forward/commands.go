@@ -596,6 +596,33 @@ func resolveInteractionCommand(engClient *enginepkg.Client, engine *relay.Bridge
 	// The engine parses the response with userInputResponseToBrokerResult
 	// (JAo): {action:"accept", content:{answers:{question:choice}}} → the
 	// tool input gets the answers merged in; any other action is a denial.
+	if pi.IsPlanApproval {
+		// Plan cards are accept/cancel only — no answers to merge.
+		approved := optionID != "reject"
+		if action == "decline" || action == "cancel" {
+			approved = false
+		}
+		act := "cancel"
+		if approved {
+			act = "accept"
+		}
+		engClient.RespondToRequest(pi.EngineReqID, map[string]any{"action": act})
+		ps.removePendingInteraction(interactionID)
+		fmt.Printf("zcode: plan %s (interaction %s)\n", act, interactionID)
+		ack["status"] = "accepted"
+		ack["result"] = map[string]any{"type": "resolveInteraction", "interactionId": interactionID}
+		ps.mu.Lock()
+		convID, convSub := ps.convListener, ps.convSubscription
+		ps.mu.Unlock()
+		if convID > 0 {
+			if b, err := json.Marshal(conversationDeltaFrame(pi.SessionID, convSub, ps.nextOrdinal(), []any{
+				map[string]any{"op": "state.updated", "patch": map[string]any{"pendingInteractions": ps.pendingInteractionsPayload()}},
+			})); err == nil {
+				engine.SendChannelEvent(convID, b, send)
+			}
+		}
+		return ack, true
+	}
 	var brokerResult map[string]any
 	if action == "decline" || action == "cancel" || len(answers) == 0 {
 		act := action

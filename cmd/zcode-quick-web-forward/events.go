@@ -132,8 +132,34 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		if pi.Prompt == "" && len(pi.Questions) > 0 {
 			pi.Prompt = pi.Questions[0]["question"].(string)
 		}
+		// Plan approval (ExitPlanMode): the engine sends input {plan: "..."}
+		// with no questions. Synthesize an approve/reject card so the phone
+		// can answer it like any question.
+		if len(pi.Questions) == 0 {
+			if plan, ok := raw.Input["plan"].(string); ok && plan != "" {
+				if len(plan) > 2000 {
+					plan = plan[:2000] + "…"
+				}
+				pi.Prompt = plan
+				pi.Questions = []map[string]any{{
+					"question": "是否批准该计划?",
+					"options": []map[string]any{
+						{"optionId": "approve", "label": "批准"},
+						{"optionId": "reject", "label": "拒绝"},
+					},
+				}}
+				pi.IsPlanApproval = true
+			}
+		}
 		if ps.getPendingInteraction(interactionID) != nil {
 			return // engine retry of an interaction we already surfaced
+		}
+		// Retried requests carry a fresh requestId each time; supersede the
+		// stale one so the user's answer reaches the engine's active waiter.
+		if prev := ps.pendingInteractionForToolCall(rq.ToolCallID); prev != nil {
+			engClient.RespondToRequest(prev.EngineReqID, map[string]any{"action": "cancel"})
+			ps.removePendingInteraction(prev.InteractionID)
+			fmt.Printf("zcode: superseded stale interaction %s (same tool call %s)\n", prev.InteractionID, rq.ToolCallID)
 		}
 		pi.RowID = ps.nextRowID()
 		ps.addPendingInteraction(pi)

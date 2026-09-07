@@ -99,6 +99,7 @@ type pendingInteraction struct {
 	Questions     []map[string]any // {question, options:[{optionId,label}]}
 	Input         map[string]any   // the engine's original request input (questions verbatim)
 	RowID         int              // conversation row showing the question
+	IsPlanApproval bool            // ExitPlanMode-style card (approve/reject)
 }
 
 func (p *phoneSessions) recordListener(kind string, id int) {
@@ -566,6 +567,24 @@ func (p *phoneSessions) oldestPendingInteractionFor(sessionID string) *pendingIn
 		}
 	}
 	return best
+}
+
+// pendingInteractionForToolCall finds an already-surfaced interaction for one
+// engine tool call. The engine re-issues plan approvals with a NEW requestId
+// on every retry, so matching by ToolCallID is the only way to supersede the
+// stale request instead of stacking duplicate cards.
+func (p *phoneSessions) pendingInteractionForToolCall(toolCallID string) *pendingInteraction {
+	if toolCallID == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pi := range p.pendingInteractions {
+		if pi.ToolCallID == toolCallID {
+			return pi
+		}
+	}
+	return nil
 }
 
 // pendingInteractionsPayload renders the pending questions in the official
