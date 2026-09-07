@@ -1,0 +1,149 @@
+- generic [ref=f15e2]:
+  - button [aria-hidden] [ref=f15e15]
+  - generic [ref=f15e17]:
+    - generic [ref=f15e18]:
+      - heading "命令面板" [level=2] [ref=f15e19]
+      - paragraph [ref=f15e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f15e23]:
+      - complementary [ref=f15e25]:
+        - complementary [ref=f15e26]:
+          - generic [ref=f15e29]:
+            - generic [ref=f15e30]:
+              - group [ref=f15e31] [cursor=pointer]:
+                - generic [ref=f15e32]:
+                  - generic [ref=f15e35]: 新建任务
+                  - generic [ref=f15e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f15e37]:
+                - generic [ref=f15e38]: 搜索
+                - generic [ref=f15e39]: ⌘ K
+              - button "插件市场" [ref=f15e40]
+            - generic [ref=f15e44]:
+              - generic [ref=f15e46]:
+                - generic [ref=f15e47]:
+                  - generic [ref=f15e48]: 项目
+                  - button "收起全部" [ref=f15e49]
+                - generic [ref=f15e50]:
+                  - button "筛选和排序" [ref=f15e51]
+                  - button "归档" [ref=f15e52]
+              - list [ref=f15e53]:
+                - listitem [ref=f15e54]:
+                  - button "zcode-quick-web-forward 14" [expanded] [ref=f15e263]:
+                    - generic [ref=f15e62]: zcode-quick-web-forward
+                    - generic [ref=f15e63]: "14"
+                  - list [ref=f15e64]:
+                    - listitem [ref=f15e264] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f15e265]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f15e269]
+                        - generic [ref=f15e270]: 刚刚
+                    - listitem [ref=f15e65] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f15e66]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f15e70]
+                        - generic [ref=f15e71]: 16分
+                    - listitem [ref=f15e72] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f15e73]:
+                        - generic "请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f15e77]
+                        - generic [ref=f15e78]: 56分
+                    - listitem [ref=f15e79] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f15e80]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f15e84]
+                        - generic [ref=f15e85]: 9分
+                    - listitem [ref=f15e86] [cursor=pointer]:
+                      - button "打开任务 用AskUserQuestion询问晚餐火锅或烧烤" [ref=f15e87]:
+                        - generic "用AskUserQuestion询问晚餐火锅或烧烤" [ref=f15e91]
+                        - generic [ref=f15e92]: 23分
+                    - listitem [ref=f15e93] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f15e94]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f15e98]
+                        - generic [ref=f15e99]: 35分
+                    - listitem [ref=f15e100] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f15e101]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f15e105]
+                        - generic [ref=f15e106]: 45分
+                    - listitem [ref=f15e107] [cursor=pointer]:
+                      - button "打开任务 开始干活" [ref=f15e108]:
+                        - generic "开始干活" [ref=f15e112]
+                        - generic [ref=f15e113]: 1小时
+                    - listitem [ref=f15e114] [cursor=pointer]:
+                      - button "打开任务 一句话回答今天是星期几" [ref=f15e115]:
+                        - generic "一句话回答今天是星期几" [ref=f15e119]
+                        - generic [ref=f15e120]: 1小时
+                    - listitem [ref=f15e121] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f15e122]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f15e126]
+                        - generic [ref=f15e127]: 1小时
+                    - listitem [ref=f15e128] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f15e129]:
+                        - generic "查看当前自己的ip" [ref=f15e133]
+                        - generic [ref=f15e134]: 1小时
+                    - listitem [ref=f15e135] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f15e136]:
+                        - generic "git pull‘" [ref=f15e140]
+                        - generic [ref=f15e141]: 3小时
+                    - listitem [ref=f15e142] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f15e143]:
+                        - generic "代码提交了吗？" [ref=f15e147]
+                        - generic [ref=f15e148]: 3小时
+                    - listitem [ref=f15e149] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f15e150]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f15e154]
+                        - generic [ref=f15e155]: 3小时
+                - listitem [ref=f15e156]:
+                  - button "zcode-remote 1" [expanded] [ref=f15e157]:
+                    - generic [ref=f15e164]: zcode-remote
+                    - generic [ref=f15e165]: "1"
+                  - list [ref=f15e166]:
+                    - listitem [ref=f15e167] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f15e168]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f15e172]
+                        - generic [ref=f15e173]: 7小时
+            - generic [ref=f15e175]:
+              - button "连接使用" [ref=f15e176]
+              - button "设置" [ref=f15e183]
+      - separator "调整侧边栏宽度" [ref=f15e184]
+      - generic [ref=f15e186]:
+        - generic [ref=f15e246]:
+          - generic [ref=f15e247]:
+            - heading "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [level=1] [ref=f15e271]
+            - generic "/home/friddle/nas/zcode-quick-web-forward" [ref=f15e250]: zcode-quick-web-forward
+            - button "更多" [ref=f15e255]
+          - generic [ref=f15e256]:
+            - button "帮助" [ref=f15e257]
+            - button "切换终端" [ref=f15e258]
+            - button "展开侧边面板" [ref=f15e259]
+        - main [ref=f15e193]:
+          - generic [ref=f15e201]:
+            - generic [ref=f15e276]:
+              - generic [ref=f15e277]:
+                - generic [ref=f15e278]: 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。
+                - button "复制" [ref=f15e282]
+              - button "工作中 1 分 57 秒" [expanded] [ref=f15e316]
+            - generic [ref=f15e289]:
+              - generic [ref=f15e290]:
+                - generic [ref=f15e291]:
+                  - generic [ref=f15e292]:
+                    - generic [ref=f15e293]: 晚餐选择
+                    - text: 晚上吃什么?
+                  - generic [ref=f15e294]:
+                    - button "上一题" [disabled]
+                    - generic [ref=f15e295]: 1 / 1
+                    - button "下一题" [disabled]
+                - listbox "晚上吃什么?" [ref=f15e297]:
+                  - option "1. A 火锅" [active] [selected] [ref=f15e298]:
+                    - generic [ref=f15e299]: "1."
+                    - generic [ref=f15e300]: A 火锅
+                  - option "2. B 烧烤" [ref=f15e301]:
+                    - generic [ref=f15e302]: "2."
+                    - generic [ref=f15e303]: B 烧烤
+                  - generic [ref=f15e304]:
+                    - generic [ref=f15e305]: "3."
+                    - textbox "输入你的回答..." [ref=f15e306]
+              - generic [ref=f15e307]:
+                - paragraph [ref=f15e308]:
+                  - generic [ref=f15e311]: 使用 Tab / 上下键选择，回车或空格选中
+                - generic [ref=f15e312]:
+                  - button "忽略" [ref=f15e313]
+                  - button "提交" [ref=f15e314]
+      - generic [ref=f15e244]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

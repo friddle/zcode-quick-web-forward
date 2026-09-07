@@ -1,0 +1,11 @@
+[    2900ms] [ERROR] TypeError: Cannot read properties of undefined (reading 'map')
+    at Ff (https://zcode.z.ai/remote/v4/assets/src-sr4WyacM.js:39:91029)
+    at o (https://zcode.z.ai/remote/v4/assets/index-WmHF5PiK.js:60:122877)
+    at https://zcode.z.ai/remote/v4/assets/index-WmHF5PiK.js:60:123059
+    at Array.map (<anonymous>)
+    at IB (https://zcode.z.ai/remote/v4/assets/index-WmHF5PiK.js:60:123023)
+    at FB (https://zcode.z.ai/remote/v4/assets/index-WmHF5PiK.js:60:122648)
+    at RB (https://zcode.z.ai/remote/v4/assets/index-WmHF5PiK.js:60:123499)
+    at https://zcode.z.ai/remote/v4/assets/index-WmHF5PiK.js:60:131563
+    at Array.filter (<anonymous>)
+    at JB (https://zcode.z.ai/remote/v4/assets/index-WmHF5PiK.js:60:131468) @ https://zcode.z.ai/remote/v4/assets/toast-HRdaJheI.js:7

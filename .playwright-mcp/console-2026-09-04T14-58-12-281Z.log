@@ -1,0 +1,14 @@
+[    4732ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/document.svg:0
+[    4734ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/readme.svg:0
+[    4734ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/git.svg:0
+[    4734ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/go.svg:0
+[    4747ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/document.svg:0
+[    7141ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/document.svg:0
+[    7141ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/go.svg:0
+[    7141ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/readme.svg:0
+[    7142ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/git.svg:0
+[    7146ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/document.svg:0
+[    7672ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/go.svg:0
+[    7673ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/git.svg:0
+[    7673ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/readme.svg:0
+[    7674ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://localhost:8899/remote/v4/material-icons/document.svg:0

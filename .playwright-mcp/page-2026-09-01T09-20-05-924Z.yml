@@ -1,0 +1,61 @@
+- generic [ref=f4e2]:
+  - button [aria-hidden] [ref=f4e76]
+  - generic [ref=f4e78]:
+    - generic [ref=f4e79]:
+      - heading "命令面板" [level=2] [ref=f4e80]
+      - paragraph [ref=f4e81]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f4e84]:
+      - complementary [ref=f4e86]:
+        - complementary [ref=f4e87]:
+          - generic [ref=f4e90]:
+            - generic [ref=f4e91]:
+              - group [ref=f4e92] [cursor=pointer]:
+                - generic [ref=f4e93]:
+                  - generic [ref=f4e96]: 新建任务
+                  - generic [ref=f4e97]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f4e98]:
+                - generic [ref=f4e99]: 搜索
+                - generic [ref=f4e100]: ⌘ K
+              - button "插件市场" [ref=f4e101]
+            - generic [ref=f4e105]:
+              - generic [ref=f4e107]:
+                - generic [ref=f4e108]: 项目
+                - generic [ref=f4e110]:
+                  - button "筛选和排序" [ref=f4e111]
+                  - button "归档" [ref=f4e112]
+              - generic [ref=f4e113]: 当前桌面窗口没有可展示的任务
+            - generic [ref=f4e115]:
+              - button "连接使用" [ref=f4e116]
+              - button "设置" [ref=f4e123]
+      - separator "调整侧边栏宽度" [ref=f4e124]
+      - main [ref=f4e133]:
+        - generic [ref=f4e141]:
+          - paragraph [ref=f4e145]: 下午好呀，接下来交给我吧
+          - generic [ref=f4e17]:
+            - generic [ref=f4e157]:
+              - generic [ref=f4e158]: 发送失败，请稍后重试。
+              - button "展开详情" [ref=f4e162]
+              - button "复制" [ref=f4e163]
+              - button "反馈问题" [ref=f4e164]
+              - button "关闭错误提示" [ref=f4e165]
+            - generic [ref=f4e18]:
+              - generic [ref=f4e20]:
+                - button "取消选择当前项目"
+                - button "选择项目" [ref=f4e146]:
+                  - generic [ref=f4e22]: zqf-work
+              - generic [ref=f4e24]:
+                - textbox [ref=f4e27]:
+                  - paragraph [ref=f4e28]: 你好，请用一句话介绍你自己
+                - generic [ref=f4e29]:
+                  - generic [ref=f4e31]:
+                    - button "添加上下文" [ref=f4e147]
+                    - combobox "切换模式" [ref=f4e148]:
+                      - generic "变更前确认" [ref=f4e149]
+                    - combobox [aria-hidden] [ref=f4e38]
+                  - generic [ref=f4e40]:
+                    - button "选择模型" [ref=f4e150]
+                    - button "发送" [ref=f4e153]
+      - generic [ref=f4e46]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

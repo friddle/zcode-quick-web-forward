@@ -1,0 +1,76 @@
+- generic [ref=f32e65]:
+  - button [aria-hidden] [ref=f32e66]
+  - generic [ref=f32e68]:
+    - generic [ref=f32e69]:
+      - heading "命令面板" [level=2] [ref=f32e70]
+      - paragraph [ref=f32e71]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f32e74]:
+      - complementary [ref=f32e76]:
+        - complementary [ref=f32e77]:
+          - generic [ref=f32e80]:
+            - generic [ref=f32e81]:
+              - group [ref=f32e82] [cursor=pointer]:
+                - generic [ref=f32e83]:
+                  - generic [ref=f32e86]: 新建任务
+                  - generic [ref=f32e87]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f32e88]:
+                - generic [ref=f32e89]: 搜索
+                - generic [ref=f32e90]: ⌘ K
+              - button "插件市场" [ref=f32e91]
+            - generic [ref=f32e95]:
+              - generic [ref=f32e97]:
+                - generic [ref=f32e98]:
+                  - generic [ref=f32e99]: 项目
+                  - button "收起全部" [ref=f32e100]
+                - generic [ref=f32e101]:
+                  - button "筛选和排序" [ref=f32e102]
+                  - button "归档" [ref=f32e103]
+              - list [ref=f32e104]:
+                - listitem [ref=f32e105]:
+                  - button "zqf-work 2" [expanded] [ref=f32e106]:
+                    - generic [ref=f32e113]: zqf-work
+                    - generic [ref=f32e114]: "2"
+                  - list [ref=f32e115]:
+                    - listitem [ref=f32e116] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f32e117]:
+                        - generic "新任务" [ref=f32e121]
+                        - generic [ref=f32e122]: 刚刚
+                    - listitem [ref=f32e123] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f32e124]:
+                        - generic "新任务" [ref=f32e128]
+                        - generic [ref=f32e129]: 47分
+            - generic [ref=f32e131]:
+              - button "连接使用" [ref=f32e132]
+              - button "设置" [ref=f32e139]
+      - separator "调整侧边栏宽度" [ref=f32e140]
+      - main [ref=f32e149]:
+        - generic [ref=f32e157]:
+          - paragraph [ref=f32e161]: 晚上好呀，今天辛苦啦
+          - generic [ref=f32e4]:
+            - generic [ref=f32e6]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=f32e162]:
+                - generic [ref=f32e8]: zqf-work
+            - generic [ref=f32e10]:
+              - generic [ref=f32e12]:
+                - textbox [ref=f32e13]:
+                  - paragraph [ref=f32e14]
+                - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+              - generic [ref=f32e15]:
+                - generic [ref=f32e17]:
+                  - button "添加上下文" [ref=f32e163]
+                  - combobox "切换模式" [ref=f32e164]:
+                    - generic "变更前确认" [ref=f32e165]
+                  - combobox [aria-hidden] [ref=f32e24]
+                - generic [ref=f32e26]:
+                  - button "选择模型" [ref=f32e166]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=f32e167]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=f32e168]:
+                        - generic [ref=f32e31]:
+                          - generic [ref=f32e32]: Bigmodel - API Key/
+                          - generic [ref=f32e33]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=f32e34]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

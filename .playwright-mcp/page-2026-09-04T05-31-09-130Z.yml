@@ -1,0 +1,71 @@
+- generic [ref=f5e2]:
+  - button [aria-hidden] [ref=f5e15]
+  - generic [ref=f5e17]:
+    - generic [ref=f5e18]:
+      - heading "命令面板" [level=2] [ref=f5e19]
+      - paragraph [ref=f5e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f5e23]:
+      - complementary [ref=f5e25]:
+        - complementary [ref=f5e26]:
+          - generic [ref=f5e29]:
+            - generic [ref=f5e30]:
+              - group [ref=f5e31] [cursor=pointer]:
+                - generic [ref=f5e32]:
+                  - generic [ref=f5e35]: 新建任务
+                  - generic [ref=f5e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f5e37]:
+                - generic [ref=f5e38]: 搜索
+                - generic [ref=f5e39]: ⌘ K
+              - button "插件市场" [ref=f5e40]
+            - generic [ref=f5e44]:
+              - generic [ref=f5e46]:
+                - generic [ref=f5e47]:
+                  - generic [ref=f5e48]: 项目
+                  - button "展开全部" [ref=f5e49]
+                - generic [ref=f5e50]:
+                  - button "筛选和排序" [ref=f5e51]
+                  - button "归档" [ref=f5e52]
+              - list [ref=f5e53]:
+                - listitem [ref=f5e54]:
+                  - button "zcode-remote 4" [ref=f5e55]:
+                    - generic [ref=f5e62]: zcode-remote
+                    - generic [ref=f5e63]: "4"
+                - listitem [ref=f5e64]:
+                  - button "ytb-dl-web 20" [active] [ref=f5e65]:
+                    - generic [ref=f5e72]: ytb-dl-web
+                    - generic [ref=f5e73]: "20"
+            - generic [ref=f5e75]:
+              - button "连接使用" [ref=f5e76]
+              - button "设置" [ref=f5e83]
+      - separator "调整侧边栏宽度" [ref=f5e84]
+      - main [ref=f5e93]:
+        - generic [ref=f5e101]:
+          - paragraph [ref=f5e105]: 中午好呀，要不要先休息一下
+          - generic [ref=f5e109]:
+            - generic [ref=f5e111]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=f5e112]:
+                - generic [ref=f5e113]: zcode-remote
+            - generic [ref=f5e115]:
+              - generic [ref=f5e117]:
+                - textbox [ref=f5e118]:
+                  - paragraph [ref=f5e119]
+                - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+              - generic [ref=f5e120]:
+                - generic [ref=f5e122]:
+                  - button "添加上下文" [ref=f5e123]
+                  - combobox "切换模式" [ref=f5e125]:
+                    - generic "完全访问" [ref=f5e127]
+                  - combobox [aria-hidden] [ref=f5e129]
+                - generic [ref=f5e131]:
+                  - button "选择模型" [ref=f5e133]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=f5e134]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=f5e135]:
+                        - generic [ref=f5e136]:
+                          - generic [ref=f5e137]: Bigmodel - API Key/
+                          - generic [ref=f5e138]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=f5e139]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

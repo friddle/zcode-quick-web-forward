@@ -1,0 +1,8 @@
+- generic [ref=f1e5]:
+  - heading "正在认证设备…" [level=1] [ref=f1e8]
+  - paragraph [ref=f1e9]: 已连接中转服务，正在完成远控身份校验。
+  - generic [ref=f1e10]:
+    - generic [ref=f1e11]: 1. 连接中转服务
+    - generic [ref=f1e12]: 2. 设备鉴权
+    - generic [ref=f1e13]: 3. 等待桌面端配对
+    - generic [ref=f1e14]: 4. 同步工作区

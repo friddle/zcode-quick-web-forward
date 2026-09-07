@@ -1,0 +1,4 @@
+[    7126ms] TypeError: Cannot read properties of undefined (reading 'trim')
+    at nAe (http://localhost:8899/remote/v4/assets/index-nOVzQNKW.js:22:159526)
+    at a (http://localhost:8899/remote/v4/assets/index-nOVzQNKW.js:22:159976)
+[   55927ms] [WARNING] WebSocket connection to 'wss://zcode.z.ai/ws?mid=2224c4bb-e1ed-42f3-a361-7cf0f10c2bef' failed: WebSocket is closed before the connection is established. @ http://localhost:8899/remote/v4/assets/index-nOVzQNKW.js:896

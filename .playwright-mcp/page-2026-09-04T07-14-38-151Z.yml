@@ -1,0 +1,197 @@
+- generic [ref=e2]:
+  - button [aria-hidden] [ref=e15]
+  - generic [ref=e17]:
+    - generic [ref=e18]:
+      - heading "命令面板" [level=2] [ref=e19]
+      - paragraph [ref=e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=e23]:
+      - complementary [ref=e25]:
+        - complementary [ref=e26]:
+          - generic [ref=e29]:
+            - generic [ref=e30]:
+              - group [ref=e31] [cursor=pointer]:
+                - generic [ref=e32]:
+                  - generic [ref=e35]: 新建任务
+                  - generic [ref=e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=e37]:
+                - generic [ref=e38]: 搜索
+                - generic [ref=e39]: ⌘ K
+              - button "插件市场" [ref=e40]
+            - generic [ref=e44]:
+              - generic [ref=e46]:
+                - generic [ref=e47]:
+                  - generic [ref=e48]: 项目
+                  - button "收起全部" [ref=e49]
+                - generic [ref=e50]:
+                  - button "筛选和排序" [ref=e51]
+                  - button "归档" [ref=e52]
+              - generic [ref=e53]:
+                - generic [ref=e54]: 已置顶
+                - list [ref=e55]:
+                  - listitem [ref=e56] [cursor=pointer]:
+                    - button "打开任务 新任务" [ref=e57]:
+                      - generic "新任务" [ref=e63]
+                      - generic [ref=e64]: 59分
+              - list [ref=e65]:
+                - listitem [ref=e66]:
+                  - button "zcode-quick-web-forward 7" [expanded] [ref=e67]:
+                    - generic [ref=e74]: zcode-quick-web-forward
+                    - generic [ref=e75]: "7"
+                  - list [ref=e76]:
+                    - listitem [ref=e77] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e78]:
+                        - generic "新任务" [ref=e82]
+                        - generic [ref=e83]: 4分
+                    - listitem [ref=e84] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e85]:
+                        - generic "新任务" [ref=e89]
+                        - generic [ref=e90]: 53分
+                    - listitem [ref=e91] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e92]:
+                        - generic "新任务" [ref=e96]
+                        - generic [ref=e97]: 56分
+                    - listitem [ref=e98] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e99]:
+                        - generic "新任务" [ref=e103]
+                        - generic [ref=e104]: 1小时
+                    - listitem [ref=e105] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e106]:
+                        - generic "新任务" [ref=e110]
+                        - generic [ref=e111]: 1小时
+                    - listitem [ref=e112] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e113]:
+                        - generic "新任务" [ref=e117]
+                        - generic [ref=e118]: 1小时
+                    - listitem [ref=e119] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e120]:
+                        - generic "新任务" [ref=e124]
+                        - generic [ref=e125]: 1小时
+                - listitem [ref=e126]:
+                  - button "ytb-dl-web 19" [expanded] [ref=e127]:
+                    - generic [ref=e134]: ytb-dl-web
+                    - generic [ref=e135]: "19"
+                  - list [ref=e136]:
+                    - listitem [ref=e137] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e138]:
+                        - generic "新任务" [ref=e142]
+                        - generic [ref=e143]: 1天
+                    - listitem [ref=e144] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e145]:
+                        - generic "新任务" [ref=e149]
+                        - generic [ref=e150]: 1天
+                    - listitem [ref=e151] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e152]:
+                        - generic "新任务" [ref=e156]
+                        - generic [ref=e157]: 1天
+                    - listitem [ref=e158] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e159]:
+                        - generic "新任务" [ref=e163]
+                        - generic [ref=e164]: 1天
+                    - listitem [ref=e165] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e166]:
+                        - generic "新任务" [ref=e170]
+                        - generic [ref=e171]: 1天
+                    - listitem [ref=e172] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e173]:
+                        - generic "新任务" [ref=e177]
+                        - generic [ref=e178]: 1天
+                    - listitem [ref=e179] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e180]:
+                        - generic "新任务" [ref=e184]
+                        - generic [ref=e185]: 1天
+                    - listitem [ref=e186] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e187]:
+                        - generic "新任务" [ref=e191]
+                        - generic [ref=e192]: 1天
+                    - listitem [ref=e193] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e194]:
+                        - generic "新任务" [ref=e198]
+                        - generic [ref=e199]: 1天
+                    - listitem [ref=e200] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e201]:
+                        - generic "新任务" [ref=e205]
+                        - generic [ref=e206]: 1天
+                    - listitem [ref=e207] [cursor=pointer]:
+                      - button "打开任务 用 python 输出 100 以内的所有质数" [ref=e208]:
+                        - generic "用 python 输出 100 以内的所有质数" [ref=e212]
+                        - generic [ref=e213]: 1天
+                    - listitem [ref=e214] [cursor=pointer]:
+                      - button "打开任务 hello" [ref=e215]:
+                        - generic "hello" [ref=e219]
+                        - generic [ref=e220]: 1天
+                    - listitem [ref=e221] [cursor=pointer]:
+                      - button "打开任务 Python 列出当前目录前3个文件" [ref=e222]:
+                        - generic "Python 列出当前目录前3个文件" [ref=e226]
+                        - generic [ref=e227]: 1天
+                    - listitem [ref=e228] [cursor=pointer]:
+                      - button "打开任务 那 9 × 8 呢" [ref=e229]:
+                        - generic "那 9 × 8 呢" [ref=e233]
+                        - generic [ref=e234]: 1天
+                    - listitem [ref=e235] [cursor=pointer]:
+                      - button "打开任务 用 Python 计算 15 乘以 3" [ref=e236]:
+                        - generic "用 Python 计算 15 乘以 3" [ref=e240]
+                        - generic [ref=e241]: 1天
+                    - listitem [ref=e242] [cursor=pointer]:
+                      - button "打开任务 Echo 测试运行中显示" [ref=e243]:
+                        - generic "Echo 测试运行中显示" [ref=e247]
+                        - generic [ref=e248]: 1天
+                    - listitem [ref=e249] [cursor=pointer]:
+                      - button "打开任务 Counting from 1 to 10" [ref=e250]:
+                        - generic "Counting from 1 to 10" [ref=e254]
+                        - generic [ref=e255]: 1天
+                    - listitem [ref=e256] [cursor=pointer]:
+                      - button "打开任务 用 python 算 2+3" [ref=e257]:
+                        - generic "用 python 算 2+3" [ref=e261]
+                        - generic [ref=e262]: 1天
+                    - listitem [ref=e263] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e264]:
+                        - generic "新任务" [ref=e268]
+                        - generic [ref=e269]: 1天
+                - listitem [ref=e270]:
+                  - button "zcode-remote 2" [expanded] [ref=e271]:
+                    - generic [ref=e278]: zcode-remote
+                    - generic [ref=e279]: "2"
+                  - list [ref=e280]:
+                    - listitem [ref=e281] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e282]:
+                        - generic "新任务" [ref=e286]
+                        - generic [ref=e287]: 2小时
+                    - listitem [ref=e288] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=e289]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=e293]
+                        - generic [ref=e294]: 1小时
+            - generic [ref=e296]:
+              - button "连接使用" [ref=e297]
+              - button "设置" [ref=e304]
+      - separator "调整侧边栏宽度" [ref=e305]
+      - main [ref=e314]:
+        - generic [ref=e322]:
+          - paragraph [ref=e326]: 下午好呀，接下来交给我吧
+          - generic [ref=e330]:
+            - generic [ref=e332]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=e333]:
+                - generic [ref=e334]: zcode-quick-web-forward
+            - generic [ref=e336]:
+              - generic [ref=e338]:
+                - textbox [active] [ref=e339]:
+                  - paragraph [ref=e340]
+                - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+              - generic [ref=e341]:
+                - generic [ref=e343]:
+                  - button "添加上下文" [ref=e344]
+                  - combobox "切换模式" [ref=e346]:
+                    - generic "完全访问" [ref=e348]
+                  - combobox [aria-hidden] [ref=e350]
+                - generic [ref=e352]:
+                  - button "选择模型" [ref=e354]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=e355]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=e356]:
+                        - generic [ref=e357]:
+                          - generic [ref=e358]: Bigmodel - API Key/
+                          - generic [ref=e359]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=e360]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

@@ -1,0 +1,116 @@
+- generic [ref=f6e2]:
+  - button [aria-hidden] [ref=f6e15]
+  - generic [ref=f6e17]:
+    - generic [ref=f6e18]:
+      - heading "命令面板" [level=2] [ref=f6e19]
+      - paragraph [ref=f6e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f6e23]:
+      - complementary [ref=f6e25]:
+        - complementary [ref=f6e26]:
+          - generic [ref=f6e29]:
+            - generic [ref=f6e30]:
+              - group [ref=f6e31] [cursor=pointer]:
+                - generic [ref=f6e32]:
+                  - generic [ref=f6e35]: 新建任务
+                  - generic [ref=f6e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f6e37]:
+                - generic [ref=f6e38]: 搜索
+                - generic [ref=f6e39]: ⌘ K
+              - button "插件市场" [ref=f6e40]
+            - generic [ref=f6e44]:
+              - generic [ref=f6e46]:
+                - generic [ref=f6e47]:
+                  - generic [ref=f6e48]: 项目
+                  - button "收起全部" [ref=f6e49]
+                - generic [ref=f6e50]:
+                  - button "筛选和排序" [ref=f6e51]
+                  - button "归档" [ref=f6e52]
+              - list [ref=f6e53]:
+                - listitem [ref=f6e54]:
+                  - button "zcode-quick-web-forward 6" [expanded] [ref=f6e189]:
+                    - generic [ref=f6e62]: zcode-quick-web-forward
+                    - generic [ref=f6e63]: "6"
+                  - list [ref=f6e64]:
+                    - listitem [ref=f6e190] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f6e191]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f6e195]
+                        - generic [ref=f6e196]: 刚刚
+                    - listitem [ref=f6e65] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在的工作目录是什么" [ref=f6e66]:
+                        - generic "用一句话回答:现在的工作目录是什么" [ref=f6e70]
+                        - generic [ref=f6e71]: 10分
+                    - listitem [ref=f6e72] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f6e73]:
+                        - generic "查看当前自己的ip" [ref=f6e77]
+                        - generic [ref=f6e78]: 18分
+                    - listitem [ref=f6e79] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f6e80]:
+                        - generic "git pull‘" [ref=f6e84]
+                        - generic [ref=f6e85]: 1小时
+                    - listitem [ref=f6e86] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f6e87]:
+                        - generic "代码提交了吗？" [ref=f6e91]
+                        - generic [ref=f6e92]: 1小时
+                    - listitem [ref=f6e93] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f6e94]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f6e98]
+                        - generic [ref=f6e99]: 2小时
+                - listitem [ref=f6e100]:
+                  - button "zcode-remote 1" [expanded] [ref=f6e101]:
+                    - generic [ref=f6e108]: zcode-remote
+                    - generic [ref=f6e109]: "1"
+                  - list [ref=f6e110]:
+                    - listitem [ref=f6e111] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f6e112]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f6e116]
+                        - generic [ref=f6e117]: 5小时
+            - generic [ref=f6e119]:
+              - button "连接使用" [ref=f6e120]
+              - button "设置" [ref=f6e127]
+      - separator "调整侧边栏宽度" [ref=f6e128]
+      - generic [ref=f6e130]:
+        - generic [ref=f6e198]:
+          - generic [ref=f6e199]:
+            - heading "用一句话回答:现在是几点钟" [level=1] [ref=f6e200]
+            - generic "/home/friddle/nas/zcode-quick-web-forward" [ref=f6e202]: zcode-quick-web-forward
+            - button "更多" [ref=f6e207]
+          - generic [ref=f6e208]:
+            - button "帮助" [ref=f6e209]
+            - button "切换终端" [ref=f6e210]
+            - button "展开侧边面板" [ref=f6e211]
+        - main [ref=f6e137]:
+          - generic [ref=f6e145]:
+            - generic [ref=f6e215]:
+              - generic [ref=f6e216]:
+                - generic [ref=f6e217]:
+                  - generic [ref=f6e218]: 用一句话回答:现在是几点钟
+                  - button "复制" [ref=f6e222]
+                - button "工作中 28 秒" [expanded] [ref=f6e225]
+              - status "加载中..." [ref=f6e228]
+            - generic [ref=f6e159]:
+              - generic [ref=f6e161]:
+                - textbox [active] [ref=f6e162]:
+                  - paragraph [ref=f6e239]
+                - generic: 继续输入以排队后续修改
+              - generic [ref=f6e164]:
+                - generic [ref=f6e166]:
+                  - button "添加上下文" [ref=f6e167]
+                  - combobox "切换模式" [ref=f6e169]:
+                    - generic "变更前确认" [ref=f6e171]
+                  - combobox [aria-hidden] [ref=f6e173]
+                - generic [ref=f6e175]:
+                  - generic [ref=f6e176]:
+                    - button "选择模型" [ref=f6e177]:
+                      - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f6e178]:
+                        - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f6e179]:
+                          - generic [ref=f6e180]:
+                            - generic [ref=f6e181]: Bigmodel - API Key/
+                            - generic [ref=f6e182]: GLM-5.3-Flash
+                    - combobox "低" [ref=f6e184]:
+                      - generic "低" [ref=f6e186]
+                    - combobox [aria-hidden] [ref=f6e188]
+                  - button "停止生成" [ref=f6e240]
+      - generic [ref=f6e183]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

@@ -1,0 +1,241 @@
+- generic [ref=f8e2]:
+  - button [aria-hidden] [ref=f8e15]
+  - generic [ref=f8e17]:
+    - generic [ref=f8e18]:
+      - heading "命令面板" [level=2] [ref=f8e19]
+      - paragraph [ref=f8e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f8e23]:
+      - complementary [ref=f8e25]:
+        - complementary [ref=f8e26]:
+          - generic [ref=f8e29]:
+            - generic [ref=f8e30]:
+              - group [ref=f8e31] [cursor=pointer]:
+                - generic [ref=f8e32]:
+                  - generic [ref=f8e35]: 新建任务
+                  - generic [ref=f8e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f8e37]:
+                - generic [ref=f8e38]: 搜索
+                - generic [ref=f8e39]: ⌘ K
+              - button "插件市场" [ref=f8e40]
+            - generic [ref=f8e44]:
+              - generic [ref=f8e46]:
+                - generic [ref=f8e47]:
+                  - generic [ref=f8e48]: 项目
+                  - button "收起全部" [ref=f8e49]
+                - generic [ref=f8e50]:
+                  - button "筛选和排序" [ref=f8e51]
+                  - button "归档" [ref=f8e52]
+              - list [ref=f8e53]:
+                - listitem [ref=f8e54]:
+                  - button "zcode-quick-web-forward 27" [expanded] [ref=f8e55]:
+                    - generic [ref=f8e62]: zcode-quick-web-forward
+                    - generic [ref=f8e63]: "27"
+                  - list [ref=f8e64]:
+                    - listitem [ref=f8e65] [cursor=pointer]:
+                      - button "打开任务 创建文件 plan-test2.txt 内容写 ok" [ref=f8e66]:
+                        - generic "创建文件 plan-test2.txt 内容写 ok" [ref=f8e70]
+                        - generic [ref=f8e71]: 41分
+                    - listitem [ref=f8e72] [cursor=pointer]:
+                      - button "打开任务 回复\"side OK\"即可。" [ref=f8e73]:
+                        - generic "回复\"side OK\"即可。" [ref=f8e77]
+                        - generic [ref=f8e78]: 51分
+                    - listitem [ref=f8e79] [cursor=pointer]:
+                      - button "打开任务 查看当前目录 .go 文件" [ref=f8e80]:
+                        - generic "查看当前目录 .go 文件" [ref=f8e84]
+                        - generic [ref=f8e85]: 1小时
+                    - listitem [ref=f8e86] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f8e87]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f8e91]
+                        - generic [ref=f8e92]: 2天
+                    - listitem [ref=f8e93] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f8e94]:
+                        - generic "请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f8e98]
+                        - generic [ref=f8e99]: 2天
+                    - listitem [ref=f8e100] [cursor=pointer]:
+                      - button "打开任务 创建 plan-sync.txt 写入 synced" [ref=f8e101]:
+                        - generic "创建 plan-sync.txt 写入 synced" [ref=f8e105]
+                        - generic [ref=f8e106]: 21分
+                    - listitem [ref=f8e107] [cursor=pointer]:
+                      - button "打开任务 创建 plan-final.txt 写入 done" [ref=f8e108]:
+                        - generic "创建 plan-final.txt 写入 done" [ref=f8e112]
+                        - generic [ref=f8e113]: 27分
+                    - listitem [ref=f8e114] [cursor=pointer]:
+                      - button "打开任务 创建 plan-test3.txt 文件" [ref=f8e115]:
+                        - generic "创建 plan-test3.txt 文件" [ref=f8e119]
+                        - generic [ref=f8e120]: 34分
+                    - listitem [ref=f8e121] [cursor=pointer]:
+                      - button "打开任务 会话就绪回复测试" [ref=f8e122]:
+                        - generic "会话就绪回复测试" [ref=f8e126]
+                        - generic [ref=f8e127]: 1小时
+                    - listitem [ref=f8e128] [cursor=pointer]:
+                      - button "打开任务 执行 sleep 45 延时任务" [ref=f8e129]:
+                        - generic "执行 sleep 45 延时任务" [ref=f8e133]
+                        - generic [ref=f8e134]: 1小时
+                    - listitem [ref=f8e135] [cursor=pointer]:
+                      - button "打开任务 任务D:请直接回复\"D完成\",不做其他事。" [ref=f8e136]:
+                        - generic "任务D:请直接回复\"D完成\",不做其他事。" [ref=f8e140]
+                        - generic [ref=f8e141]: 1小时
+                    - listitem [ref=f8e142] [cursor=pointer]:
+                      - button "打开任务 任务B:请直接回复\"B完成\"即可,不用做任何其他事情。" [ref=f8e143]:
+                        - generic "任务B:请直接回复\"B完成\"即可,不用做任何其他事情。" [ref=f8e147]
+                        - generic [ref=f8e148]: 1小时
+                    - listitem [ref=f8e149] [cursor=pointer]:
+                      - button "打开任务 执行 sleep 60 等待命令" [ref=f8e150]:
+                        - generic "执行 sleep 60 等待命令" [ref=f8e154]
+                        - generic [ref=f8e155]: 1小时
+                    - listitem [ref=f8e156] [cursor=pointer]:
+                      - button "打开任务 记住暗号芝麻开门" [ref=f8e157]:
+                        - generic "记住暗号芝麻开门" [ref=f8e161]
+                        - generic [ref=f8e162]: 1小时
+                    - listitem [ref=f8e163] [cursor=pointer]:
+                      - button "打开任务 期待這次能順利解決" [ref=f8e164]:
+                        - generic "期待這次能順利解決" [ref=f8e168]
+                        - generic [ref=f8e169]: 2天
+                    - listitem [ref=f8e170] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f8e171]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f8e175]
+                        - generic [ref=f8e176]: 2天
+                    - listitem [ref=f8e177] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f8e178]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f8e182]
+                        - generic [ref=f8e183]: 2天
+                    - listitem [ref=f8e184] [cursor=pointer]:
+                      - button "打开任务 用AskUserQuestion询问晚餐火锅或烧烤" [ref=f8e185]:
+                        - generic "用AskUserQuestion询问晚餐火锅或烧烤" [ref=f8e189]
+                        - generic [ref=f8e190]: 2天
+                    - listitem [ref=f8e191] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f8e192]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f8e196]
+                        - generic [ref=f8e197]: 2天
+                    - listitem [ref=f8e198] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f8e199]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f8e203]
+                        - generic [ref=f8e204]: 2天
+                    - listitem [ref=f8e205] [cursor=pointer]:
+                      - button "打开任务 开始干活" [ref=f8e206]:
+                        - generic "开始干活" [ref=f8e210]
+                        - generic [ref=f8e211]: 2天
+                    - listitem [ref=f8e212] [cursor=pointer]:
+                      - button "打开任务 一句话回答今天是星期几" [ref=f8e213]:
+                        - generic "一句话回答今天是星期几" [ref=f8e217]
+                        - generic [ref=f8e218]: 2天
+                    - listitem [ref=f8e219] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f8e220]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f8e224]
+                        - generic [ref=f8e225]: 2天
+                    - listitem [ref=f8e226] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f8e227]:
+                        - generic "查看当前自己的ip" [ref=f8e231]
+                        - generic [ref=f8e232]: 2天
+                    - listitem [ref=f8e233] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f8e234]:
+                        - generic "git pull‘" [ref=f8e238]
+                        - generic [ref=f8e239]: 2天
+                    - listitem [ref=f8e240] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f8e241]:
+                        - generic "代码提交了吗？" [ref=f8e245]
+                        - generic [ref=f8e246]: 2天
+                    - listitem [ref=f8e247] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f8e248]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f8e252]
+                        - generic [ref=f8e253]: 2天
+                - listitem [ref=f8e254]:
+                  - button "zcode-remote 1" [expanded] [ref=f8e255]:
+                    - generic [ref=f8e262]: zcode-remote
+                    - generic [ref=f8e263]: "1"
+                  - list [ref=f8e264]:
+                    - listitem [ref=f8e265] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f8e266]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f8e270]
+                        - generic [ref=f8e271]: 3天
+            - generic [ref=f8e273]:
+              - button "连接使用" [ref=f8e274]
+              - button "设置" [ref=f8e281]
+      - separator "调整侧边栏宽度" [ref=f8e282]
+      - main [ref=f8e291]:
+        - generic [ref=f8e299]:
+          - paragraph [ref=f8e303]: 下午好呀，接下来交给我吧
+          - generic [ref=f8e307]:
+            - generic [ref=f8e309]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=f8e310]:
+                - generic [ref=f8e311]: zcode-quick-web-forward
+            - generic [ref=f8e312]:
+              - listbox "提及" [ref=f8e315]:
+                - generic [ref=f8e316]:
+                  - generic [ref=f8e317]: 插件
+                  - option "restore-legacy-sessions zcode-plugins-official · 1 技能 · 0 MCP" [selected] [ref=f8e321]:
+                    - generic [ref=f8e322]:
+                      - generic [ref=f8e327]: restore-legacy-sessions
+                      - generic [ref=f8e328]: zcode-plugins-official · 1 技能 · 0 MCP
+                  - generic [ref=f8e329]: 文件
+                  - option "plan-sess_ad7ca3e0-1ce5-4f94-8957-9e264c4c8252.md .zcode/plans/" [ref=f8e333]:
+                    - generic [ref=f8e334]:
+                      - generic [ref=f8e336]: plan-sess_ad7ca3e0-1ce5-4f94-8957-9e264c4c8252.md
+                      - generic [ref=f8e337]: .zcode/plans/
+                  - option "plan-sess_ca8f5c56-41d2-45d1-954e-51a37d079195.md .zcode/plans/" [ref=f8e340]:
+                    - generic [ref=f8e341]:
+                      - generic [ref=f8e343]: plan-sess_ca8f5c56-41d2-45d1-954e-51a37d079195.md
+                      - generic [ref=f8e344]: .zcode/plans/
+                  - option "LICENSE" [ref=f8e347]
+                  - option "engine internal/" [ref=f8e353]:
+                    - generic [ref=f8e354]:
+                      - generic [ref=f8e356]: engine
+                      - generic [ref=f8e357]: internal/
+                  - option "engine.go internal/engine/" [ref=f8e360]:
+                    - generic [ref=f8e361]:
+                      - generic [ref=f8e363]: engine.go
+                      - generic [ref=f8e364]: internal/engine/
+                  - option "relay.go internal/relay/" [ref=f8e367]:
+                    - generic [ref=f8e368]:
+                      - generic [ref=f8e370]: relay.go
+                      - generic [ref=f8e371]: internal/relay/
+                  - option "zcode.go internal/zcode/" [ref=f8e374]:
+                    - generic [ref=f8e375]:
+                      - generic [ref=f8e377]: zcode.go
+                      - generic [ref=f8e378]: internal/zcode/
+                  - option "nodejs.go internal/nodejs/" [ref=f8e381]:
+                    - generic [ref=f8e382]:
+                      - generic [ref=f8e384]: nodejs.go
+                      - generic [ref=f8e385]: internal/nodejs/
+                  - option "bridge.go internal/relay/" [ref=f8e388]:
+                    - generic [ref=f8e389]:
+                      - generic [ref=f8e391]: bridge.go
+                      - generic [ref=f8e392]: internal/relay/
+                  - option "channel.go internal/relay/" [ref=f8e395]:
+                    - generic [ref=f8e396]:
+                      - generic [ref=f8e398]: channel.go
+                      - generic [ref=f8e399]: internal/relay/
+                  - option "zcode_test.go internal/zcode/" [ref=f8e402]:
+                    - generic [ref=f8e403]:
+                      - generic [ref=f8e405]: zcode_test.go
+                      - generic [ref=f8e406]: internal/zcode/
+                  - option "terminal.go internal/terminal/" [ref=f8e409]:
+                    - generic [ref=f8e410]:
+                      - generic [ref=f8e412]: terminal.go
+                      - generic [ref=f8e413]: internal/terminal/
+              - generic [ref=f8e414]:
+                - textbox [active] [ref=f8e417]:
+                  - paragraph [ref=f8e418]: "@slee"
+                - generic [ref=f8e419]:
+                  - generic [ref=f8e421]:
+                    - button "添加上下文" [ref=f8e422]
+                    - combobox "切换模式" [ref=f8e424]:
+                      - generic "计划模式" [ref=f8e426]
+                    - combobox [aria-hidden] [ref=f8e428]
+                  - generic [ref=f8e430]:
+                    - generic [ref=f8e431]:
+                      - button "选择模型" [ref=f8e432]:
+                        - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f8e433]:
+                          - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f8e434]:
+                            - generic [ref=f8e435]:
+                              - generic [ref=f8e436]: Bigmodel - API Key/
+                              - generic [ref=f8e437]: GLM-5.3-Flash
+                      - combobox "低" [ref=f8e438]:
+                        - generic "低" [ref=f8e440]
+                      - combobox [aria-hidden] [ref=f8e442]
+                    - button "发送" [ref=f8e443]
+      - generic [ref=f8e446]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

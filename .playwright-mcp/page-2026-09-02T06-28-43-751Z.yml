@@ -1,0 +1,124 @@
+- generic:
+  - generic [aria-hidden]:
+    - button [aria-hidden]
+    - generic:
+      - generic:
+        - generic:
+          - heading [level=2]: 命令面板
+          - paragraph: 搜索并执行当前工作区可用的命令。
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - complementary:
+                  - complementary:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - group:
+                            - generic:
+                              - generic: 新建任务
+                              - generic: ⌘ N
+                          - button:
+                            - generic: 搜索
+                            - generic: ⌘ K
+                          - button: 插件市场
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic: 项目
+                                      - button
+                                    - generic:
+                                      - button
+                                      - button
+                                - list:
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: zqf-work
+                                      - generic: "2"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1小时
+                        - generic:
+                          - generic:
+                            - button:
+                              - generic: 连接使用
+                            - generic:
+                              - button
+              - separator
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - main:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - generic:
+                                            - generic:
+                                              - generic:
+                                                - generic:
+                                                  - generic:
+                                                    - paragraph: 下午好呀，接下来交给我吧
+                                              - generic [ref=f1e18]:
+                                                - generic [ref=f1e20]:
+                                                  - button
+                                                  - button [ref=f1e21]:
+                                                    - generic [ref=f1e22]: zqf-work
+                                                - generic [ref=f1e24]:
+                                                  - generic [ref=f1e26]:
+                                                    - textbox [ref=f1e27]:
+                                                      - paragraph [ref=f1e28]
+                                                    - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+                                                  - generic [ref=f1e29]:
+                                                    - generic [ref=f1e31]:
+                                                      - button [ref=f1e32]:
+                                                        - generic [ref=f1e33]: 添加上下文
+                                                      - combobox [ref=f1e34]:
+                                                        - generic [ref=f1e35]: 完全访问
+                                                      - combobox [aria-hidden] [ref=f1e38]
+                                                    - generic [ref=f1e40]:
+                                                      - button [ref=f1e42]:
+                                                        - generic [ref=f1e45]:
+                                                          - generic [ref=f1e46]: Bigmodel - API Key/
+                                                          - generic [ref=f1e47]: GLM-5.3
+                                                      - button [disabled]:
+                                                        - generic: 发送
+              - generic [ref=f1e48]:
+                - button [disabled]
+                - button [disabled]
+                - button
+  - dialog [ref=f1e50]:
+    - heading "欢迎使用 ZCode" [level=2] [ref=f1e51]
+    - paragraph [ref=f1e52]: 选择如何开始第一次会话。
+    - generic [ref=f1e53]:
+      - generic [ref=f1e54]:
+        - generic [ref=f1e55]:
+          - generic [ref=f1e56]: 首次启动设置
+          - generic [ref=f1e57]:
+            - img "ZCode" [ref=f1e58]
+            - generic [ref=f1e63]: 欢迎使用 ZCode
+        - generic [ref=f1e65]:
+          - button "开始使用 ZCode" [active] [ref=f1e66]
+          - button "数据迁移向导" [ref=f1e67]
+        - generic [ref=f1e68]: 可立即导入旧工具设置，或先跳过，稍后在设置中继续迁移。
+      - generic [ref=f1e73]:
+        - paragraph [ref=f1e74]: 快速打开，专注工作。
+        - paragraph [ref=f1e75]: 选择一个工作区，继续上次的进度，保持界面干净清爽。
+    - button "Close" [ref=f1e76]

@@ -1,0 +1,157 @@
+- generic [ref=f17e2]:
+  - button [aria-hidden] [ref=f17e15]
+  - generic [ref=f17e17]:
+    - generic [ref=f17e18]:
+      - heading "命令面板" [level=2] [ref=f17e19]
+      - paragraph [ref=f17e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f17e23]:
+      - complementary [ref=f17e25]:
+        - complementary [ref=f17e26]:
+          - generic [ref=f17e29]:
+            - generic [ref=f17e30]:
+              - group [ref=f17e31] [cursor=pointer]:
+                - generic [ref=f17e32]:
+                  - generic [ref=f17e35]: 新建任务
+                  - generic [ref=f17e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f17e37]:
+                - generic [ref=f17e38]: 搜索
+                - generic [ref=f17e39]: ⌘ K
+              - button "插件市场" [ref=f17e40]
+            - generic [ref=f17e44]:
+              - generic [ref=f17e46]:
+                - generic [ref=f17e47]:
+                  - generic [ref=f17e48]: 项目
+                  - button "收起全部" [ref=f17e49]
+                - generic [ref=f17e50]:
+                  - button "筛选和排序" [ref=f17e51]
+                  - button "归档" [ref=f17e52]
+              - list [ref=f17e53]:
+                - listitem [ref=f17e54]:
+                  - button "zcode-quick-web-forward 18" [expanded] [ref=f17e276]:
+                    - generic [ref=f17e62]: zcode-quick-web-forward
+                    - generic [ref=f17e63]: "18"
+                  - list [ref=f17e64]:
+                    - listitem [ref=f17e277] [cursor=pointer]:
+                      - button "打开任务 任务A:请执行 sleep 45 ,结束后回复\"A完成\"即可。" [ref=f17e278]:
+                        - generic "任务A:请执行 sleep 45 ,结束后回复\"A完成\"即可。" [ref=f17e282]
+                        - generic [ref=f17e283]: 刚刚
+                    - listitem [ref=f17e65] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f17e66]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f17e70]
+                        - generic [ref=f17e71]: 2天
+                    - listitem [ref=f17e72] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f17e73]:
+                        - generic "请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f17e77]
+                        - generic [ref=f17e78]: 2天
+                    - listitem [ref=f17e79] [cursor=pointer]:
+                      - button "打开任务 执行 sleep 60 等待命令" [ref=f17e80]:
+                        - generic "执行 sleep 60 等待命令" [ref=f17e84]
+                        - generic [ref=f17e85]: 5分
+                    - listitem [ref=f17e86] [cursor=pointer]:
+                      - button "打开任务 记住暗号芝麻开门" [ref=f17e87]:
+                        - generic "记住暗号芝麻开门" [ref=f17e91]
+                        - generic [ref=f17e92]: 13分
+                    - listitem [ref=f17e93] [cursor=pointer]:
+                      - button "打开任务 期待這次能順利解決" [ref=f17e94]:
+                        - generic "期待這次能順利解決" [ref=f17e98]
+                        - generic [ref=f17e99]: 2天
+                    - listitem [ref=f17e100] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f17e101]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f17e105]
+                        - generic [ref=f17e106]: 2天
+                    - listitem [ref=f17e107] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f17e108]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f17e112]
+                        - generic [ref=f17e113]: 2天
+                    - listitem [ref=f17e114] [cursor=pointer]:
+                      - button "打开任务 用AskUserQuestion询问晚餐火锅或烧烤" [ref=f17e115]:
+                        - generic "用AskUserQuestion询问晚餐火锅或烧烤" [ref=f17e119]
+                        - generic [ref=f17e120]: 2天
+                    - listitem [ref=f17e121] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f17e122]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f17e126]
+                        - generic [ref=f17e127]: 2天
+                    - listitem [ref=f17e128] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f17e129]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f17e133]
+                        - generic [ref=f17e134]: 2天
+                    - listitem [ref=f17e135] [cursor=pointer]:
+                      - button "打开任务 开始干活" [ref=f17e136]:
+                        - generic "开始干活" [ref=f17e140]
+                        - generic [ref=f17e141]: 2天
+                    - listitem [ref=f17e142] [cursor=pointer]:
+                      - button "打开任务 一句话回答今天是星期几" [ref=f17e143]:
+                        - generic "一句话回答今天是星期几" [ref=f17e147]
+                        - generic [ref=f17e148]: 2天
+                    - listitem [ref=f17e149] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f17e150]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f17e154]
+                        - generic [ref=f17e155]: 2天
+                    - listitem [ref=f17e156] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f17e157]:
+                        - generic "查看当前自己的ip" [ref=f17e161]
+                        - generic [ref=f17e162]: 2天
+                    - listitem [ref=f17e163] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f17e164]:
+                        - generic "git pull‘" [ref=f17e168]
+                        - generic [ref=f17e169]: 2天
+                    - listitem [ref=f17e170] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f17e171]:
+                        - generic "代码提交了吗？" [ref=f17e175]
+                        - generic [ref=f17e176]: 2天
+                    - listitem [ref=f17e177] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f17e178]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f17e182]
+                        - generic [ref=f17e183]: 2天
+                - listitem [ref=f17e184]:
+                  - button "zcode-remote 1" [expanded] [ref=f17e185]:
+                    - generic [ref=f17e192]: zcode-remote
+                    - generic [ref=f17e193]: "1"
+                  - list [ref=f17e194]:
+                    - listitem [ref=f17e195] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f17e196]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f17e200]
+                        - generic [ref=f17e201]: 3天
+            - generic [ref=f17e203]:
+              - button "连接使用" [ref=f17e204]
+              - button "设置" [ref=f17e211]
+      - separator "调整侧边栏宽度" [ref=f17e212]
+      - generic [ref=f17e214]:
+        - generic [ref=f17e285]:
+          - generic [ref=f17e286]:
+            - heading "新建任务" [level=1] [ref=f17e287]
+            - generic "/home/friddle/nas/zcode-quick-web-forward" [ref=f17e289]: zcode-quick-web-forward
+            - button "更多" [ref=f17e294]
+          - generic [ref=f17e295]:
+            - button "帮助" [ref=f17e296]
+            - button "切换终端" [ref=f17e297]
+            - button "展开侧边面板" [ref=f17e298]
+        - main [ref=f17e221]:
+          - generic [ref=f17e243]:
+            - generic [ref=f17e245]:
+              - textbox [active] [ref=f17e246]:
+                - paragraph [ref=f17e299]
+              - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+            - generic [ref=f17e248]:
+              - generic [ref=f17e250]:
+                - button "添加上下文" [ref=f17e251]
+                - combobox "切换模式" [ref=f17e253]:
+                  - generic "变更前确认" [ref=f17e255]
+                - combobox [aria-hidden] [ref=f17e257]
+              - generic [ref=f17e259]:
+                - generic [ref=f17e260]:
+                  - button "上下文已用 5,243 / 总量 1,000,000" [ref=f17e262]
+                  - button "选择模型" [ref=f17e263]:
+                    - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f17e264]:
+                      - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f17e265]:
+                        - generic [ref=f17e266]:
+                          - generic [ref=f17e267]: Bigmodel - API Key/
+                          - generic [ref=f17e268]: GLM-5.3-Flash
+                  - combobox "低" [ref=f17e269]:
+                    - generic "低" [ref=f17e271]
+                  - combobox [aria-hidden] [ref=f17e273]
+                - button "停止生成" [ref=f17e300]
+      - generic [ref=f17e275]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

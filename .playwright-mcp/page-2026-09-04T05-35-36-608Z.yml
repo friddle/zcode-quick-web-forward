@@ -1,0 +1,215 @@
+- generic:
+  - generic [aria-hidden]:
+    - button [aria-hidden]
+    - generic:
+      - generic:
+        - generic:
+          - heading [level=2]: 命令面板
+          - paragraph: 搜索并执行当前工作区可用的命令。
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - complementary:
+                  - complementary:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - group:
+                            - generic:
+                              - generic: 新建任务
+                              - generic: ⌘ N
+                          - button:
+                            - generic: 搜索
+                            - generic: ⌘ K
+                          - button: 插件市场
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic: 项目
+                                      - button
+                                    - generic:
+                                      - button
+                                      - button
+                                - list:
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: zcode-remote
+                                      - generic: "6"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 刚刚
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 4分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 12分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 22分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 22分
+                                      - listitem:
+                                        - button:
+                                          - generic: 向 zqf-test.txt 追加当前时间并显示
+                                          - generic: 10分
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: ytb-dl-web
+                                      - generic: "20"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用 python 输出 100 以内的所有质数
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: hello
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: Python 列出当前目录前3个文件
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 那 9 × 8 呢
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用 Python 计算 15 乘以 3
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: Echo 测试运行中显示
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: Counting from 1 to 10
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用 python 算 2+3
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                        - generic:
+                          - generic:
+                            - button:
+                              - generic: 连接使用
+                            - generic:
+                              - button
+              - separator
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - main:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - generic:
+                                            - generic:
+                                              - generic:
+                                                - generic:
+                                                  - generic:
+                                                    - paragraph: 中午好呀，要不要先休息一下
+                                              - generic [ref=f6e293]:
+                                                - generic [ref=f6e295]:
+                                                  - button [ref=f6e324]
+                                                  - button [expanded] [ref=f6e325]:
+                                                    - generic [ref=f6e297]: zcode-remote
+                                                - generic [ref=f6e299]:
+                                                  - generic [ref=f6e301]:
+                                                    - textbox [ref=f6e302]:
+                                                      - paragraph [ref=f6e303]
+                                                    - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+                                                  - generic [ref=f6e304]:
+                                                    - generic [ref=f6e306]:
+                                                      - button [ref=f6e326]:
+                                                        - generic [ref=f6e308]: 添加上下文
+                                                      - combobox [ref=f6e327]:
+                                                        - generic [ref=f6e310]: 完全访问
+                                                      - combobox [aria-hidden] [ref=f6e313]
+                                                    - generic [ref=f6e315]:
+                                                      - button [ref=f6e329]:
+                                                        - generic [ref=f6e320]:
+                                                          - generic [ref=f6e321]: Bigmodel - API Key/
+                                                          - generic [ref=f6e322]: GLM-5.3
+                                                      - button [disabled]:
+                                                        - generic: 发送
+              - generic [ref=f6e323]:
+                - button [disabled]
+                - button [disabled]
+                - button
+  - menu "选择项目" [active] [ref=f6e332]:
+    - group [ref=f6e334]:
+      - textbox "搜索工作区" [ref=f6e335]
+      - group [ref=f6e336]
+    - generic [ref=f6e340]:
+      - menuitemcheckbox "zcode-remote" [checked] [ref=f6e341]
+      - separator [ref=f6e343]
+      - menuitemcheckbox "不在项目中工作" [ref=f6e344]

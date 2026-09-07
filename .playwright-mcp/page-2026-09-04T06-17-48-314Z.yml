@@ -1,0 +1,248 @@
+- generic:
+  - generic [aria-hidden]:
+    - button [aria-hidden]
+    - generic:
+      - generic:
+        - generic:
+          - heading [level=2]: 命令面板
+          - paragraph: 搜索并执行当前工作区可用的命令。
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - complementary:
+                  - complementary:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - group:
+                            - generic:
+                              - generic: 新建任务
+                              - generic: ⌘ N
+                          - button:
+                            - generic: 搜索
+                            - generic: ⌘ K
+                          - button: 插件市场
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic: 项目
+                                      - button
+                                    - generic:
+                                      - button
+                                      - button
+                                - list:
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: zcode-quick-web-forward
+                                      - generic: "6"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 2分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 17分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 20分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 31分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 31分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 35分
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: ytb-dl-web
+                                      - generic: "20"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用 python 输出 100 以内的所有质数
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: hello
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: Python 列出当前目录前3个文件
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 那 9 × 8 呢
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用 Python 计算 15 乘以 3
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: Echo 测试运行中显示
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: Counting from 1 to 10
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用 python 算 2+3
+                                          - generic: 1天
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1天
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: zcode-remote
+                                      - generic: "6"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 41分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 45分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 54分
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1小时
+                                      - listitem:
+                                        - button:
+                                          - generic: 新任务
+                                          - generic: 1小时
+                                      - listitem:
+                                        - button:
+                                          - generic: 向 zqf-test.txt 追加当前时间并显示
+                                          - generic: 52分
+                        - generic:
+                          - generic:
+                            - button:
+                              - generic: 连接使用
+                            - generic:
+                              - button
+              - separator
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=1]:
+                          - generic: 新建任务
+                        - generic: zcode-quick-web-forward
+                        - generic:
+                          - button [expanded]
+                      - generic:
+                        - button
+                        - button
+                        - button
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - main:
+                                - generic [ref=f11e345]:
+                                  - generic [ref=f11e347]:
+                                    - textbox [ref=f11e348]:
+                                      - paragraph [ref=f11e349]
+                                    - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+                                  - generic [ref=f11e350]:
+                                    - generic [ref=f11e352]:
+                                      - button [ref=f11e657]:
+                                        - generic [ref=f11e354]: 添加上下文
+                                      - combobox [ref=f11e658]:
+                                        - generic [ref=f11e356]: 完全访问
+                                      - combobox [aria-hidden] [ref=f11e359]
+                                    - generic [ref=f11e361]:
+                                      - button [ref=f11e660]:
+                                        - generic [ref=f11e366]:
+                                          - generic [ref=f11e367]: Bigmodel - API Key/
+                                          - generic [ref=f11e368]: GLM-5.3
+                                      - button [disabled]:
+                                        - generic: 发送
+              - generic [ref=f11e369]:
+                - button [disabled]
+                - button [disabled]
+                - button
+  - menu "更多" [active] [ref=f11e663]:
+    - menuitem "置顶任务" [ref=f11e664]
+    - menuitem "重命名任务" [ref=f11e665]
+    - menuitem "归档任务" [ref=f11e666]
+    - menuitem "标记为未读" [ref=f11e667]
+    - separator [ref=f11e668]
+    - menuitem "在 Finder 中打开" [ref=f11e669]
+    - menuitem "复制路径" [ref=f11e670]
+    - menuitem "复制任务路径" [disabled]
+    - menuitem "复制日志路径" [disabled]
+    - menuitem "复制会话 ID" [disabled]
+    - menuitem "前往配置" [disabled]
+    - separator [ref=f11e671]
+    - menuitem "查看调用轨迹" [disabled]
+    - separator [ref=f11e672]
+    - menuitem "反馈问题" [ref=f11e673]

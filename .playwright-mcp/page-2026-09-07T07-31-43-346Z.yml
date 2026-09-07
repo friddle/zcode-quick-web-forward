@@ -1,0 +1,201 @@
+- generic [ref=f6e2]:
+  - button [aria-hidden] [ref=f6e15]
+  - generic [ref=f6e17]:
+    - generic [ref=f6e18]:
+      - heading "命令面板" [level=2] [ref=f6e19]
+      - paragraph [ref=f6e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f6e23]:
+      - complementary [ref=f6e25]:
+        - complementary [ref=f6e26]:
+          - generic [ref=f6e29]:
+            - generic [ref=f6e30]:
+              - group [ref=f6e31] [cursor=pointer]:
+                - generic [ref=f6e32]:
+                  - generic [ref=f6e35]: 新建任务
+                  - generic [ref=f6e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f6e37]:
+                - generic [ref=f6e38]: 搜索
+                - generic [ref=f6e39]: ⌘ K
+              - button "插件市场" [ref=f6e40]
+            - generic [ref=f6e44]:
+              - generic [ref=f6e46]:
+                - generic [ref=f6e47]:
+                  - generic [ref=f6e48]: 项目
+                  - button "收起全部" [ref=f6e49]
+                - generic [ref=f6e50]:
+                  - button "筛选和排序" [ref=f6e51]
+                  - button "归档" [ref=f6e52]
+              - list [ref=f6e53]:
+                - listitem [ref=f6e54]:
+                  - button "zcode-quick-web-forward 27" [expanded] [ref=f6e337]:
+                    - generic [ref=f6e62]: zcode-quick-web-forward
+                    - generic [ref=f6e63]: "27"
+                  - list [ref=f6e64]:
+                    - listitem [ref=f6e338] [cursor=pointer]:
+                      - button "打开任务 创建文件 plan-sync.txt 内容写 synced" [ref=f6e339]:
+                        - generic "创建文件 plan-sync.txt 内容写 synced" [ref=f6e343]
+                        - generic [ref=f6e344]: 刚刚
+                    - listitem [ref=f6e65] [cursor=pointer]:
+                      - button "打开任务 创建文件 plan-test2.txt 内容写 ok" [ref=f6e66]:
+                        - generic "创建文件 plan-test2.txt 内容写 ok" [ref=f6e70]
+                        - generic [ref=f6e71]: 18分
+                    - listitem [ref=f6e72] [cursor=pointer]:
+                      - button "打开任务 回复\"side OK\"即可。" [ref=f6e73]:
+                        - generic "回复\"side OK\"即可。" [ref=f6e77]
+                        - generic [ref=f6e78]: 27分
+                    - listitem [ref=f6e79] [cursor=pointer]:
+                      - button "打开任务 查看当前目录 .go 文件" [ref=f6e80]:
+                        - generic "查看当前目录 .go 文件" [ref=f6e84]
+                        - generic [ref=f6e85]: 41分
+                    - listitem [ref=f6e86] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f6e87]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f6e91]
+                        - generic [ref=f6e92]: 2天
+                    - listitem [ref=f6e93] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f6e94]:
+                        - generic "请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f6e98]
+                        - generic [ref=f6e99]: 2天
+                    - listitem [ref=f6e100] [cursor=pointer]:
+                      - button "打开任务 创建 plan-final.txt 写入 done" [ref=f6e101]:
+                        - generic "创建 plan-final.txt 写入 done" [ref=f6e105]
+                        - generic [ref=f6e106]: 4分
+                    - listitem [ref=f6e107] [cursor=pointer]:
+                      - button "打开任务 创建 plan-test3.txt 文件" [ref=f6e108]:
+                        - generic "创建 plan-test3.txt 文件" [ref=f6e112]
+                        - generic [ref=f6e113]: 11分
+                    - listitem [ref=f6e114] [cursor=pointer]:
+                      - button "打开任务 会话就绪回复测试" [ref=f6e115]:
+                        - generic "会话就绪回复测试" [ref=f6e119]
+                        - generic [ref=f6e120]: 53分
+                    - listitem [ref=f6e121] [cursor=pointer]:
+                      - button "打开任务 执行 sleep 45 延时任务" [ref=f6e122]:
+                        - generic "执行 sleep 45 延时任务" [ref=f6e126]
+                        - generic [ref=f6e127]: 1小时
+                    - listitem [ref=f6e128] [cursor=pointer]:
+                      - button "打开任务 任务D:请直接回复\"D完成\",不做其他事。" [ref=f6e129]:
+                        - generic "任务D:请直接回复\"D完成\",不做其他事。" [ref=f6e133]
+                        - generic [ref=f6e134]: 1小时
+                    - listitem [ref=f6e135] [cursor=pointer]:
+                      - button "打开任务 任务B:请直接回复\"B完成\"即可,不用做任何其他事情。" [ref=f6e136]:
+                        - generic "任务B:请直接回复\"B完成\"即可,不用做任何其他事情。" [ref=f6e140]
+                        - generic [ref=f6e141]: 1小时
+                    - listitem [ref=f6e142] [cursor=pointer]:
+                      - button "打开任务 执行 sleep 60 等待命令" [ref=f6e143]:
+                        - generic "执行 sleep 60 等待命令" [ref=f6e147]
+                        - generic [ref=f6e148]: 1小时
+                    - listitem [ref=f6e149] [cursor=pointer]:
+                      - button "打开任务 记住暗号芝麻开门" [ref=f6e150]:
+                        - generic "记住暗号芝麻开门" [ref=f6e154]
+                        - generic [ref=f6e155]: 1小时
+                    - listitem [ref=f6e156] [cursor=pointer]:
+                      - button "打开任务 期待這次能順利解決" [ref=f6e157]:
+                        - generic "期待這次能順利解決" [ref=f6e161]
+                        - generic [ref=f6e162]: 2天
+                    - listitem [ref=f6e163] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f6e164]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f6e168]
+                        - generic [ref=f6e169]: 2天
+                    - listitem [ref=f6e170] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f6e171]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f6e175]
+                        - generic [ref=f6e176]: 2天
+                    - listitem [ref=f6e177] [cursor=pointer]:
+                      - button "打开任务 用AskUserQuestion询问晚餐火锅或烧烤" [ref=f6e178]:
+                        - generic "用AskUserQuestion询问晚餐火锅或烧烤" [ref=f6e182]
+                        - generic [ref=f6e183]: 2天
+                    - listitem [ref=f6e184] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f6e185]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f6e189]
+                        - generic [ref=f6e190]: 2天
+                    - listitem [ref=f6e191] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f6e192]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f6e196]
+                        - generic [ref=f6e197]: 2天
+                    - listitem [ref=f6e198] [cursor=pointer]:
+                      - button "打开任务 开始干活" [ref=f6e199]:
+                        - generic "开始干活" [ref=f6e203]
+                        - generic [ref=f6e204]: 2天
+                    - listitem [ref=f6e205] [cursor=pointer]:
+                      - button "打开任务 一句话回答今天是星期几" [ref=f6e206]:
+                        - generic "一句话回答今天是星期几" [ref=f6e210]
+                        - generic [ref=f6e211]: 2天
+                    - listitem [ref=f6e212] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f6e213]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f6e217]
+                        - generic [ref=f6e218]: 2天
+                    - listitem [ref=f6e219] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f6e220]:
+                        - generic "查看当前自己的ip" [ref=f6e224]
+                        - generic [ref=f6e225]: 2天
+                    - listitem [ref=f6e226] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f6e227]:
+                        - generic "git pull‘" [ref=f6e231]
+                        - generic [ref=f6e232]: 2天
+                    - listitem [ref=f6e233] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f6e234]:
+                        - generic "代码提交了吗？" [ref=f6e238]
+                        - generic [ref=f6e239]: 2天
+                    - listitem [ref=f6e240] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f6e241]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f6e245]
+                        - generic [ref=f6e246]: 2天
+                - listitem [ref=f6e247]:
+                  - button "zcode-remote 1" [expanded] [ref=f6e248]:
+                    - generic [ref=f6e255]: zcode-remote
+                    - generic [ref=f6e256]: "1"
+                  - list [ref=f6e257]:
+                    - listitem [ref=f6e258] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f6e259]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f6e263]
+                        - generic [ref=f6e264]: 3天
+            - generic [ref=f6e266]:
+              - button "连接使用" [ref=f6e267]
+              - button "设置" [ref=f6e274]
+      - separator "调整侧边栏宽度" [ref=f6e275]
+      - generic [ref=f6e277]:
+        - generic [ref=f6e346]:
+          - generic [ref=f6e347]:
+            - heading "创建文件 plan-sync.txt 内容写 synced" [level=1] [ref=f6e348]
+            - generic "/home/friddle/nas/zcode-quick-web-forward" [ref=f6e350]: zcode-quick-web-forward
+            - button "更多" [ref=f6e355]
+          - generic [ref=f6e356]:
+            - button "帮助" [ref=f6e357]
+            - button "切换终端" [ref=f6e358]
+            - button "展开侧边面板" [ref=f6e359]
+        - main [ref=f6e284]:
+          - generic [ref=f6e292]:
+            - generic [ref=f6e364]:
+              - generic [ref=f6e365]:
+                - generic [ref=f6e366]: 创建文件 plan-sync.txt 内容写 synced
+                - button "复制" [ref=f6e370]
+              - button "工作中 57 秒" [expanded] [ref=f6e403]
+            - generic [ref=f6e377]:
+              - generic [ref=f6e378]:
+                - generic [ref=f6e379]:
+                  - generic [ref=f6e380]:
+                    - generic [ref=f6e381]: 计划
+                    - text: 是否批准该计划?
+                  - generic [ref=f6e382]:
+                    - button "上一题" [disabled]
+                    - generic [ref=f6e383]: 1 / 1
+                    - button "下一题" [disabled]
+                - listbox "是否批准该计划?" [ref=f6e385]:
+                  - option "1. 批准" [active] [selected] [ref=f6e386]:
+                    - generic [ref=f6e387]: "1."
+                    - generic [ref=f6e388]: 批准
+                  - option "2. 拒绝" [ref=f6e389]:
+                    - generic [ref=f6e390]: "2."
+                    - generic [ref=f6e391]: 拒绝
+                  - generic [ref=f6e392]:
+                    - generic [ref=f6e393]: "3."
+                    - textbox "输入你的回答..." [ref=f6e394]
+              - generic [ref=f6e395]:
+                - paragraph [ref=f6e396]:
+                  - generic [ref=f6e399]: 使用 Tab / 上下键选择，回车或空格选中
+                - generic [ref=f6e400]:
+                  - button "忽略" [ref=f6e401]
+                  - button "提交" [ref=f6e402]
+      - generic [ref=f6e336]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

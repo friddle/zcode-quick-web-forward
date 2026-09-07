@@ -588,6 +588,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 			ps.setSession(subReq.SessionID, "") // keep workspacePath
 		}
 		sid, _ := ps.get()
+		fmt.Printf("zcode: [subscribe] %s requested=%q resolved=%q\n", c.Name, subReq.SessionID, sid)
 		subID := ps.convSub()
 		if subID == "" {
 			if sid != "" {

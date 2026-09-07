@@ -1,0 +1,246 @@
+- generic:
+  - generic [aria-hidden]:
+    - button [aria-hidden]
+    - generic:
+      - generic:
+        - generic:
+          - heading [level=2]: 命令面板
+          - paragraph: 搜索并执行当前工作区可用的命令。
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - complementary:
+                  - complementary:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - group:
+                            - generic:
+                              - generic: 新建任务
+                              - generic: ⌘ N
+                          - button:
+                            - generic: 搜索
+                            - generic: ⌘ K
+                          - button: 插件市场
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic: 项目
+                                      - button
+                                    - generic:
+                                      - button
+                                      - button
+                                - list:
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: zcode-quick-web-forward
+                                      - generic: "22"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 查看当前目录有哪些 .go 文件并一句话汇报。如果进入计划,直接批准执行。
+                                          - generic: 刚刚
+                                      - listitem:
+                                        - button:
+                                          - generic: 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 会话就绪回复测试
+                                          - generic: 6分
+                                      - listitem:
+                                        - button:
+                                          - generic: 执行 sleep 45 延时任务
+                                          - generic: 14分
+                                      - listitem:
+                                        - button:
+                                          - generic: 任务D:请直接回复"D完成",不做其他事。
+                                          - generic: 15分
+                                      - listitem:
+                                        - button:
+                                          - generic: 任务B:请直接回复"B完成"即可,不用做任何其他事情。
+                                          - generic: 21分
+                                      - listitem:
+                                        - button:
+                                          - generic: 执行 sleep 60 等待命令
+                                          - generic: 29分
+                                      - listitem:
+                                        - button:
+                                          - generic: 记住暗号芝麻开门
+                                          - generic: 36分
+                                      - listitem:
+                                        - button:
+                                          - generic: 期待這次能順利解決
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 调用 AskUserQuestion 询问晚餐选择
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 调用AskUserQuestion询问晚餐选择
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用AskUserQuestion询问晚餐火锅或烧烤
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 调用 AskUserQuestion 询问晚餐选择
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 调用AskUserQuestion询问晚餐选择
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 开始干活
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 一句话回答今天是星期几
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 用一句话回答:现在是几点钟
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 查看当前自己的ip
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: git pull‘
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: 代码提交了吗？
+                                          - generic: 2天
+                                      - listitem:
+                                        - button:
+                                          - generic: zcode Runtime 加量扣费匹配问题
+                                          - generic: 2天
+                                  - listitem:
+                                    - button [expanded]:
+                                      - generic: zcode-remote
+                                      - generic: "1"
+                                    - list:
+                                      - listitem:
+                                        - button:
+                                          - generic: 向 zqf-test.txt 追加当前时间并显示
+                                          - generic: 3天
+                        - generic:
+                          - generic:
+                            - button:
+                              - generic: 连接使用
+                            - generic:
+                              - button
+              - separator
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=1]:
+                          - generic: 查看当前目录有哪些 .go 文件并一句话汇报。如果进入计划,直接批准执行。
+                        - generic: zcode-quick-web-forward
+                        - generic:
+                          - button
+                      - generic:
+                        - button
+                        - button
+                        - button
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - main:
+                                - generic:
+                                  - generic:
+                                    - generic:
+                                      - generic:
+                                        - generic:
+                                          - generic:
+                                            - generic:
+                                              - generic:
+                                                - generic:
+                                                  - generic:
+                                                    - generic:
+                                                      - generic:
+                                                        - generic:
+                                                          - generic:
+                                                            - generic:
+                                                              - button:
+                                                                - generic: 已处理
+                                                            - generic:
+                                                              - generic:
+                                                                - generic:
+                                                                  - paragraph:
+                                                                    - text: 共找到
+                                                                    - strong: 31 个 .go 文件
+                                                                    - text: ：主体在
+                                                                    - code: cmd/zcode-quick-web-forward/
+                                                                    - text: (15 个，含 main、channel、conversation、webremote 等模块拆分)，其余分布在
+                                                                    - code: internal/
+                                                                    - text: 下 7 个子包(manifest、runtime、nodejs、zcode、browser、relay、terminal、engine),另有约 7 个测试文件。
+                                                                  - paragraph: (任务仅为查看汇报，无需计划。)
+                                                        - generic:
+                                                          - button:
+                                                            - generic: 复制
+                                                          - generic: 14:43
+                                              - generic [ref=f1e271]:
+                                                - generic [ref=f1e273]:
+                                                  - textbox [ref=f1e274]:
+                                                    - paragraph [ref=f1e436]
+                                                  - generic: 提出后续修改要求
+                                                - generic [ref=f1e276]:
+                                                  - generic [ref=f1e278]:
+                                                    - button [ref=f1e448]:
+                                                      - generic [ref=f1e280]: 添加上下文
+                                                    - combobox [expanded] [ref=f1e449]:
+                                                      - generic [ref=f1e282]: 计划模式
+                                                    - combobox [aria-hidden] [ref=f1e285]
+                                                  - generic [ref=f1e287]:
+                                                    - generic [ref=f1e288]:
+                                                      - button [ref=f1e451]
+                                                      - button [ref=f1e452]:
+                                                        - generic [ref=f1e292]:
+                                                          - generic [ref=f1e293]: Bigmodel - API Key/
+                                                          - generic [ref=f1e294]: GLM-5.3-Flash
+                                                      - combobox [ref=f1e455]:
+                                                        - generic [ref=f1e296]: 低
+                                                      - combobox [aria-hidden] [ref=f1e299]
+                                                    - button [disabled]:
+                                                      - generic: 发送
+              - generic [ref=f1e301]:
+                - button [disabled]
+                - button [disabled]
+                - button
+  - listbox [ref=f1e457]:
+    - option "变更前确认 改文件前先问我。" [ref=f1e458]:
+      - generic [ref=f1e461]:
+        - generic [ref=f1e462]: 变更前确认
+        - generic [ref=f1e463]: 改文件前先问我。
+    - option "自动编辑 自动编辑文件。" [ref=f1e464]:
+      - generic [ref=f1e467]:
+        - generic [ref=f1e468]: 自动编辑
+        - generic [ref=f1e469]: 自动编辑文件。
+    - option "计划模式 编辑前先出计划。" [active] [selected] [ref=f1e470]:
+      - generic [ref=f1e473]:
+        - generic [ref=f1e474]: 计划模式
+        - generic [ref=f1e475]: 编辑前先出计划。
+    - option "完全访问 减少确认次数。" [ref=f1e476]:
+      - generic [ref=f1e479]:
+        - generic [ref=f1e480]: 完全访问
+        - generic [ref=f1e481]: 减少确认次数。

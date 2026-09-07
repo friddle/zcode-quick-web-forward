@@ -1,0 +1,79 @@
+- generic [ref=f4e2]:
+  - button [aria-hidden] [ref=f4e210]
+  - generic [ref=f4e212]:
+    - generic [ref=f4e213]:
+      - heading "命令面板" [level=2] [ref=f4e214]
+      - paragraph [ref=f4e215]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f4e218]:
+      - complementary [ref=f4e220]:
+        - complementary [ref=f4e221]:
+          - generic [ref=f4e224]:
+            - generic [ref=f4e225]:
+              - group [ref=f4e226] [cursor=pointer]:
+                - generic [ref=f4e227]:
+                  - generic [ref=f4e230]: 新建任务
+                  - generic [ref=f4e231]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f4e232]:
+                - generic [ref=f4e233]: 搜索
+                - generic [ref=f4e234]: ⌘ K
+              - button "插件市场" [ref=f4e235]
+            - generic [ref=f4e239]:
+              - generic [ref=f4e241]:
+                - generic [ref=f4e242]:
+                  - generic [ref=f4e243]: 项目
+                  - button "收起全部" [ref=f4e244]
+                - generic [ref=f4e245]:
+                  - button "筛选和排序" [ref=f4e246]
+                  - button "归档" [ref=f4e247]
+              - list [ref=f4e248]:
+                - listitem [ref=f4e249]:
+                  - button "zcode-quick-web-forward 2" [expanded] [ref=f4e250]:
+                    - generic [ref=f4e257]: zcode-quick-web-forward
+                    - generic [ref=f4e258]: "2"
+                  - list [ref=f4e259]:
+                    - listitem [ref=f4e260] [cursor=pointer]:
+                      - button "打开任务 草稿转正测试" [ref=f4e261]:
+                        - generic "草稿转正测试" [ref=f4e265]
+                        - generic [ref=f4e266]: 22分
+                    - listitem [ref=f4e267] [cursor=pointer]:
+                      - button "打开任务 询问当前client是否为zcode及计费方式" [ref=f4e268]:
+                        - generic "询问当前client是否为zcode及计费方式" [ref=f4e272]
+                        - generic [ref=f4e273]: 刚刚
+                - listitem [ref=f4e274]:
+                  - button "zcode-remote 1" [expanded] [ref=f4e275]:
+                    - generic [ref=f4e282]: zcode-remote
+                    - generic [ref=f4e283]: "1"
+                  - list [ref=f4e284]:
+                    - listitem [ref=f4e285] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f4e286]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f4e290]
+                        - generic [ref=f4e291]: 3小时
+            - generic [ref=f4e293]:
+              - button "连接使用" [ref=f4e294]
+              - button "设置" [ref=f4e301]
+      - separator "调整侧边栏宽度" [ref=f4e302]
+      - generic [ref=f4e304]:
+        - generic [ref=f4e306]:
+          - generic [ref=f4e307]:
+            - heading "询问当前client是否为zcode及计费方式" [level=1] [ref=f4e308]
+            - generic "/home/friddle/nas/zcode-quick-web-forward" [ref=f4e310]: zcode-quick-web-forward
+            - button "更多" [ref=f4e315]
+          - generic [ref=f4e316]:
+            - button "帮助" [ref=f4e317]
+            - button "切换终端" [ref=f4e318]
+            - button "展开侧边面板" [ref=f4e319]
+        - main [ref=f4e326]:
+          - generic [ref=f4e341]:
+            - generic [ref=f4e343]:
+              - textbox [ref=f4e344]:
+                - paragraph [ref=f4e345]
+              - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+            - generic [ref=f4e346]:
+              - generic [ref=f4e348]:
+                - button "添加上下文" [disabled]
+              - generic [ref=f4e350]:
+                - button "发送" [disabled]
+      - generic [ref=f4e351]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

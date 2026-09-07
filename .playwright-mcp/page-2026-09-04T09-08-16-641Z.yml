@@ -1,0 +1,81 @@
+- generic [ref=e2]:
+  - button [aria-hidden] [ref=e15]
+  - generic [ref=e17]:
+    - generic [ref=e18]:
+      - heading "命令面板" [level=2] [ref=e19]
+      - paragraph [ref=e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=e23]:
+      - complementary [ref=e25]:
+        - complementary [ref=e26]:
+          - generic [ref=e29]:
+            - generic [ref=e30]:
+              - group [ref=e31] [cursor=pointer]:
+                - generic [ref=e32]:
+                  - generic [ref=e35]: 新建任务
+                  - generic [ref=e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=e37]:
+                - generic [ref=e38]: 搜索
+                - generic [ref=e39]: ⌘ K
+              - button "插件市场" [ref=e40]
+            - generic [ref=e44]:
+              - generic [ref=e46]:
+                - generic [ref=e47]:
+                  - generic [ref=e48]: 项目
+                  - button "收起全部" [ref=e49]
+                - generic [ref=e50]:
+                  - button "筛选和排序" [ref=e51]
+                  - button "归档" [ref=e52]
+              - list [ref=e53]:
+                - listitem [ref=e54]:
+                  - button "zcode-quick-web-forward 1" [expanded] [ref=e55]:
+                    - generic [ref=e62]: zcode-quick-web-forward
+                    - generic [ref=e63]: "1"
+                  - list [ref=e64]:
+                    - listitem [ref=e65] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=e66]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=e70]
+                        - generic [ref=e71]: 16分
+                - listitem [ref=e72]:
+                  - button "zcode-remote 1" [expanded] [ref=e73]:
+                    - generic [ref=e80]: zcode-remote
+                    - generic [ref=e81]: "1"
+                  - list [ref=e82]:
+                    - listitem [ref=e83] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=e84]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=e88]
+                        - generic [ref=e89]: 3小时
+            - generic [ref=e91]:
+              - button "连接使用" [ref=e92]
+              - button "设置" [ref=e99]
+      - separator "调整侧边栏宽度" [ref=e100]
+      - main [ref=e109]:
+        - generic [ref=e117]:
+          - paragraph [ref=e121]: 下午好呀，接下来交给我吧
+          - generic [ref=e125]:
+            - generic [ref=e127]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=e128]:
+                - generic [ref=e129]: zcode-quick-web-forward
+            - generic [ref=e131]:
+              - generic [ref=e133]:
+                - textbox [active] [ref=e134]:
+                  - paragraph [ref=e135]
+                - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+              - generic [ref=e136]:
+                - generic [ref=e138]:
+                  - button "添加上下文" [ref=e139]
+                  - combobox "切换模式" [ref=e141]:
+                    - generic "变更前确认" [ref=e143]
+                  - combobox [aria-hidden] [ref=e145]
+                - generic [ref=e147]:
+                  - button "选择模型" [ref=e149]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=e150]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=e151]:
+                        - generic [ref=e152]:
+                          - generic [ref=e153]: Bigmodel - API Key/
+                          - generic [ref=e154]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=e155]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

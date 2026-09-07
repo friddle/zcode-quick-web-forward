@@ -37,8 +37,23 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 	// history so the conversation is restored, not left empty.
 	if (c.Name == "resyncConversationV4" || c.Name == "resyncSessionsIndexV4" ||
 		c.Name == "subscribeConversationV4") && (c.Name != "subscribeSessionsIndexV4") {
-		sid, _ := ps.get()
-		if sid != "" {
+	// The recovery must target the session THE CLIENT ASKED about, not the
+	// bridge's "current" session: the phone juggles several conversations
+	// (e.g. deleting a stale draft) and a stale resync would otherwise
+	// clobber the freshly opened one.
+	var subReq struct {
+		SessionID string `json:"sessionId"`
+	}
+	if raw, ok := c.Arg.(json.RawMessage); ok {
+		_ = json.Unmarshal(raw, &subReq)
+	} else if b, err := json.Marshal(c.Arg); err == nil {
+		_ = json.Unmarshal(b, &subReq)
+	}
+	sid := subReq.SessionID
+	if sid == "" {
+		sid, _ = ps.get()
+	}
+	if sid != "" {
 			rows := []any{}
 			if engClient != nil {
 				if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {

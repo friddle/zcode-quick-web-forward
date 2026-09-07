@@ -1,0 +1,8 @@
+- generic [ref=f16e5]:
+  - heading "正在连接中转服务…" [level=1] [ref=f16e8]
+  - paragraph [ref=f16e9]: 正在建立手机与远控中转服务的连接。
+  - generic [ref=f16e10]:
+    - generic [ref=f16e11]: 1. 连接中转服务
+    - generic [ref=f16e12]: 2. 设备鉴权
+    - generic [ref=f16e13]: 3. 等待桌面端配对
+    - generic [ref=f16e14]: 4. 同步工作区

@@ -1,0 +1,240 @@
+- generic [ref=f3e2]:
+  - button [aria-hidden] [ref=f3e15]
+  - generic [ref=f3e17]:
+    - generic [ref=f3e18]:
+      - heading "命令面板" [level=2] [ref=f3e19]
+      - paragraph [ref=f3e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f3e23]:
+      - complementary [ref=f3e25]:
+        - complementary [ref=f3e26]:
+          - generic [ref=f3e29]:
+            - generic [ref=f3e30]:
+              - group [ref=f3e31] [cursor=pointer]:
+                - generic [ref=f3e32]:
+                  - generic [ref=f3e35]: 新建任务
+                  - generic [ref=f3e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f3e37]:
+                - generic [ref=f3e38]: 搜索
+                - generic [ref=f3e39]: ⌘ K
+              - button "插件市场" [ref=f3e40]
+            - generic [ref=f3e44]:
+              - generic [ref=f3e46]:
+                - generic [ref=f3e47]:
+                  - generic [ref=f3e48]: 项目
+                  - button "收起全部" [ref=f3e49]
+                - generic [ref=f3e50]:
+                  - button "筛选和排序" [ref=f3e51]
+                  - button "归档" [ref=f3e52]
+              - list [ref=f3e53]:
+                - listitem [ref=f3e54]:
+                  - button "zcode-remote 3" [expanded] [ref=f3e298]:
+                    - generic [ref=f3e62]: zcode-remote
+                    - generic [ref=f3e63]: "3"
+                  - list [ref=f3e64]:
+                    - listitem [ref=f3e299] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e300]:
+                        - generic "新任务" [ref=f3e304]
+                        - generic [ref=f3e305]: 刚刚
+                    - listitem [ref=f3e65] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e66]:
+                        - generic "新任务" [ref=f3e70]
+                        - generic [ref=f3e71]: 6分
+                    - listitem [ref=f3e72] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e73]:
+                        - generic "新任务" [ref=f3e77]
+                        - generic [ref=f3e78]: 6分
+                - listitem [ref=f3e79]:
+                  - button "ytb-dl-web 20" [expanded] [ref=f3e80]:
+                    - generic [ref=f3e87]: ytb-dl-web
+                    - generic [ref=f3e88]: "20"
+                  - list [ref=f3e89]:
+                    - listitem [ref=f3e90] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e91]:
+                        - generic "新任务" [ref=f3e95]
+                        - generic [ref=f3e96]: 1天
+                    - listitem [ref=f3e97] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e98]:
+                        - generic "新任务" [ref=f3e102]
+                        - generic [ref=f3e103]: 1天
+                    - listitem [ref=f3e104] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e105]:
+                        - generic "新任务" [ref=f3e109]
+                        - generic [ref=f3e110]: 1天
+                    - listitem [ref=f3e111] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e112]:
+                        - generic "新任务" [ref=f3e116]
+                        - generic [ref=f3e117]: 1天
+                    - listitem [ref=f3e118] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e119]:
+                        - generic "新任务" [ref=f3e123]
+                        - generic [ref=f3e124]: 1天
+                    - listitem [ref=f3e125] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e126]:
+                        - generic "新任务" [ref=f3e130]
+                        - generic [ref=f3e131]: 1天
+                    - listitem [ref=f3e132] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e133]:
+                        - generic "新任务" [ref=f3e137]
+                        - generic [ref=f3e138]: 1天
+                    - listitem [ref=f3e139] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e140]:
+                        - generic "新任务" [ref=f3e144]
+                        - generic [ref=f3e145]: 1天
+                    - listitem [ref=f3e146] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e147]:
+                        - generic "新任务" [ref=f3e151]
+                        - generic [ref=f3e152]: 1天
+                    - listitem [ref=f3e153] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e154]:
+                        - generic "新任务" [ref=f3e158]
+                        - generic [ref=f3e159]: 1天
+                    - listitem [ref=f3e160] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e161]:
+                        - generic "新任务" [ref=f3e165]
+                        - generic [ref=f3e166]: 1天
+                    - listitem [ref=f3e167] [cursor=pointer]:
+                      - button "打开任务 用 python 输出 100 以内的所有质数" [ref=f3e168]:
+                        - generic "用 python 输出 100 以内的所有质数" [ref=f3e172]
+                        - generic [ref=f3e173]: 1天
+                    - listitem [ref=f3e174] [cursor=pointer]:
+                      - button "打开任务 hello" [ref=f3e175]:
+                        - generic "hello" [ref=f3e179]
+                        - generic [ref=f3e180]: 1天
+                    - listitem [ref=f3e181] [cursor=pointer]:
+                      - button "打开任务 Python 列出当前目录前3个文件" [ref=f3e182]:
+                        - generic "Python 列出当前目录前3个文件" [ref=f3e186]
+                        - generic [ref=f3e187]: 1天
+                    - listitem [ref=f3e188] [cursor=pointer]:
+                      - button "打开任务 那 9 × 8 呢" [ref=f3e189]:
+                        - generic "那 9 × 8 呢" [ref=f3e193]
+                        - generic [ref=f3e194]: 1天
+                    - listitem [ref=f3e195] [cursor=pointer]:
+                      - button "打开任务 用 Python 计算 15 乘以 3" [ref=f3e196]:
+                        - generic "用 Python 计算 15 乘以 3" [ref=f3e200]
+                        - generic [ref=f3e201]: 1天
+                    - listitem [ref=f3e202] [cursor=pointer]:
+                      - button "打开任务 Echo 测试运行中显示" [ref=f3e203]:
+                        - generic "Echo 测试运行中显示" [ref=f3e207]
+                        - generic [ref=f3e208]: 1天
+                    - listitem [ref=f3e209] [cursor=pointer]:
+                      - button "打开任务 Counting from 1 to 10" [ref=f3e210]:
+                        - generic "Counting from 1 to 10" [ref=f3e214]
+                        - generic [ref=f3e215]: 1天
+                    - listitem [ref=f3e216] [cursor=pointer]:
+                      - button "打开任务 用 python 算 2+3" [ref=f3e217]:
+                        - generic "用 python 算 2+3" [ref=f3e221]
+                        - generic [ref=f3e222]: 1天
+                    - listitem [ref=f3e223] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e224]:
+                        - generic "新任务" [ref=f3e228]
+                        - generic [ref=f3e229]: 1天
+            - generic [ref=f3e231]:
+              - button "连接使用" [ref=f3e232]
+              - button "设置" [ref=f3e239]
+      - separator "调整侧边栏宽度" [ref=f3e240]
+      - generic [ref=f3e242]:
+        - generic [ref=f3e307]:
+          - generic [ref=f3e308]:
+            - heading "新建任务" [level=1] [ref=f3e309]
+            - generic "/home/friddle/zcode-remote" [ref=f3e311]: zcode-remote
+            - button "更多" [ref=f3e316]
+          - generic [ref=f3e317]:
+            - button "帮助" [ref=f3e318]
+            - button "切换终端" [ref=f3e319]
+            - button "展开侧边面板" [ref=f3e320]
+        - main [ref=f3e249]:
+          - generic [ref=f3e257]:
+            - generic [ref=f3e324]:
+              - generic [ref=f3e326]:
+                - button "已处理" [ref=f3e328]
+                - generic [ref=f3e332]:
+                  - paragraph [ref=f3e336]: 用 python 计算 123 乘以 456,把等式与结果写入当前工作区的 zqf-test.txt 文件,然后读出文件内容给我看。
+                  - generic [ref=f3e339]:
+                    - paragraph [ref=f3e340]: 我用 Python 计算并把结果写入文件，然后读出来给你看。
+                    - generic [ref=f3e341]:
+                      - generic [ref=f3e342]:
+                        - generic [ref=f3e343]: text
+                        - generic [ref=f3e346]:
+                          - button "自动换行" [ref=f3e347]
+                          - button "复制代码" [ref=f3e348]
+                      - code [ref=f3e353]:
+                        - generic [ref=f3e354]:
+                          - generic [ref=f3e355]: python3 -c "
+                          - generic [ref=f3e356]: a, b = 123, 456
+                          - generic [ref=f3e357]: result = a * b
+                          - generic [ref=f3e358]: "with open('/home/friddle/zcode-remote/zqf-test.txt', 'w') as f:"
+                          - generic [ref=f3e359]: "f.write(f'{a} * {b} = {result}\\n')"
+                          - generic [ref=f3e360]: "print(f'计算结果: {a} * {b} = {result}')"
+                          - generic [ref=f3e361]: "\""
+                    - generic [ref=f3e362]:
+                      - generic [ref=f3e363]:
+                        - generic [ref=f3e364]: text
+                        - generic [ref=f3e367]:
+                          - button "自动换行" [ref=f3e368]
+                          - button "复制代码" [ref=f3e369]
+                      - code [ref=f3e374]:
+                        - generic [ref=f3e375]: "计算结果: 123 * 456 = 56088"
+                  - generic [ref=f3e379]:
+                    - generic [ref=f3e380]:
+                      - generic [ref=f3e381]:
+                        - generic [ref=f3e382]: text
+                        - generic [ref=f3e385]:
+                          - button "自动换行" [ref=f3e386]
+                          - button "复制代码" [ref=f3e387]
+                      - generic [ref=f3e388]:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - code
+                    - generic [ref=f3e389]:
+                      - generic [ref=f3e390]:
+                        - generic [ref=f3e391]: text
+                        - generic [ref=f3e394]:
+                          - button "自动换行" [ref=f3e395]
+                          - button "复制代码" [ref=f3e396]
+                      - code [ref=f3e401]:
+                        - generic [ref=f3e402]:
+                          - generic [ref=f3e403]: 1 123 * 456 = 56088
+                          - generic [ref=f3e404]: "2"
+                  - generic [ref=f3e407]:
+                    - paragraph [ref=f3e408]:
+                      - text: 完成了。Python 计算结果：
+                      - strong [ref=f3e409]: 123 × 456 = 56088
+                    - paragraph [ref=f3e410]:
+                      - text: 文件
+                      - code [ref=f3e411]: /home/friddle/zcode-remote/zqf-test.txt
+                      - text: 已写入，读出的内容为：
+                    - generic [ref=f3e412]:
+                      - generic [ref=f3e413]:
+                        - generic [ref=f3e414]: text
+                        - generic [ref=f3e417]:
+                          - button "自动换行" [ref=f3e418]
+                          - button "复制代码" [ref=f3e419]
+                      - code [ref=f3e424]:
+                        - generic [ref=f3e425]: 123 * 456 = 56088
+              - generic [ref=f3e427]:
+                - button "复制" [ref=f3e428]
+                - generic [ref=f3e430]: 13:19
+            - generic [ref=f3e271]:
+              - generic [ref=f3e273]:
+                - textbox [active] [ref=f3e274]:
+                  - paragraph [ref=f3e431]
+                - generic: 提出后续修改要求
+              - generic [ref=f3e276]:
+                - generic [ref=f3e278]:
+                  - button "添加上下文" [ref=f3e279]
+                  - combobox "切换模式" [ref=f3e281]:
+                    - generic "完全访问" [ref=f3e283]
+                  - combobox [aria-hidden] [ref=f3e285]
+                - generic [ref=f3e287]:
+                  - button "选择模型" [ref=f3e289]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=f3e290]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=f3e291]:
+                        - generic [ref=f3e292]:
+                          - generic [ref=f3e293]: Bigmodel - API Key/
+                          - generic [ref=f3e294]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=f3e295]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

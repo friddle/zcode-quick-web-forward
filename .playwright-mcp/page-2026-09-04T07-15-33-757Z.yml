@@ -1,0 +1,10 @@
+- generic [ref=e2]:
+  - button [aria-hidden] [ref=e369]
+  - generic [ref=e373]:
+    - heading "已配对，正在加载工作区…" [level=1] [ref=e376]
+    - paragraph [ref=e377]: 连接已建立，正在同步桌面端工作区和任务。
+    - generic [ref=e378]:
+      - generic [ref=e379]: 1. 连接中转服务
+      - generic [ref=e380]: 2. 设备鉴权
+      - generic [ref=e381]: 3. 等待桌面端配对
+      - generic [ref=e382]: 4. 同步工作区

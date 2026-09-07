@@ -1,0 +1,61 @@
+- generic [ref=e2]:
+  - button [aria-hidden] [ref=e78]
+  - generic [ref=e80]:
+    - generic [ref=e81]:
+      - heading "命令面板" [level=2] [ref=e82]
+      - paragraph [ref=e83]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=e86]:
+      - complementary [ref=e88]:
+        - complementary [ref=e89]:
+          - generic [ref=e92]:
+            - generic [ref=e93]:
+              - group [ref=e94] [cursor=pointer]:
+                - generic [ref=e95]:
+                  - generic [ref=e98]: 新建任务
+                  - generic [ref=e99]: ⌘ N
+              - button "搜索 ⌘ K" [ref=e100]:
+                - generic [ref=e101]: 搜索
+                - generic [ref=e102]: ⌘ K
+              - button "插件市场" [ref=e103]
+            - generic [ref=e107]:
+              - generic [ref=e109]:
+                - generic [ref=e110]: 项目
+                - generic [ref=e112]:
+                  - button "筛选和排序" [ref=e113]
+                  - button "归档" [ref=e114]
+              - generic [ref=e115]: 当前桌面窗口没有可展示的任务
+            - generic [ref=e117]:
+              - button "连接使用" [ref=e118]
+              - button "设置" [ref=e125]
+      - separator "调整侧边栏宽度" [ref=e126]
+      - main [ref=e135]:
+        - generic [ref=e143]:
+          - paragraph [ref=e147]: 晚上好呀，今天辛苦啦
+          - generic [ref=e18]:
+            - generic [ref=e20]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=e148]:
+                - generic [ref=e22]: zqf-work
+            - generic [ref=e24]:
+              - generic [ref=e26]:
+                - textbox [ref=e27]:
+                  - paragraph [ref=e28]
+                - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+              - generic [ref=e29]:
+                - generic [ref=e31]:
+                  - button "添加上下文" [ref=e149]
+                  - combobox "切换模式" [ref=e150]:
+                    - generic "完全访问" [ref=e151]
+                  - combobox [aria-hidden] [ref=e38]
+                - generic [ref=e40]:
+                  - button "选择模型" [ref=e152]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=e153]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=e154]:
+                        - generic [ref=e45]:
+                          - generic [ref=e46]: Bigmodel - API Key/
+                          - generic [ref=e47]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=e48]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

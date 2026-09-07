@@ -1,0 +1,168 @@
+- generic [ref=f20e2]:
+  - button [aria-hidden] [ref=f20e15]
+  - generic [ref=f20e17]:
+    - generic [ref=f20e18]:
+      - heading "命令面板" [level=2] [ref=f20e19]
+      - paragraph [ref=f20e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f20e23]:
+      - complementary [ref=f20e25]:
+        - complementary [ref=f20e26]:
+          - generic [ref=f20e29]:
+            - generic [ref=f20e30]:
+              - group [ref=f20e31] [cursor=pointer]:
+                - generic [ref=f20e32]:
+                  - generic [ref=f20e35]: 新建任务
+                  - generic [ref=f20e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f20e37]:
+                - generic [ref=f20e38]: 搜索
+                - generic [ref=f20e39]: ⌘ K
+              - button "插件市场" [ref=f20e40]
+            - generic [ref=f20e44]:
+              - generic [ref=f20e46]:
+                - generic [ref=f20e47]:
+                  - generic [ref=f20e48]: 项目
+                  - button "收起全部" [ref=f20e49]
+                - generic [ref=f20e50]:
+                  - button "筛选和排序" [ref=f20e51]
+                  - button "归档" [ref=f20e52]
+              - list [ref=f20e53]:
+                - listitem [ref=f20e54]:
+                  - button "zcode-quick-web-forward 14" [expanded] [ref=f20e55]:
+                    - generic [ref=f20e62]: zcode-quick-web-forward
+                    - generic [ref=f20e63]: "14"
+                  - list [ref=f20e64]:
+                    - listitem [ref=f20e65] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f20e66]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f20e70]
+                        - generic [ref=f20e71]: 3小时
+                    - listitem [ref=f20e72] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f20e73]:
+                        - generic "请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f20e77]
+                        - generic [ref=f20e78]: 4小时
+                    - listitem [ref=f20e79] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f20e80]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f20e84]
+                        - generic [ref=f20e85]: 3小时
+                    - listitem [ref=f20e86] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f20e87]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f20e91]
+                        - generic [ref=f20e92]: 3小时
+                    - listitem [ref=f20e93] [cursor=pointer]:
+                      - button "打开任务 用AskUserQuestion询问晚餐火锅或烧烤" [ref=f20e94]:
+                        - generic "用AskUserQuestion询问晚餐火锅或烧烤" [ref=f20e98]
+                        - generic [ref=f20e99]: 3小时
+                    - listitem [ref=f20e100] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f20e101]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f20e105]
+                        - generic [ref=f20e106]: 3小时
+                    - listitem [ref=f20e107] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f20e108]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f20e112]
+                        - generic [ref=f20e113]: 4小时
+                    - listitem [ref=f20e114] [cursor=pointer]:
+                      - button "打开任务 开始干活" [ref=f20e115]:
+                        - generic "开始干活" [ref=f20e119]
+                        - generic [ref=f20e120]: 4小时
+                    - listitem [ref=f20e121] [cursor=pointer]:
+                      - button "打开任务 一句话回答今天是星期几" [ref=f20e122]:
+                        - generic "一句话回答今天是星期几" [ref=f20e126]
+                        - generic [ref=f20e127]: 4小时
+                    - listitem [ref=f20e128] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f20e129]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f20e133]
+                        - generic [ref=f20e134]: 4小时
+                    - listitem [ref=f20e135] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f20e136]:
+                        - generic "查看当前自己的ip" [ref=f20e140]
+                        - generic [ref=f20e141]: 5小时
+                    - listitem [ref=f20e142] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f20e143]:
+                        - generic "git pull‘" [ref=f20e147]
+                        - generic [ref=f20e148]: 6小时
+                    - listitem [ref=f20e149] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f20e150]:
+                        - generic "代码提交了吗？" [ref=f20e154]
+                        - generic [ref=f20e155]: 6小时
+                    - listitem [ref=f20e156] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f20e157]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f20e161]
+                        - generic [ref=f20e162]: 6小时
+                - listitem [ref=f20e163]:
+                  - button "zcode-remote 1" [expanded] [ref=f20e164]:
+                    - generic [ref=f20e171]: zcode-remote
+                    - generic [ref=f20e172]: "1"
+                  - list [ref=f20e173]:
+                    - listitem [ref=f20e174] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f20e175]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f20e179]
+                        - generic [ref=f20e180]: 10小时
+            - generic [ref=f20e182]:
+              - button "连接使用" [ref=f20e183]
+              - button "设置" [ref=f20e190]
+      - separator "调整侧边栏宽度" [ref=f20e191]
+      - main [ref=f20e200]:
+        - generic [ref=f20e208]:
+          - paragraph [ref=f20e212]: 夜深啦，别忘了照顾好自己哦
+          - generic [ref=f20e216]:
+            - generic [ref=f20e218]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=f20e219]:
+                - generic [ref=f20e220]: zcode-quick-web-forward
+            - generic [ref=f20e221]:
+              - generic [ref=f20e223]:
+                - listbox "命令与能力" [ref=f20e224]:
+                  - generic [ref=f20e225]:
+                    - generic [ref=f20e226]: 命令
+                    - option "/goal Show or set the current session goal." [selected] [ref=f20e230]:
+                      - generic [ref=f20e231]:
+                        - generic [ref=f20e232]: /goal
+                        - generic [ref=f20e233]: Show or set the current session goal.
+                    - option "/compact Compact the current conversation with optional instructions." [ref=f20e236]:
+                      - generic [ref=f20e237]:
+                        - generic [ref=f20e238]: /compact
+                        - generic [ref=f20e239]: Compact the current conversation with optional instructions.
+                    - option "/init Create or update workspace AGENTS.md instructions." [ref=f20e242]:
+                      - generic [ref=f20e243]:
+                        - generic [ref=f20e244]: /init
+                        - generic [ref=f20e245]: Create or update workspace AGENTS.md instructions.
+                    - option "/plan Switch to Plan mode and optionally send a task." [ref=f20e248]:
+                      - generic [ref=f20e249]:
+                        - generic [ref=f20e250]: /plan
+                        - generic [ref=f20e251]: Switch to Plan mode and optionally send a task.
+                    - generic [ref=f20e252]: 技能
+                    - generic [ref=f20e254]: 没有匹配的技能
+                    - generic [ref=f20e256]: 子智能体
+                    - option "general-purpose Workspace · 通用子任务执行智能体" [ref=f20e260]:
+                      - generic [ref=f20e261]:
+                        - generic [ref=f20e262]: general-purpose
+                        - generic [ref=f20e263]: Workspace · 通用子任务执行智能体
+                    - option "zcode-agent Workspace · ZCode 主智能体" [ref=f20e266]:
+                      - generic [ref=f20e267]:
+                        - generic [ref=f20e268]: zcode-agent
+                        - generic [ref=f20e269]: Workspace · ZCode 主智能体
+                - generic [ref=f20e270]: 输入内容以搜索命令、技能或子智能体
+              - generic [ref=f20e274]:
+                - textbox [active] [ref=f20e277]:
+                  - paragraph [ref=f20e278]: /
+                - generic [ref=f20e279]:
+                  - generic [ref=f20e281]:
+                    - button "添加上下文" [ref=f20e282]
+                    - combobox "切换模式" [ref=f20e284]:
+                      - generic "变更前确认" [ref=f20e286]
+                    - combobox [aria-hidden] [ref=f20e288]
+                  - generic [ref=f20e290]:
+                    - generic [ref=f20e291]:
+                      - button "选择模型" [ref=f20e292]:
+                        - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f20e293]:
+                          - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f20e294]:
+                            - generic [ref=f20e295]:
+                              - generic [ref=f20e296]: Bigmodel - API Key/
+                              - generic [ref=f20e297]: GLM-5.3-Flash
+                      - combobox "低" [ref=f20e298]:
+                        - generic "低" [ref=f20e300]
+                      - combobox [aria-hidden] [ref=f20e302]
+                    - button "发送" [ref=f20e303]
+      - generic [ref=f20e305]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

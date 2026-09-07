@@ -1,0 +1,152 @@
+- generic [ref=f14e2]:
+  - button [aria-hidden] [ref=f14e15]
+  - generic [ref=f14e17]:
+    - generic [ref=f14e18]:
+      - heading "命令面板" [level=2] [ref=f14e19]
+      - paragraph [ref=f14e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f14e23]:
+      - complementary [ref=f14e25]:
+        - complementary [ref=f14e26]:
+          - generic [ref=f14e29]:
+            - generic [ref=f14e30]:
+              - group [ref=f14e31] [cursor=pointer]:
+                - generic [ref=f14e32]:
+                  - generic [ref=f14e35]: 新建任务
+                  - generic [ref=f14e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f14e37]:
+                - generic [ref=f14e38]: 搜索
+                - generic [ref=f14e39]: ⌘ K
+              - button "插件市场" [ref=f14e40]
+            - generic [ref=f14e44]:
+              - generic [ref=f14e46]:
+                - generic [ref=f14e47]:
+                  - generic [ref=f14e48]: 项目
+                  - button "收起全部" [ref=f14e49]
+                - generic [ref=f14e50]:
+                  - button "筛选和排序" [ref=f14e51]
+                  - button "归档" [ref=f14e52]
+              - list [ref=f14e53]:
+                - listitem [ref=f14e54]:
+                  - button "zcode-quick-web-forward 13" [expanded] [ref=f14e238]:
+                    - generic [ref=f14e62]: zcode-quick-web-forward
+                    - generic [ref=f14e63]: "13"
+                  - list [ref=f14e64]:
+                    - listitem [ref=f14e239] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f14e240]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f14e244]
+                        - generic [ref=f14e245]: 刚刚
+                    - listitem [ref=f14e65] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f14e66]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f14e70]
+                        - generic [ref=f14e71]: 5分
+                    - listitem [ref=f14e72] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f14e73]:
+                        - generic "请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f14e77]
+                        - generic [ref=f14e78]: 45分
+                    - listitem [ref=f14e79] [cursor=pointer]:
+                      - button "打开任务 用AskUserQuestion询问晚餐火锅或烧烤" [ref=f14e80]:
+                        - generic "用AskUserQuestion询问晚餐火锅或烧烤" [ref=f14e84]
+                        - generic [ref=f14e85]: 12分
+                    - listitem [ref=f14e86] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f14e87]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f14e91]
+                        - generic [ref=f14e92]: 24分
+                    - listitem [ref=f14e93] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f14e94]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f14e98]
+                        - generic [ref=f14e99]: 34分
+                    - listitem [ref=f14e100] [cursor=pointer]:
+                      - button "打开任务 开始干活" [ref=f14e101]:
+                        - generic "开始干活" [ref=f14e105]
+                        - generic [ref=f14e106]: 51分
+                    - listitem [ref=f14e107] [cursor=pointer]:
+                      - button "打开任务 一句话回答今天是星期几" [ref=f14e108]:
+                        - generic "一句话回答今天是星期几" [ref=f14e112]
+                        - generic [ref=f14e113]: 1小时
+                    - listitem [ref=f14e114] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f14e115]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f14e119]
+                        - generic [ref=f14e120]: 1小时
+                    - listitem [ref=f14e121] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f14e122]:
+                        - generic "查看当前自己的ip" [ref=f14e126]
+                        - generic [ref=f14e127]: 1小时
+                    - listitem [ref=f14e128] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f14e129]:
+                        - generic "git pull‘" [ref=f14e133]
+                        - generic [ref=f14e134]: 2小时
+                    - listitem [ref=f14e135] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f14e136]:
+                        - generic "代码提交了吗？" [ref=f14e140]
+                        - generic [ref=f14e141]: 3小时
+                    - listitem [ref=f14e142] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f14e143]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f14e147]
+                        - generic [ref=f14e148]: 3小时
+                - listitem [ref=f14e149]:
+                  - button "zcode-remote 1" [expanded] [ref=f14e150]:
+                    - generic [ref=f14e157]: zcode-remote
+                    - generic [ref=f14e158]: "1"
+                  - list [ref=f14e159]:
+                    - listitem [ref=f14e160] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f14e161]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f14e165]
+                        - generic [ref=f14e166]: 6小时
+            - generic [ref=f14e168]:
+              - button "连接使用" [ref=f14e169]
+              - button "设置" [ref=f14e176]
+      - separator "调整侧边栏宽度" [ref=f14e177]
+      - generic [ref=f14e179]:
+        - generic [ref=f14e247]:
+          - generic [ref=f14e248]:
+            - heading "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [level=1] [ref=f14e249]
+            - generic "/home/friddle/nas/zcode-quick-web-forward" [ref=f14e251]: zcode-quick-web-forward
+            - button "更多" [ref=f14e256]
+          - generic [ref=f14e257]:
+            - button "帮助" [ref=f14e258]
+            - button "切换终端" [ref=f14e259]
+            - button "展开侧边面板" [ref=f14e260]
+        - main [ref=f14e186]:
+          - generic [ref=f14e194]:
+            - generic [ref=f14e309]:
+              - generic [ref=f14e311]:
+                - button "已处理" [ref=f14e313]
+                - generic [ref=f14e319]:
+                  - paragraph [ref=f14e320]: 抱歉，AskUserQuestion 工具的权限请求失败了(可能被环境拒绝)。我直接在这里问您：
+                  - paragraph [ref=f14e321]:
+                    - strong [ref=f14e322]: 晚上吃什么？
+                  - list [ref=f14e323]:
+                    - listitem [ref=f14e324]: A. 火锅
+                    - listitem [ref=f14e325]: B. 烧烤
+                  - paragraph [ref=f14e326]: 请回复 A 或 B,我会据此给您一句话建议。
+              - generic [ref=f14e327]:
+                - button "复制" [ref=f14e328]
+                - generic [ref=f14e330]: 20:25
+            - generic [ref=f14e208]:
+              - generic [ref=f14e210]:
+                - textbox [ref=f14e211]:
+                  - paragraph [ref=f14e331]
+                - generic: 提出后续修改要求
+              - generic [ref=f14e213]:
+                - generic [ref=f14e215]:
+                  - button "添加上下文" [ref=f14e216]
+                  - combobox "切换模式" [ref=f14e218]:
+                    - generic "变更前确认" [ref=f14e220]
+                  - combobox [aria-hidden] [ref=f14e222]
+                - generic [ref=f14e224]:
+                  - generic [ref=f14e225]:
+                    - button "上下文已用 13,855 / 总量 1,000,000" [ref=f14e333]
+                    - button "选择模型" [ref=f14e226]:
+                      - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f14e227]:
+                        - generic "Bigmodel - API Key/GLM-5.3-Flash" [ref=f14e228]:
+                          - generic [ref=f14e229]:
+                            - generic [ref=f14e230]: Bigmodel - API Key/
+                            - generic [ref=f14e231]: GLM-5.3-Flash
+                    - combobox "低" [ref=f14e232]:
+                      - generic "低" [ref=f14e234]
+                    - combobox [aria-hidden] [ref=f14e236]
+                  - button "发送" [disabled]
+      - generic [ref=f14e237]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

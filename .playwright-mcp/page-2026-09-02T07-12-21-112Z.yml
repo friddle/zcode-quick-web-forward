@@ -1,0 +1,84 @@
+- generic [ref=e2]:
+  - button [aria-hidden] [ref=e15]
+  - generic [ref=e17]:
+    - generic [ref=e18]:
+      - heading "命令面板" [level=2] [ref=e19]
+      - paragraph [ref=e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=e23]:
+      - complementary [ref=e25]:
+        - complementary [ref=e26]:
+          - generic [ref=e29]:
+            - generic [ref=e30]:
+              - group [ref=e31] [cursor=pointer]:
+                - generic [ref=e32]:
+                  - generic [ref=e35]: 新建任务
+                  - generic [ref=e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=e37]:
+                - generic [ref=e38]: 搜索
+                - generic [ref=e39]: ⌘ K
+              - button "插件市场" [ref=e40]
+            - generic [ref=e44]:
+              - generic [ref=e46]:
+                - generic [ref=e47]:
+                  - generic [ref=e48]: 项目
+                  - button "收起全部" [ref=e49]
+                - generic [ref=e50]:
+                  - button "筛选和排序" [ref=e51]
+                  - button "归档" [ref=e52]
+              - list [ref=e53]:
+                - listitem [ref=e54]:
+                  - button "ytb-dl-web 4" [expanded] [ref=e55]:
+                    - generic [ref=e62]: ytb-dl-web
+                    - generic [ref=e63]: "4"
+                  - list [ref=e64]:
+                    - listitem [ref=e65] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e66]:
+                        - generic "新任务" [ref=e70]
+                        - generic [ref=e71]: 刚刚
+                    - listitem [ref=e72] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e73]:
+                        - generic "新任务" [ref=e77]
+                        - generic [ref=e78]: 刚刚
+                    - listitem [ref=e79] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e80]:
+                        - generic "新任务" [ref=e84]
+                        - generic [ref=e85]: 1分
+                    - listitem [ref=e86] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=e87]:
+                        - generic "新任务" [ref=e91]
+                        - generic [ref=e92]: 20分
+            - generic [ref=e94]:
+              - button "连接使用" [ref=e95]
+              - button "设置" [ref=e102]
+      - separator "调整侧边栏宽度" [ref=e103]
+      - main [ref=e112]:
+        - generic [ref=e120]:
+          - paragraph [ref=e124]: 下午好呀，接下来交给我吧
+          - generic [ref=e128]:
+            - generic [ref=e130]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=e131]:
+                - generic [ref=e132]: ytb-dl-web
+            - generic [ref=e134]:
+              - generic [ref=e136]:
+                - textbox [active] [ref=e137]:
+                  - paragraph [ref=e138]
+                - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+              - generic [ref=e139]:
+                - generic [ref=e141]:
+                  - button "添加上下文" [ref=e142]
+                  - combobox "切换模式" [ref=e144]:
+                    - generic "完全访问" [ref=e146]
+                  - combobox [aria-hidden] [ref=e148]
+                - generic [ref=e150]:
+                  - button "选择模型" [ref=e152]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=e153]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=e154]:
+                        - generic [ref=e155]:
+                          - generic [ref=e156]: Bigmodel - API Key/
+                          - generic [ref=e157]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=e158]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

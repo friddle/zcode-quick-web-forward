@@ -1,0 +1,118 @@
+- generic [ref=f16e2]:
+  - button [aria-hidden] [ref=f16e15]
+  - generic [ref=f16e17]:
+    - generic [ref=f16e18]:
+      - heading "命令面板" [level=2] [ref=f16e19]
+      - paragraph [ref=f16e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f16e23]:
+      - complementary [ref=f16e25]:
+        - complementary [ref=f16e26]:
+          - generic [ref=f16e29]:
+            - generic [ref=f16e30]:
+              - group [ref=f16e31] [cursor=pointer]:
+                - generic [ref=f16e32]:
+                  - generic [ref=f16e35]: 新建任务
+                  - generic [ref=f16e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f16e37]:
+                - generic [ref=f16e38]: 搜索
+                - generic [ref=f16e39]: ⌘ K
+              - button "插件市场" [ref=f16e40]
+            - generic [ref=f16e44]:
+              - generic [ref=f16e46]:
+                - generic [ref=f16e47]:
+                  - generic [ref=f16e48]: 项目
+                  - button "收起全部" [ref=f16e49]
+                - generic [ref=f16e50]:
+                  - button "筛选和排序" [ref=f16e51]
+                  - button "归档" [ref=f16e52]
+              - list [ref=f16e53]:
+                - listitem [ref=f16e54]:
+                  - button "zcode-quick-web-forward 14" [expanded] [ref=f16e55]:
+                    - generic [ref=f16e62]: zcode-quick-web-forward
+                    - generic [ref=f16e63]: "14"
+                  - list [ref=f16e64]:
+                    - listitem [ref=f16e65] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f16e66]:
+                        - generic "请调用 AskUserQuestion 工具问我:晚上吃什么,选项A火锅 B烧烤。得到我的选择后据此回复一句话。" [ref=f16e70]
+                        - generic [ref=f16e71]: 27分
+                    - listitem [ref=f16e72] [cursor=pointer]:
+                      - button "打开任务 请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f16e73]:
+                        - generic "请调用 AskUserQuestion 工具问我一个问题:晚上吃什么,选项A火锅 B烧烤。我问完后你要根据我的选择继续回复。" [ref=f16e77]
+                        - generic [ref=f16e78]: 1小时
+                    - listitem [ref=f16e79] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f16e80]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f16e84]
+                        - generic [ref=f16e85]: 9分
+                    - listitem [ref=f16e86] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f16e87]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f16e91]
+                        - generic [ref=f16e92]: 21分
+                    - listitem [ref=f16e93] [cursor=pointer]:
+                      - button "打开任务 用AskUserQuestion询问晚餐火锅或烧烤" [ref=f16e94]:
+                        - generic "用AskUserQuestion询问晚餐火锅或烧烤" [ref=f16e98]
+                        - generic [ref=f16e99]: 35分
+                    - listitem [ref=f16e100] [cursor=pointer]:
+                      - button "打开任务 调用 AskUserQuestion 询问晚餐选择" [ref=f16e101]:
+                        - generic "调用 AskUserQuestion 询问晚餐选择" [ref=f16e105]
+                        - generic [ref=f16e106]: 46分
+                    - listitem [ref=f16e107] [cursor=pointer]:
+                      - button "打开任务 调用AskUserQuestion询问晚餐选择" [ref=f16e108]:
+                        - generic "调用AskUserQuestion询问晚餐选择" [ref=f16e112]
+                        - generic [ref=f16e113]: 57分
+                    - listitem [ref=f16e114] [cursor=pointer]:
+                      - button "打开任务 开始干活" [ref=f16e115]:
+                        - generic "开始干活" [ref=f16e119]
+                        - generic [ref=f16e120]: 1小时
+                    - listitem [ref=f16e121] [cursor=pointer]:
+                      - button "打开任务 一句话回答今天是星期几" [ref=f16e122]:
+                        - generic "一句话回答今天是星期几" [ref=f16e126]
+                        - generic [ref=f16e127]: 1小时
+                    - listitem [ref=f16e128] [cursor=pointer]:
+                      - button "打开任务 用一句话回答:现在是几点钟" [ref=f16e129]:
+                        - generic "用一句话回答:现在是几点钟" [ref=f16e133]
+                        - generic [ref=f16e134]: 1小时
+                    - listitem [ref=f16e135] [cursor=pointer]:
+                      - button "打开任务 查看当前自己的ip" [ref=f16e136]:
+                        - generic "查看当前自己的ip" [ref=f16e140]
+                        - generic [ref=f16e141]: 2小时
+                    - listitem [ref=f16e142] [cursor=pointer]:
+                      - button "打开任务 git pull‘" [ref=f16e143]:
+                        - generic "git pull‘" [ref=f16e147]
+                        - generic [ref=f16e148]: 3小时
+                    - listitem [ref=f16e149] [cursor=pointer]:
+                      - button "打开任务 代码提交了吗？" [ref=f16e150]:
+                        - generic "代码提交了吗？" [ref=f16e154]
+                        - generic [ref=f16e155]: 3小时
+                    - listitem [ref=f16e156] [cursor=pointer]:
+                      - button "打开任务 zcode Runtime 加量扣费匹配问题" [ref=f16e157]:
+                        - generic "zcode Runtime 加量扣费匹配问题" [ref=f16e161]
+                        - generic [ref=f16e162]: 3小时
+                - listitem [ref=f16e163]:
+                  - button "zcode-remote 1" [expanded] [ref=f16e164]:
+                    - generic [ref=f16e171]: zcode-remote
+                    - generic [ref=f16e172]: "1"
+                  - list [ref=f16e173]:
+                    - listitem [ref=f16e174] [cursor=pointer]:
+                      - button "打开任务 向 zqf-test.txt 追加当前时间并显示" [ref=f16e175]:
+                        - generic "向 zqf-test.txt 追加当前时间并显示" [ref=f16e179]
+                        - generic [ref=f16e180]: 7小时
+            - generic [ref=f16e182]:
+              - button "连接使用" [ref=f16e183]
+              - button "设置" [ref=f16e190]
+      - separator "调整侧边栏宽度" [ref=f16e191]
+      - main [ref=f16e200]:
+        - alert [ref=f16e268]:
+          - generic [ref=f16e269]:
+            - heading "这块界面出了点问题" [level=2] [ref=f16e273]
+            - paragraph [ref=f16e274]: 错误已经限制在当前区域，其它功能可以继续使用。你可以先重试这个区域；如果问题持续，再刷新应用。
+            - generic [ref=f16e275]: e.map is not a function
+            - generic [ref=f16e276]:
+              - button "重试此区域" [ref=f16e277]
+              - button "刷新应用" [ref=f16e278]
+            - paragraph [ref=f16e279]: 错误详情已记录到诊断日志里，方便继续排查。
+            - group [ref=f16e280]:
+              - generic "查看组件堆栈" [ref=f16e281] [cursor=pointer]
+      - generic [ref=f16e253]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

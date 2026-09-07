@@ -1,0 +1,61 @@
+- generic [ref=f10e2]:
+  - button [aria-hidden] [ref=f10e15]
+  - generic [ref=f10e17]:
+    - generic [ref=f10e18]:
+      - heading "命令面板" [level=2] [ref=f10e19]
+      - paragraph [ref=f10e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f10e23]:
+      - complementary [ref=f10e25]:
+        - complementary [ref=f10e26]:
+          - generic [ref=f10e29]:
+            - generic [ref=f10e30]:
+              - group [ref=f10e31] [cursor=pointer]:
+                - generic [ref=f10e32]:
+                  - generic [ref=f10e35]: 新建任务
+                  - generic [ref=f10e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f10e37]:
+                - generic [ref=f10e38]: 搜索
+                - generic [ref=f10e39]: ⌘ K
+              - button "插件市场" [ref=f10e40]
+            - generic [ref=f10e44]:
+              - generic [ref=f10e46]:
+                - generic [ref=f10e47]: 项目
+                - generic [ref=f10e50]:
+                  - button "筛选和排序" [ref=f10e51]
+                  - button "关闭" [active] [ref=f10e370]
+              - generic [ref=f10e371]: 暂无归档任务
+            - generic [ref=f10e305]:
+              - button "连接使用" [ref=f10e306]
+              - button "设置" [ref=f10e313]
+      - separator "调整侧边栏宽度" [ref=f10e314]
+      - main [ref=f10e323]:
+        - generic [ref=f10e331]:
+          - paragraph [ref=f10e335]: 下午好呀，接下来交给我吧
+          - generic [ref=f10e339]:
+            - generic [ref=f10e341]:
+              - button "取消选择当前项目"
+              - button "选择项目" [ref=f10e342]:
+                - generic [ref=f10e343]: zcode-quick-web-forward
+            - generic [ref=f10e345]:
+              - generic [ref=f10e347]:
+                - textbox [ref=f10e348]:
+                  - paragraph [ref=f10e349]
+                - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+              - generic [ref=f10e350]:
+                - generic [ref=f10e352]:
+                  - button "添加上下文" [ref=f10e353]
+                  - combobox "切换模式" [ref=f10e355]:
+                    - generic "完全访问" [ref=f10e357]
+                  - combobox [aria-hidden] [ref=f10e359]
+                - generic [ref=f10e361]:
+                  - button "选择模型" [ref=f10e363]:
+                    - generic "Bigmodel - API Key/GLM-5.3" [ref=f10e364]:
+                      - generic "Bigmodel - API Key/GLM-5.3" [ref=f10e365]:
+                        - generic [ref=f10e366]:
+                          - generic [ref=f10e367]: Bigmodel - API Key/
+                          - generic [ref=f10e368]: GLM-5.3
+                  - button "发送" [disabled]
+      - generic [ref=f10e369]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button

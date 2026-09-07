@@ -1,0 +1,78 @@
+- generic [ref=f3e2]:
+  - button [aria-hidden] [ref=f3e15]
+  - generic [ref=f3e17]:
+    - generic [ref=f3e18]:
+      - heading "命令面板" [level=2] [ref=f3e19]
+      - paragraph [ref=f3e20]: 搜索并执行当前工作区可用的命令。
+    - generic [ref=f3e23]:
+      - complementary [ref=f3e25]:
+        - complementary [ref=f3e26]:
+          - generic [ref=f3e29]:
+            - generic [ref=f3e30]:
+              - group [ref=f3e31] [cursor=pointer]:
+                - generic [ref=f3e32]:
+                  - generic [ref=f3e35]: 新建任务
+                  - generic [ref=f3e36]: ⌘ N
+              - button "搜索 ⌘ K" [ref=f3e37]:
+                - generic [ref=f3e38]: 搜索
+                - generic [ref=f3e39]: ⌘ K
+              - button "插件市场" [ref=f3e40]
+            - generic [ref=f3e44]:
+              - generic [ref=f3e46]:
+                - generic [ref=f3e47]:
+                  - generic [ref=f3e48]: 项目
+                  - button "收起全部" [ref=f3e49]
+                - generic [ref=f3e50]:
+                  - button "筛选和排序" [ref=f3e51]
+                  - button "归档" [ref=f3e52]
+              - list [ref=f3e53]:
+                - listitem [ref=f3e54]:
+                  - button "ytb-dl-web 4" [expanded] [ref=f3e55]:
+                    - generic [ref=f3e62]: ytb-dl-web
+                    - generic [ref=f3e63]: "4"
+                  - list [ref=f3e64]:
+                    - listitem [ref=f3e65] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e66]:
+                        - generic "新任务" [ref=f3e70]
+                        - generic [ref=f3e71]: 刚刚
+                    - listitem [ref=f3e72] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e73]:
+                        - generic "新任务" [ref=f3e77]
+                        - generic [ref=f3e78]: 6分
+                    - listitem [ref=f3e79] [cursor=pointer]:
+                      - button "打开任务 查看目录文件列表" [ref=f3e80]:
+                        - generic "查看目录文件列表" [ref=f3e84]
+                        - generic [ref=f3e85]: 2分
+                    - listitem [ref=f3e86] [cursor=pointer]:
+                      - button "打开任务 新任务" [ref=f3e87]:
+                        - generic "新任务" [ref=f3e91]
+                        - generic [ref=f3e92]: 6分
+            - generic [ref=f3e94]:
+              - button "连接使用" [ref=f3e95]
+              - button "设置" [ref=f3e102]
+      - separator "调整侧边栏宽度" [ref=f3e103]
+      - generic [ref=f3e105]:
+        - generic [ref=f3e160]:
+          - generic [ref=f3e161]:
+            - heading "查看目录文件列表" [level=1] [ref=f3e162]
+            - generic "/home/friddle/nas/ytb-dl-web" [ref=f3e164]: ytb-dl-web
+            - button "更多" [ref=f3e169]
+          - generic [ref=f3e170]:
+            - button "帮助" [ref=f3e171]
+            - button "切换终端" [ref=f3e172]
+            - button "展开侧边面板" [ref=f3e173]
+        - main [ref=f3e112]:
+          - generic [ref=f3e134]:
+            - generic [ref=f3e136]:
+              - textbox [ref=f3e137]:
+                - paragraph [ref=f3e138]
+              - generic: 向 ZCode 提问，使用 @ 添加上下文，使用 / 选择命令或能力
+            - generic [ref=f3e139]:
+              - generic [ref=f3e141]:
+                - button "添加上下文" [disabled]
+              - generic [ref=f3e150]:
+                - button "发送" [disabled]
+      - generic [ref=f3e158]:
+        - button "后退" [disabled]
+        - button "前进" [disabled]
+        - button
