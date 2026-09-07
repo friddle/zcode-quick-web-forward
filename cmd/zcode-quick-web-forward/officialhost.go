@@ -23,7 +23,7 @@ import (
 type officialHostBridge struct {
 	h      *officialhost.Host
 	engine *relay.BridgeEngine
-	send   func(any) // routes to the phone's latest pending reply
+	sender *relaySender // routes to the phone's latest pending reply
 }
 
 type officialHostState struct {
@@ -61,7 +61,7 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 		fmt.Printf("zcode: official host start failed: %v — using built-in handlers\n", err)
 		return false
 	}
-	b := &officialHostBridge{h: h, engine: engine, send: sender.send}
+	b := &officialHostBridge{h: h, engine: engine, sender: sender}
 	h.OnLog = func(line string) {
 		for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
 			if l != "" {
@@ -108,6 +108,8 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	officialState.script = script
 	officialState.workspace = workspace
 	officialState.mid = mid
+	officialState.engine = engine
+	officialState.sender = sender
 	officialState.mu.Unlock()
 	fmt.Printf("zcode: OFFICIAL host active (%s) — channel traffic forwarded to the official implementation\n", dir)
 	return true
@@ -150,8 +152,10 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		return
 	}
 	if res, ok := relay.DecodeChannelResponse(raw); ok {
-		if b.send != nil {
-			b.send(res)
+		if b.sender != nil {
+			b.sender.send(res)
+		} else {
+			fmt.Println("zcode: official-host BUG nil sender; response dropped")
 		}
 		return
 	}
