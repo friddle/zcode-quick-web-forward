@@ -254,16 +254,27 @@ func (o commonOpts) baseURL() string {
 }
 
 // probeOrigin checks the relay origin answers before promising a pairing URL.
+// Degraded networks regularly push TLS setup past 5s, so tolerate 15s per
+// attempt and retry — a slow origin beats refusing to start.
 func probeOrigin(origin string) error {
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(strings.TrimRight(origin, "/") + "/")
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		c := &http.Client{Timeout: 15 * time.Second}
+		resp, err := c.Get(strings.TrimRight(origin, "/") + "/")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		if resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			continue
+		}
+		return nil
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return nil
+	return lastErr
 }

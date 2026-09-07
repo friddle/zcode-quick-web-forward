@@ -339,6 +339,10 @@ func dial(o Options) (*client, error) {
 	keyB := make([]byte, 16)
 	rand.Read(keyB)
 	path := "/ws?mid=" + url.QueryEscape(o.DeviceMid)
+	// Cap the whole handshake (TLS + upgrade response) — a server that
+	// accepts TCP but never answers the upgrade would otherwise hang this
+	// goroutine forever with no "connect failed" trace.
+	tconn.SetDeadline(time.Now().Add(20 * time.Second))
 	fmt.Fprintf(tconn, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nX-Device-ID: %s\r\n\r\n",
 		path, u.Host, base64.StdEncoding.EncodeToString(keyB), o.DeviceMid)
 	br := bufio.NewReader(tconn)
@@ -351,6 +355,8 @@ func dial(o Options) (*client, error) {
 		tconn.Close()
 		return nil, fmt.Errorf("webremote: relay upgrade failed: %s", resp.Status)
 	}
+	// Handshake complete: drop the handshake deadline for live traffic.
+	tconn.SetDeadline(time.Time{})
 	return &client{conn: tconn, br: br, done: make(chan struct{})}, nil
 }
 

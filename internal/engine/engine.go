@@ -140,6 +140,43 @@ func (c *Client) ReadSession(sessionID string, timeout time.Duration) (map[strin
 	}
 }
 
+// Call performs a generic request/response round trip with the engine and
+// returns the parsed result object.
+func (c *Client) Call(method string, params any, timeout time.Duration) (map[string]any, error) {
+	c.mu.Lock()
+	c.nextID++
+	id := c.nextID
+	ch := make(chan json.RawMessage, 1)
+	c.pending[id] = ch
+	c.mu.Unlock()
+	if !c.Write(map[string]any{"id": id, "method": method, "params": params}) {
+		c.forget(id)
+		return nil, fmt.Errorf("engine stdin closed")
+	}
+	select {
+	case line := <-ch:
+		c.forget(id)
+		var resp struct {
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(line, &resp) != nil {
+			return nil, fmt.Errorf("bad reply")
+		}
+		if len(resp.Error) > 0 {
+			return nil, fmt.Errorf("%s: %s", method, resp.Error)
+		}
+		var m map[string]any
+		if json.Unmarshal(resp.Result, &m) != nil {
+			return nil, fmt.Errorf("bad result")
+		}
+		return m, nil
+	case <-time.After(timeout):
+		c.forget(id)
+		return nil, fmt.Errorf("%s timeout", method)
+	}
+}
+
 // SendMessage sends a user message to a session (fire-and-forget; streaming
 // results arrive via OnEvent).
 func (c *Client) SendMessage(sessionID, content string) bool {
