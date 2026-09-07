@@ -16,3 +16,4 @@ r.log
 r.log.pid
 # mirrored official frontend assets (fetched, not ours to ship)
 scripts/web-remote-mirror/remote/
+testdata/
