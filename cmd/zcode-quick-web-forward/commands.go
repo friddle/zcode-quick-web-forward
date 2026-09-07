@@ -234,8 +234,22 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			// While a turn is still running the submission must QUEUE (the
 			// desktop shows it as a waiting bubble and dispatches it when the
 			// turn ends). Sending straight through would interleave into the
-			// running turn.
-			if ps.turnRunningFor(ps.engineFor(sid)) {
+			// running turn. But if the engine session already died (daemon
+			// restart / engine crash) no turn.terminal will ever drain the
+			// queue — probe the engine and fall through to the rebuild path
+			// when the turn is a ghost.
+			queueIt := false
+			if eng := ps.engineFor(sid); ps.turnRunningFor(eng) {
+				if eng != sid {
+					queueIt = true
+				} else if _, err := engClient.ReadSession(sid, 3*time.Second); err == nil {
+					queueIt = true
+				} else {
+					fmt.Printf("zcode: sendText ghost-turn guard session=%s (engine session dead) — rebuilding\n", sid)
+					ps.setTurnRunning(eng, false)
+				}
+			}
+			if queueIt {
 				q := queuedSend{
 					text:            text,
 					sourceCommandID: req.Envelope.CommandID,
@@ -434,7 +448,27 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		if stopped {
 			fmt.Printf("zcode: stop requested session=%s (engine=%s)\n", sid, engSid)
 		} else {
-			fmt.Printf("zcode: stop requested session=%s — no live engine session\n", sid)
+			// No live engine session: the interrupted turn.terminal this path
+			// normally relies on will never arrive, so force-clear the turn
+			// state and dispatch anything the queue already swallowed —
+			// otherwise the submission stays pending forever (ghost queue).
+			fmt.Printf("zcode: stop requested session=%s — no live engine session; clearing ghost turn\n", sid)
+			ps.setTurnRunning(engSid, false)
+			if q, ok := ps.popQueuedSend(sid); ok {
+				drainSid := ps.engineFor(sid)
+				if drainSid == sid {
+					if _, err := engClient.ReadSession(sid, 3*time.Second); err != nil {
+						drainSid = rebuildContinuedSession(engClient, ps, sid)
+					}
+				}
+				if drainSid != "" && engClient.SendMessage(drainSid, q.text) {
+					ps.setTurnRunning(drainSid, true)
+					engClient.SubscribeSession(drainSid)
+					fmt.Printf("zcode: drained queued send after ghost-turn stop session=%s text=%q\n", sid, q.text)
+				} else {
+					ps.enqueueSend(q)
+				}
+			}
 		}
 
 	case "deleteSession":
