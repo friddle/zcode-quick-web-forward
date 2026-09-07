@@ -173,7 +173,7 @@ func doRemoteOpts(o commonOpts) {
 		if len(workspaces) > 0 {
 			defWS = workspaces[0]
 		}
-		officialStarted = maybeStartOfficialHost(engine, node, scriptPath(rt), defWS, mid)
+		officialStarted = maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid)
 		if officialStarted {
 			restartEngineFn = officialRestartEngine
 		}

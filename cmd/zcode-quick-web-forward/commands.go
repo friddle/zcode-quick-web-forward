@@ -188,7 +188,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 						"kind": "assistantText", "assistantResponseId": "queue-note-" + sid,
 						"text": "⏳ 已排队 — 等待上一个任务完成后自动开始", "state": "complete",
 					}
-					rows := append(ps.snapshotRows(), hdr, row, note)
+					rows := append(ps.snapshotRows(), liveTailBoundary(ps.nextRowID(), turnID), hdr, row, note)
 					ps.rememberRows(rows)
 					ps.mu.Lock()
 					convID, convSub, convWs := ps.convListener, ps.convSubscription, ps.workspacePath

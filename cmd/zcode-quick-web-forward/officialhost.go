@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/officialhost"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
@@ -22,6 +23,7 @@ import (
 type officialHostBridge struct {
 	h      *officialhost.Host
 	engine *relay.BridgeEngine
+	send   func(any) // routes to the phone's latest pending reply
 }
 
 type officialHostState struct {
@@ -31,6 +33,8 @@ type officialHostState struct {
 	script    string
 	workspace string
 	mid       string
+	engine    *relay.BridgeEngine
+	sender    *relaySender
 }
 
 var officialState officialHostState
@@ -39,7 +43,7 @@ var officialState officialHostState
 // describe OUR runtime (the host spawns the engine itself via
 // ZCODE_AGENT_SERVER_COMMAND); workspace is the engine cwd. Returns false
 // when disabled or the bundle is missing.
-func maybeStartOfficialHost(engine *relay.BridgeEngine, nodeBin, script, workspace, mid string) bool {
+func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nodeBin, script, workspace, mid string) bool {
 	if os.Getenv("ZCODE_OFFICIAL_HOST") == "" {
 		return false
 	}
@@ -57,7 +61,7 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, nodeBin, script, workspa
 		fmt.Printf("zcode: official host start failed: %v — using built-in handlers\n", err)
 		return false
 	}
-	b := &officialHostBridge{h: h, engine: engine}
+	b := &officialHostBridge{h: h, engine: engine, send: sender.send}
 	h.OnLog = func(line string) {
 		for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
 			if l != "" {
@@ -70,6 +74,13 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, nodeBin, script, workspa
 		fmt.Printf("zcode: official-host parentPort << %s\n", t)
 	}
 	h.OnRawPortData = b.onPortBytes
+
+	// The host's parentPort listener only exists after its import completes;
+	// messages sent earlier are silently dropped by the EventEmitter.
+	if !h.WaitReady(20 * time.Second) {
+		fmt.Println("zcode: official host did not report ready in 20s — using built-in handlers")
+		return false
+	}
 
 	// init-local: the task-realtime bridge attaches its port first.
 	h.ParentPort(map[string]any{
@@ -121,17 +132,30 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 	if b == nil || !b.h.Alive() {
 		return false
 	}
+	fmt.Printf("zcode: official-host -> svc %s/%s kind=%d id=%d\n", c.ChannelName, c.Name, c.Kind, c.ID)
 	b.h.RawPortData("svc", relay.ChannelCallBytes(c))
 	return true
 }
 
-// onPortBytes handles service-port messages from the host: responses are
-// already-valid channel messages, so they go to the phone verbatim.
+// onPortBytes handles service-port messages from the host.
 func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 	if portID != "svc" || len(raw) == 0 {
 		return
 	}
-	b.engine.SendRawChannelBytes(raw, func(v any) {})
+	if relay.IsChannelInitialize(raw) {
+		// Server initialize: answer with the client initialize, otherwise
+		// the host serves nothing on this port.
+		b.h.RawPortData("svc", relay.InitializeMessage())
+		fmt.Println("zcode: official-host <- svc [200] server init; client initialize sent")
+		return
+	}
+	if res, ok := relay.DecodeChannelResponse(raw); ok {
+		if b.send != nil {
+			b.send(res)
+		}
+		return
+	}
+	fmt.Printf("zcode: official-host <- svc unhandled %d bytes: % x\n", len(raw), raw[:min(24, len(raw))])
 }
 
 // officialStopHost tears the host down (its engine child dies with it).
@@ -151,10 +175,11 @@ func officialStopHost() {
 func officialRestartEngine() {
 	officialState.mu.Lock()
 	node, script, ws, mid := officialState.nodeBin, officialState.script, officialState.workspace, officialState.mid
+	engine, sender := officialState.engine, officialState.sender
 	officialState.mu.Unlock()
 	officialStopHost()
-	engine := relay.NewBridgeEngine()
-	if maybeStartOfficialHost(engine, node, script, ws, mid) {
+	engine = relay.NewBridgeEngine()
+	if maybeStartOfficialHost(engine, sender, node, script, ws, mid) {
 		fmt.Println("zcode: official host respawned")
 	}
 }

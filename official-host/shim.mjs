@@ -127,6 +127,7 @@ const entry = process.env.ZCODE_HOST_ENTRY ?? './host/index.js';
 process.env.ZCODE_PROCESS_LABEL ??= 'web-remote-host';
 try {
   await import(entry);
+  write({ t: 'ready' });
   process.stderr.write(`[shim] host booted from ${entry}\n`);
 } catch (err) {
   process.stderr.write(`[shim] host boot failed: ${err?.stack ?? err}\n`);

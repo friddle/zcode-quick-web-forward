@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 type Host struct {
@@ -32,6 +33,7 @@ type Host struct {
 	stdin  *json.Encoder
 	stdout *bufio.Reader
 	exited chan struct{} // closed once cmd.Wait reaps the process
+	ready  chan struct{} // closed when the shim reports the host booted
 
 	OnParentPort  func(msg map[string]any)
 	OnPortData    func(portID string, value any)
@@ -41,7 +43,7 @@ type Host struct {
 
 // Start launches `node shim.mjs` in dir. Node must be >= 18.
 func Start(nodeBin, dir string) (*Host, error) {
-	h := &Host{exited: make(chan struct{})}
+	h := &Host{exited: make(chan struct{}), ready: make(chan struct{})}
 	cmd := exec.Command(nodeBin, "shim.mjs")
 	cmd.Dir = dir
 	stdin, err := cmd.StdinPipe()
@@ -100,6 +102,12 @@ func (h *Host) readLoop() {
 					if h.OnPortData != nil {
 						h.OnPortData(m.ID, v)
 					}
+				case "ready":
+					select {
+					case <-h.ready:
+					default:
+						close(h.ready)
+					}
 				case "raw":
 					if raw, err := base64.StdEncoding.DecodeString(m.B64); err == nil && h.OnRawPortData != nil {
 						h.OnRawPortData(m.ID, raw)
@@ -138,6 +146,20 @@ func (h *Host) PortData(portID string, value any) {
 		"id":  portID,
 		"b64": base64.StdEncoding.EncodeToString(raw),
 	})
+}
+
+// WaitReady blocks until the shim reports the host booted (the host's
+// parentPort listener only exists after its import completes — messages sent
+// earlier are silently dropped). Returns false on timeout or exit.
+func (h *Host) WaitReady(timeout time.Duration) bool {
+	select {
+	case <-h.ready:
+		return true
+	case <-h.exited:
+		return false
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // Alive reports whether the host process is still running.

@@ -427,7 +427,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					"text":         q.text,
 					"origin":       "realUser",
 				}
-				rows := append(ps.snapshotRows(), []any{hdr, row}...)
+				rows := append(ps.snapshotRows(), liveTailBoundary(ps.nextRowID(), turnID), hdr, row)
 				ps.rememberRows(rows)
 				if convID > 0 {
 					frame := conversationSnapshotFrame(ps, psid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")

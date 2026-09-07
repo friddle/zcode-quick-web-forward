@@ -680,7 +680,11 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					if clientID != "" {
 						row["clientId"] = clientID
 					}
-					rows := append(ps.snapshotRows(), hdr, row)
+					// The turnTailBoundary marker must lead the turn's rows:
+					// without it the client folds hdr+userInput into the
+					// collapsed history and the screen stays blank until the
+					// first live delta arrives.
+					rows := append(ps.snapshotRows(), liveTailBoundary(ps.nextRowID(), turnID), hdr, row)
 					b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running"))
 					ps.rememberRows(rows)
 					engine.SendChannelEvent(convID, b, send)
