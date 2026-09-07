@@ -45,6 +45,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,12 +102,42 @@ type Handler struct {
 	OnData   func(payload json.RawMessage, reply func(payload any))
 }
 
+// lastFrameUnix tracks the last received relay frame (unix ms) for the
+// liveness monitor below.
+var lastFrameUnix atomic.Int64
+
+// watchLiveness runs alongside the relay loop. If no frame has arrived for
+// 25s (heartbeats ack every 10s) it dumps every goroutine stack to a local
+// file — a wedge anywhere in the message handlers stops the read loop, which
+// stops replies, which stalls the phone with no visible trace. The dump file
+// is the forensic record; stderr may itself be the blocked writer.
+func watchLiveness(ctx context.Context) {
+	lastFrameUnix.Store(time.Now().UnixMilli())
+	for ctx.Err() == nil {
+		if !sleepCtx(ctx, 5*time.Second) {
+			return
+		}
+		last := lastFrameUnix.Load()
+		if time.Since(time.UnixMilli(last)) < 25*time.Second {
+			continue
+		}
+		buf := make([]byte, 8<<20)
+		n := goruntime.Stack(buf, true)
+		path := fmt.Sprintf("/tmp/zqwf-stacks-%d.log", os.Getpid())
+		_ = os.WriteFile(path, buf[:n], 0o644)
+		fmt.Fprintf(os.Stderr, "webremote: liveness: no relay frames for %v — stacks in %s\n",
+			time.Since(time.UnixMilli(last)).Round(time.Second), path)
+		lastFrameUnix.Store(time.Now().UnixMilli()) // one dump per silent stretch
+	}
+}
+
 // Run drives the whole device lifecycle: register/auth, report the phone URL
 // via h.OnReady, then keep the pairing window open (heartbeat, pair
 // notifications, data forwarding, reconnect on drops) until ctx is
 // cancelled. It never returns an error for a dropped connection — it
 // retries; it only stops on ctx cancellation.
 func Run(ctx context.Context, o Options, h Handler) {
+	go watchLiveness(ctx)
 	for ctx.Err() == nil {
 		ws, st, err := connectAndAuth(o)
 		if err != nil {
@@ -425,6 +456,7 @@ func (c *client) readLoopDeadline(deadline time.Duration, onMsg func(relayMsg) b
 			c.markClosed()
 			return
 		}
+		lastFrameUnix.Store(time.Now().UnixMilli())
 		switch op {
 		case 0x1: // text
 			var m relayMsg
