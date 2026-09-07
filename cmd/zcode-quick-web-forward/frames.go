@@ -168,11 +168,35 @@ func tasksIndexFrame(ps *phoneSessions) map[string]any {
 		live = ps.liveTaskIDs()
 	}
 	items := make([]any, 0, len(tasks)+1)
+	seenWS := map[string]bool{}
 	for _, t := range tasks {
 		if strings.HasPrefix(t.WorkspaceKey, "remote:") {
 			continue
 		}
+		seenWS[t.WorkspacePath] = true
 		items = append(items, taskIndexItem(t, live))
+	}
+	// Registered workspaces without any task yet still need to show up as
+	// projects: the client's project menu is built from this index, so a
+	// freshly `workspace add`-ed path would otherwise be unselectable until
+	// its first real session lands. Synthesize an idle "新任务" entry.
+	if ps != nil {
+		now := time.Now().UnixMilli()
+		for _, ws := range ps.workspacesList() {
+			if ws == "" || seenWS[ws] {
+				continue
+			}
+			seenWS[ws] = true
+			items = append(items, taskIndexItem(zcode.Task{
+				WorkspaceKey:  ws,
+				WorkspacePath: ws,
+				TaskID:        "ws" + strings.NewReplacer("/", "-", ".", "-", " ", "-").Replace(ws),
+				Title:         "新任务",
+				Status:        "idle",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			}, live))
+		}
 	}
 	return map[string]any{
 		"topic":          "controller/tasks-index",
@@ -195,10 +219,11 @@ func tasksIndexFrame(ps *phoneSessions) map[string]any {
 // stateUpdatedFrame wraps a projection state change as a conversation frame
 // delta. Shape mirrors the official desktop's state.updated ops: a flat patch
 // of top-level snapshot keys (control / availability / inputRouting).
-func stateUpdatedFrame(sessionID, phase, convSub string, ordinal int) map[string]any {
+func stateUpdatedFrame(ps *phoneSessions, sessionID, phase, convSub string, ordinal int) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
 	}
+	fromSeq, toSeq := ps.convoFrameSeq(false)
 	ended := phase != "running" && phase != "prewarming" && phase != "draft"
 	control := map[string]any{
 		"phase": phase, "sessionEnded": false,
@@ -238,8 +263,8 @@ func stateUpdatedFrame(sessionID, phase, convSub string, ordinal int) map[string
 		"frame": map[string]any{
 			"topic":          "conversation/" + sessionID,
 			"subscriptionId": convSub,
-			"fromSeq":        1,
-			"toSeq":          2,
+			"fromSeq":        fromSeq,
+			"toSeq":          toSeq,
 			"sentAt":         time.Now().UnixMilli(),
 			"payload": map[string]any{
 				"kind": "deltas",
@@ -259,11 +284,15 @@ func stateUpdatedFrame(sessionID, phase, convSub string, ordinal int) map[string
 }
 
 // conversationDeltaFrame wraps arbitrary projection deltas (row.appended /
-// state.updated / row.delta ops) as one conversation frame.
-func conversationDeltaFrame(sessionID, convSub string, ordinal int, deltas []any) map[string]any {
+// state.updated / row.delta ops) as one conversation frame. The inner frame's
+// fromSeq/toSeq MUST continue the client's transcript seq (see
+// phoneSessions.convoFrameSeq) — constant values made the client treat every
+// frame after the first as stale (toSeq <= local seq) or as a 帧断档 gap.
+func conversationDeltaFrame(ps *phoneSessions, sessionID, convSub string, ordinal int, deltas []any) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
 	}
+	fromSeq, toSeq := ps.convoFrameSeq(false)
 	return map[string]any{
 		"wireVersion":         3,
 		"kind":                "complete",
@@ -275,8 +304,8 @@ func conversationDeltaFrame(sessionID, convSub string, ordinal int, deltas []any
 		"frame": map[string]any{
 			"topic":          "conversation/" + sessionID,
 			"subscriptionId": convSub,
-			"fromSeq":        1,
-			"toSeq":          2,
+			"fromSeq":        fromSeq,
+			"toSeq":          toSeq,
 			"sentAt":         time.Now().UnixMilli(),
 			"payload": map[string]any{
 				"kind":   "deltas",
@@ -288,11 +317,12 @@ func conversationDeltaFrame(sessionID, convSub string, ordinal int, deltas []any
 
 // conversationChunkFrame wraps one assistant text chunk as a conversation
 // delta (row.append-style) so the phone renders streaming output.
-func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[string]any {
+func conversationChunkFrame(ps *phoneSessions, sessionID, text, convSub string, ordinal int) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
 	}
 	now := time.Now().UnixMilli()
+	fromSeq, toSeq := ps.convoFrameSeq(false)
 	return map[string]any{
 		"wireVersion":         3,
 		"kind":                "complete",
@@ -304,8 +334,8 @@ func conversationChunkFrame(sessionID, text, convSub string, ordinal int) map[st
 		"frame": map[string]any{
 			"topic":          "conversation/" + sessionID,
 			"subscriptionId": convSub,
-			"fromSeq":        1,
-			"toSeq":          2,
+			"fromSeq":        fromSeq,
+			"toSeq":          toSeq,
 			"sentAt":         now,
 			"payload": map[string]any{
 				"kind": "deltas",
@@ -373,11 +403,14 @@ func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub,
 		"canStop": false, "stopState": "idle", "stopTargetKind": "unknown",
 		"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
 	}
+	// A snapshot re-bases the client's transcript seq — reset the delta
+	// ledger so the next deltas frame continues from the snapshot's seq.
+	snapSeq, _ := ps.convoFrameSeq(true)
 	snapshot := map[string]any{
 		"protocolVersion": 1,
 		"sessionId":       sessionID,
 		"logEpoch":        "0",
-		"seq":             1,
+		"seq":             snapSeq,
 		"revision":        0,
 		"control":         control,
 		"availability": map[string]any{

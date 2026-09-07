@@ -112,7 +112,7 @@ func TestSnapshotMatchesOfficialShape(t *testing.T) {
 // TestRunningControlPatchShape mirrors the official running-state patch: the
 // desktop's "工作中 N 秒 / 停止生成" display is driven by exactly these fields.
 func TestRunningControlPatchShape(t *testing.T) {
-	frame := stateUpdatedFrame("sess_t", "running", "sess_t:sub", 1)
+	frame := stateUpdatedFrame(&phoneSessions{}, "sess_t", "running", "sess_t:sub", 1)
 	b, _ := json.Marshal(frame)
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
@@ -147,7 +147,7 @@ func TestRunningControlPatchShape(t *testing.T) {
 
 // TestCompletedControlPatchShape covers the turn-end patch (已处理 state).
 func TestCompletedControlPatchShape(t *testing.T) {
-	frame := stateUpdatedFrame("sess_t", "completedSuccess", "sess_t:sub", 1)
+	frame := stateUpdatedFrame(&phoneSessions{}, "sess_t", "completedSuccess", "sess_t:sub", 1)
 	d, _ := json.Marshal(frame)
 	var m map[string]any
 	_ = json.Unmarshal(d, &m)

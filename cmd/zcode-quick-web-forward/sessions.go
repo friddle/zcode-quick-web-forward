@@ -98,6 +98,30 @@ type phoneSessions struct {
 	// counters) per engine session, keyed by engine session id. Guarded by mu;
 	// see streaming.go.
 	live map[string]*liveTurn
+	// convoSeq is the conversation projection's transcript seq ledger. The
+	// client drops a deltas frame unless fromSeq equals its current seq and
+	// toSeq is newer (otherwise it either silently drops the frame or flags a
+	// 帧断档 and re-subscribes, wiping freshly applied rows) — every snapshot
+	// resets to 1 and every deltas frame continues from there. Guarded by mu.
+	convoSeq int
+}
+
+// convoFrameSeq returns the (fromSeq, toSeq) for one conversation frame.
+// Snapshots carry seq 1 and reset the ledger; deltas continue from the
+// client's current seq and bump it by one.
+func (p *phoneSessions) convoFrameSeq(isSnapshot bool) (int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if isSnapshot {
+		p.convoSeq = 1
+		return 1, 1
+	}
+	from := p.convoSeq
+	if from < 1 {
+		from = 1
+	}
+	p.convoSeq = from + 1
+	return from, from + 1
 }
 
 // indexSub returns the sessions-index subscription id, minted once.

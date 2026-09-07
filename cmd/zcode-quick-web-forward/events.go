@@ -172,7 +172,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		// transcript) covers the visual, the pendingInteractions patch drives
 		// the interactive question card. Bundling a synthetic row.appended
 		// here made the client drop the whole frame.
-		if b, err := json.Marshal(conversationDeltaFrame(rq.SessionID, convSub, ps.nextOrdinal(), []any{
+		if b, err := json.Marshal(conversationDeltaFrame(ps, rq.SessionID, convSub, ps.nextOrdinal(), []any{
 			map[string]any{"op": "state.updated", "patch": map[string]any{"pendingInteractions": ps.pendingInteractionsPayload()}},
 		})); err == nil && convID > 0 {
 			// Debug: dump the exact interaction entries so a client-side
@@ -259,7 +259,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			ps.mu.Unlock()
 			fmt.Printf("zcode: engine mode change %s -> phone %s (session=%s)\n", m, phoneMode, p.SessionID)
 			if convID > 0 {
-				if b, err := json.Marshal(conversationDeltaFrame(phoneSid, convSub, ps.nextOrdinal(), []any{
+				if b, err := json.Marshal(conversationDeltaFrame(ps, phoneSid, convSub, ps.nextOrdinal(), []any{
 					map[string]any{"op": "state.updated", "patch": map[string]any{"config": ps.modelCfg()}},
 				})); err == nil {
 					engine.SendChannelEvent(convID, b, sender.send)
@@ -270,7 +270,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			// Engine statuses (running/completed/idle/error…) map onto the
 			// projection's phase enum before pushing the control patch.
 			phase, _ := phaseForStatus(displayStatus(p.Patch.Status))
-			b, _ := json.Marshal(stateUpdatedFrame(phoneSid, phase, convSub, ps.nextOrdinal()))
+			b, _ := json.Marshal(stateUpdatedFrame(ps, phoneSid, phase, convSub, ps.nextOrdinal()))
 			engine.SendChannelEvent(convID, b, sender.send)
 		}
 	case "v4/telemetry/event":
@@ -345,7 +345,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				controllerID := ps.listeners["controllerFrame"]
 				ps.mu.Unlock()
 				if convID > 0 && psid != "" {
-					b, _ := json.Marshal(stateUpdatedFrame(psid, "completedSuccess", csub, ps.nextOrdinal()))
+					b, _ := json.Marshal(stateUpdatedFrame(ps, psid, "completedSuccess", csub, ps.nextOrdinal()))
 					engine.SendChannelEvent(convID, b, sender.send)
 				}
 				if controllerID > 0 {

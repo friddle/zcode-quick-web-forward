@@ -682,7 +682,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					engine.SendChannelEvent(convID, b, send)
 					// The desktop's running-state control patch: stoppable,
 					// primaryTurn active work, follow-ups route to the queue.
-					cb, _ := json.Marshal(stateUpdatedFrame(sid, "running", convSub, ps.nextOrdinal()))
+					cb, _ := json.Marshal(stateUpdatedFrame(ps, sid, "running", convSub, ps.nextOrdinal()))
 					engine.SendChannelEvent(convID, cb, send)
 					fmt.Printf("zcode: pushed running-turn snapshot session=%s text=%q\n", sid, txt)
 					// Flip the sidebar entry to running as well.

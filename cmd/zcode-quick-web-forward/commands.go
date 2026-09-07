@@ -325,7 +325,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 						"toProvider": toP, "toModel": toM, "toThought": toT,
 					},
 				}
-				b, _ := json.Marshal(conversationDeltaFrame(sessionID, convSub, ps.nextOrdinal(), []any{
+				b, _ := json.Marshal(conversationDeltaFrame(ps, sessionID, convSub, ps.nextOrdinal(), []any{
 					map[string]any{"op": "row.appended", "row": marker},
 					map[string]any{"op": "state.updated", "patch": map[string]any{"config": ps.modelCfg()}},
 				}))
@@ -621,7 +621,7 @@ func resolveInteractionCommand(engClient *enginepkg.Client, engine *relay.Bridge
 		convID, convSub := ps.convListener, ps.convSubscription
 		ps.mu.Unlock()
 		if convID > 0 {
-			if b, err := json.Marshal(conversationDeltaFrame(pi.SessionID, convSub, ps.nextOrdinal(), []any{
+			if b, err := json.Marshal(conversationDeltaFrame(ps, pi.SessionID, convSub, ps.nextOrdinal(), []any{
 				map[string]any{"op": "state.updated", "patch": map[string]any{"pendingInteractions": ps.pendingInteractionsPayload()}},
 			})); err == nil {
 				engine.SendChannelEvent(convID, b, send)
@@ -671,7 +671,7 @@ func resolveInteractionCommand(engClient *enginepkg.Client, engine *relay.Bridge
 				"endedAt":   now,
 			}}}, deltas...)
 		}
-		if b, err := json.Marshal(conversationDeltaFrame(pi.SessionID, convSub, ps.nextOrdinal(), deltas)); err == nil {
+		if b, err := json.Marshal(conversationDeltaFrame(ps, pi.SessionID, convSub, ps.nextOrdinal(), deltas)); err == nil {
 			engine.SendChannelEvent(convID, b, send)
 		}
 	}
@@ -699,7 +699,7 @@ func pushAssistantNote(engine *relay.BridgeEngine, send func(any), ps *phoneSess
 	}
 	rows := append(ps.snapshotRows(), row)
 	ps.rememberRows(rows)
-	b, err := json.Marshal(conversationDeltaFrame(phoneSid, convSub, ps.nextOrdinal(), []any{
+	b, err := json.Marshal(conversationDeltaFrame(ps, phoneSid, convSub, ps.nextOrdinal(), []any{
 		map[string]any{"op": "row.appended", "row": row},
 	}))
 	if err == nil {

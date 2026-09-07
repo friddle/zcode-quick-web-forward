@@ -27,6 +27,7 @@ type liveTurn struct {
 	textRowID   int
 	textChars   int
 	textAt      int64
+	tailPushed  bool
 }
 
 type toolLive struct {
@@ -109,6 +110,37 @@ func liveCounterRow(rowID int, turnID, kind, text string) map[string]any {
 	}
 }
 
+// liveTailBoundary mints the invisible timelineMarker row that routes all
+// following live rows into the client's streaming tail: the timeline only
+// shows rows AFTER the last turnTailBoundary marker in the open tail section
+// (rows before it fold into the collapsed history). checkpointRestored hits
+// the marker renderer's default case, which renders nothing.
+func liveTailBoundary(rowID int, turnID string) map[string]any {
+	return map[string]any{
+		"rowId":        rowID,
+		"turnId":       turnID,
+		"visibility":   "visible",
+		"createdAt":    time.Now().UnixMilli(),
+		"createdAtSeq": rowID,
+		"kind":         "timelineMarker",
+		"lane":         "turnTailBoundary",
+		"marker":       map[string]any{"type": "checkpointRestored", "checkpointId": "live"},
+	}
+}
+
+// liveTailOps prefixes the first live row of a turn with the boundary marker.
+// Caller holds ps.mu.
+func (lt *liveTurn) liveTailOps(ps *phoneSessions, row map[string]any) []any {
+	if lt.tailPushed {
+		return []any{map[string]any{"op": "row.appended", "row": row}}
+	}
+	lt.tailPushed = true
+	return []any{
+		map[string]any{"op": "row.appended", "row": liveTailBoundary(ps.nextRowID(), row["turnId"].(string))},
+		map[string]any{"op": "row.appended", "row": row},
+	}
+}
+
 // pushLiveDeltas marshals and sends one conversation delta frame.
 func pushLiveDeltas(engine *relay.BridgeEngine, send func(v any), ps *phoneSessions, phoneSid string, deltas []any) {
 	if len(deltas) == 0 {
@@ -121,7 +153,7 @@ func pushLiveDeltas(engine *relay.BridgeEngine, send func(v any), ps *phoneSessi
 	if convID <= 0 {
 		return
 	}
-	b, err := json.Marshal(conversationDeltaFrame(phoneSid, convSub, ps.nextOrdinal(), deltas))
+	b, err := json.Marshal(conversationDeltaFrame(ps, phoneSid, convSub, ps.nextOrdinal(), deltas))
 	if err != nil {
 		return
 	}
@@ -140,10 +172,14 @@ func handleLiveToolEvent(engine *relay.BridgeEngine, send func(v any), ps *phone
 		toolName = "Tool"
 	}
 	turnID, _ := params["turnId"].(string)
+	// Rows must carry the turnId the phone's timeline already knows (the
+	// send-path turnHeader uses "turn-<phoneSid>") — engine-side turn ids
+	// produce orphan rows the tail renderer never shows.
 	now := time.Now().UnixMilli()
 
 	ps.mu.Lock()
 	lt := ps.liveTurnFor(engSid, turnID)
+	rowTurn := "turn-" + phoneSid
 	var deltas []any
 	switch phase {
 	case "scheduled", "started":
@@ -153,7 +189,7 @@ func handleLiveToolEvent(engine *relay.BridgeEngine, send func(v any), ps *phone
 		}
 		rowID := ps.nextRowID()
 		lt.toolRows[toolCallID] = toolLive{rowID: rowID, toolName: toolName, startedAt: now}
-		deltas = []any{map[string]any{"op": "row.appended", "row": liveToolRow(rowID, lt.turnID, toolCallID, toolName, "running", now, 0)}}
+		deltas = lt.liveTailOps(ps, liveToolRow(rowID, rowTurn, toolCallID, toolName, "running", now, 0))
 	case "completed", "failed":
 		meta, ok := lt.toolRows[toolCallID]
 		if !ok {
@@ -172,7 +208,7 @@ func handleLiveToolEvent(engine *relay.BridgeEngine, send func(v any), ps *phone
 			ended = meta.startedAt + int64(d)
 		}
 		delete(lt.toolRows, toolCallID)
-		deltas = []any{map[string]any{"op": "row.upserted", "row": liveToolRow(meta.rowID, lt.turnID, toolCallID, meta.toolName, status, meta.startedAt, ended)}}
+		deltas = []any{map[string]any{"op": "row.upserted", "row": liveToolRow(meta.rowID, rowTurn, toolCallID, meta.toolName, status, meta.startedAt, ended)}}
 	default:
 		ps.mu.Unlock()
 		return // progress carries no new visible state
@@ -206,20 +242,20 @@ func handleLiveChunkEvent(engine *relay.BridgeEngine, send func(v any), ps *phon
 
 	ps.mu.Lock()
 	lt := ps.liveTurnFor(engSid, turnID)
+	rowTurn := "turn-" + phoneSid
 	var rowID int
 	var kind, label string
 	var chars *int
 	var lastAt *int64
+	var deltas []any
 	if channel == "thought" {
 		if lt.reasonRowID == 0 {
 			lt.reasonRowID = ps.nextRowID()
 			lt.reasonAt = now
 			rid := lt.reasonRowID
-			turn := lt.turnID
+			deltas = lt.liveTailOps(ps, liveCounterRow(rid, rowTurn, "reasoning", "思考中…"))
 			ps.mu.Unlock()
-			pushLiveDeltas(engine, send, ps, phoneSid, []any{map[string]any{
-				"op": "row.appended", "row": liveCounterRow(rid, turn, "reasoning", "思考中…"),
-			}})
+			pushLiveDeltas(engine, send, ps, phoneSid, deltas)
 			return
 		}
 		lt.reasonChars += int(n)
@@ -229,11 +265,9 @@ func handleLiveChunkEvent(engine *relay.BridgeEngine, send func(v any), ps *phon
 			lt.textRowID = ps.nextRowID()
 			lt.textAt = now
 			rid := lt.textRowID
-			turn := lt.turnID
+			deltas = lt.liveTailOps(ps, liveCounterRow(rid, rowTurn, "assistantText", "生成中…"))
 			ps.mu.Unlock()
-			pushLiveDeltas(engine, send, ps, phoneSid, []any{map[string]any{
-				"op": "row.appended", "row": liveCounterRow(rid, turn, "assistantText", "生成中…"),
-			}})
+			pushLiveDeltas(engine, send, ps, phoneSid, deltas)
 			return
 		}
 		lt.textChars += int(n)
@@ -244,11 +278,10 @@ func handleLiveChunkEvent(engine *relay.BridgeEngine, send func(v any), ps *phon
 		return
 	}
 	*lastAt = now
-	turn := lt.turnID
 	text := fmt.Sprintf(label, *chars)
 	ps.mu.Unlock()
 
 	pushLiveDeltas(engine, send, ps, phoneSid, []any{map[string]any{
-		"op": "row.upserted", "row": liveCounterRow(rowID, turn, kind, text),
+		"op": "row.upserted", "row": liveCounterRow(rowID, rowTurn, kind, text),
 	}})
 }
