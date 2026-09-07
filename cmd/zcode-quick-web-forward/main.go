@@ -65,9 +65,9 @@ Commands:
                  choose the log file (default ./r.log).
   workspace      add/remove/list extra workspaces exposed to the phone
                  (zcode-quick-web-forward workspace add /path/to/dir)
-  update         update the ZCode engine runtime AND this binary from GitHub
-                 Releases, then restart the daemon automatically
-                 (--check = only report versions; --no-engine / --no-self)
+  update         update the ZCode engine runtime only: download the latest
+                 release .deb, re-extract and install into the runtime cache
+                 (--check = only report the resolved runtime version)
   download       resolve/download the latest ZCode runtime
   version        print version
 
