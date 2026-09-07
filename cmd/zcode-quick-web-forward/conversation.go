@@ -145,6 +145,7 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 						fmt.Printf("zcode: task title sync failed: %v\n", err)
 					} else {
 						fmt.Printf("zcode: task title synced %s title=%q\n", phoneSid, t)
+						pushWorkspaceList(sender.send, ps)
 					}
 				}
 			}

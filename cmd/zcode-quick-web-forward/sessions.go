@@ -87,6 +87,16 @@ type phoneSessions struct {
 	// retry window; a repeat must replay the ack, never execute again.
 	answeredCmds   map[string]map[string]any
 	answeredOrder  []string
+	// workspaces is the bridge's workspace list, used to rebuild the phone's
+	// workspace/task landing list when tasks change.
+	workspaces []string
+}
+
+// workspacesList returns the configured workspace paths.
+func (p *phoneSessions) workspacesList() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.workspaces
 }
 
 // pendingInteraction is one engine question awaiting a user answer.

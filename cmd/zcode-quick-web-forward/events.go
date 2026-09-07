@@ -300,17 +300,25 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			// The engine session may be a rebuilt continuation of a phone task;
 			// update the phone-visible task and push under its id.
 			phoneSid := ps.phoneFor(p.Session)
-			st := p.Status
-			if st != "success" && st != "interrupted" && st != "failed" {
-				st = "completed"
-			}
 			go func(sid string) {
 				ws, title := taskMeta(ps, sid)
+				// Normalize the engine's terminal status to the display
+				// vocabulary — "success" isn't recognized downstream and made
+				// finished tasks show as 运行中 forever.
+				st := "completed"
+				switch p.Status {
+				case "failed", "error":
+					st = "failed"
+				case "interrupted", "cancelled":
+					st = "interrupted"
+				}
 				if ws != "" {
 					if err := zcode.UpsertTask(ws, ws, sid, title, st); err != nil {
 						fmt.Printf("zcode: task finalize failed: %v\n", err)
 					}
 				}
+				// Landing list (项目 tabs) must reflect the new status.
+				pushWorkspaceList(sender.send, ps)
 			}(phoneSid)
 			// The turn is over: queued submissions (sent while this turn was
 			// running) may now dispatch.

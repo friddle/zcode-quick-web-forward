@@ -138,6 +138,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				fmt.Printf("zcode: task persist failed: %v\n", err)
 			} else {
 				fmt.Printf("zcode: task persisted %s\n", sid)
+				pushWorkspaceList(send, ps)
 			}
 		}
 		ack["result"] = map[string]any{
@@ -260,6 +261,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 						fmt.Printf("zcode: task persist failed: %v\n", err)
 					} else {
 						fmt.Printf("zcode: task persisted %s (first send)\n", sid)
+						pushWorkspaceList(send, ps)
 					}
 					// Promote the runtime entry so the row shows in the list.
 					ps.runtimeTask(sid, ws, text, false)

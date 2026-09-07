@@ -87,6 +87,17 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 	})
 }
 
+// pushWorkspaceList sends the phone a fresh workspace/task landing list.
+// Without it the phone's project "tabs" only refresh on manual reload —
+// new tasks (and their status changes) would never show up on their own.
+func pushWorkspaceList(send func(any), ps *phoneSessions) {
+	if send == nil || ps == nil {
+		return
+	}
+	send(workspaceListPush(ps.workspacesList(), ps))
+	fmt.Println("zcode: workspace list pushed (auto)")
+}
+
 func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
 	wsList := make([]any, 0, len(workspaces))
 	for _, w := range workspaces {
@@ -325,11 +336,11 @@ func displayStatus(s string) string {
 	switch strings.ToLower(s) {
 	case "running", "in-progress", "active":
 		return "running"
-	case "completed", "completedSuccess", "completedInterrupted":
+	case "completed", "success", "completedSuccess", "completedInterrupted":
 		return "completed"
-	case "error":
+	case "error", "failed":
 		return "error"
-	case "idle", "cancelled", "failed", "interrupted", "paused", "":
+	case "idle", "cancelled", "interrupted", "paused", "":
 		return "idle"
 	default:
 		return "idle"

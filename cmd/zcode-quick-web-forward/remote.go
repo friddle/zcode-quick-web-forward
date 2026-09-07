@@ -89,7 +89,7 @@ func doRemoteOpts(o commonOpts) {
 	engClient := enginepkg.New()
 	sender := &relaySender{}
 
-	ps := &phoneSessions{}
+	ps := &phoneSessions{workspaces: workspaces}
 	br := launchBrowser()
 	termSvc := terminal.New()
 	termSvc.SetCallbacks(
