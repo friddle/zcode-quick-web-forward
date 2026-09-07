@@ -90,6 +90,35 @@ type phoneSessions struct {
 	// workspaces is the bridge's workspace list, used to rebuild the phone's
 	// workspace/task landing list when tasks change.
 	workspaces []string
+	// indexSubID is the sessions-index stream's OWN subscription id. Sharing
+	// the conversation subscription id made the client route index frames into
+	// the conversation stream (or drop them), leaving @ 会话 mentions empty.
+	indexSubID string
+}
+
+// indexSub returns the sessions-index subscription id, minted once.
+func (p *phoneSessions) indexSub() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.indexSubID == "" {
+		p.indexSubID = "idx-" + uuidNew()
+	}
+	return p.indexSubID
+}
+
+// indexWorkspace returns the workspace path the sessions index is scoped to
+// (the workspace the phone currently has open), defaulting to the first
+// configured one.
+func (p *phoneSessions) indexWorkspace() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.workspacePath != "" {
+		return p.workspacePath
+	}
+	if len(p.workspaces) > 0 {
+		return p.workspaces[0]
+	}
+	return ""
 }
 
 // workspacesList returns the configured workspace paths.

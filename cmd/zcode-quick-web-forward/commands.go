@@ -392,7 +392,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					engine.SendChannelEvent(controllerID, b, send)
 				}
 				if indexID > 0 {
-					b, _ := json.Marshal(sessionsIndexFrame(ps.convSub(), ps))
+					b, _ := json.Marshal(sessionsIndexFrame(ps))
 					engine.SendChannelEvent(indexID, b, send)
 				}
 			}()

@@ -11,9 +11,27 @@ import (
 	"github.com/friddle/zcode-quick-web-forward/internal/zcode"
 )
 
-func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
+// sessionsIndexFrame builds a sessions-index snapshot wire frame. The phone
+// binds one index stream per workspace: the topic/workspaceId carry the real
+// workspace path and the subscriptionId is the index's own (never shared with
+// the conversation stream, or the client drops the frames and @ 会话 stays
+// empty).
+func sessionsIndexFrame(ps *phoneSessions) map[string]any {
 	idx := "0"
-	tasks, _ := zcode.ListTasks("", "")
+	ws := ps.indexWorkspace()
+	subID := ps.indexSub()
+	ordinal := ps.nextOrdinal()
+	all, _ := zcode.ListTasks("", "")
+	inWorkspace := make([]zcode.Task, 0, len(all))
+	for _, t := range all {
+		if t.WorkspacePath == ws {
+			inWorkspace = append(inWorkspace, t)
+		}
+	}
+	if len(inWorkspace) == 0 {
+		inWorkspace = all // workspace unknown — expose everything rather than nothing
+	}
+	tasks := inWorkspace
 	sessions := make([]any, 0, len(tasks))
 	seen := map[string]bool{}
 	for _, t := range tasks {
@@ -24,7 +42,7 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 		phase, ended := phaseForStatus(displayStatus(t.Status))
 		sessions = append(sessions, map[string]any{
 			"sessionId":            t.TaskID,
-			"workspaceId":          t.WorkspaceKey,
+			"workspaceId":          ws,
 			"title":                t.Title,
 			"titleSource":          "generated",
 			"phase":                phase,
@@ -44,10 +62,10 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 			}
 			seen[sid] = true
 			title, _ := m["title"].(string)
-			ws, _ := m["workspacePath"].(string)
+			rtws, _ := m["workspacePath"].(string)
 			sessions = append(sessions, map[string]any{
 				"sessionId":            sid,
-				"workspaceId":          ws,
+				"workspaceId":          rtws,
 				"title":                title,
 				"titleSource":          "generated",
 				"phase":                "running",
@@ -64,12 +82,12 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 		"kind":                "complete",
 		"deliveryKind":        "initial",
 		"logicalFrameId":      uuidNew(),
-		"logicalFrameOrdinal": 1,
-		"topic":               "sessions-index/local",
-		"subscriptionId":      convSub,
+		"logicalFrameOrdinal": ordinal,
+		"topic":               "sessions-index/" + ws,
+		"subscriptionId":      subID,
 		"frame": map[string]any{
-			"topic":          "sessions-index/local",
-			"subscriptionId": convSub,
+			"topic":          "sessions-index/" + ws,
+			"subscriptionId": subID,
 			"fromSeq":        1,
 			"toSeq":          1,
 			"sentAt":         time.Now().UnixMilli(),
@@ -77,7 +95,7 @@ func sessionsIndexFrame(convSub string, ps *phoneSessions) map[string]any {
 				"kind": "snapshot",
 				"snapshot": map[string]any{
 					"protocolVersion": 1,
-					"workspaceId":     "local",
+					"workspaceId":     ws,
 					"logEpoch":        idx,
 					"sessions":        sessions,
 				},

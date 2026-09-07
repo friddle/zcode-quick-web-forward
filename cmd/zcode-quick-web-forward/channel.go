@@ -589,8 +589,14 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		}
 		sid, _ := ps.get()
 		fmt.Printf("zcode: [subscribe] %s requested=%q resolved=%q\n", c.Name, subReq.SessionID, sid)
+		// The sessions-index stream carries its OWN subscription id: sharing
+		// the conversation one made the client route both streams together and
+		// drop the index snapshots (@ 会话 mention list stayed empty).
+		indexSubscribe := c.Name == "zcode-agent/subscribeSessionsIndexV4" || c.Name == "zcode-agent/resyncSessionsIndexV4"
 		subID := ps.convSub()
-		if subID == "" {
+		if indexSubscribe {
+			subID = ps.indexSub()
+		} else if subID == "" {
 			if sid != "" {
 				subID = sid + ":sub"
 			} else {
@@ -681,7 +687,7 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					fmt.Printf("zcode: pushed running-turn snapshot session=%s text=%q\n", sid, txt)
 					// Flip the sidebar entry to running as well.
 					if indexID > 0 {
-						ib, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+						ib, _ := json.Marshal(sessionsIndexFrame(ps))
 						engine.SendChannelEvent(indexID, ib, send)
 						fmt.Println("zcode: pushed sessions-index snapshot")
 					}

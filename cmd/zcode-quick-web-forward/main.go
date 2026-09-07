@@ -31,6 +31,9 @@ func main() {
 		case "workspace":
 			doWorkspace(os.Args[2:])
 			return
+		case "update":
+			doUpdate(os.Args[2:])
+			return
 		case "version", "-version", "--version", "-v":
 			fmt.Printf("zcode-quick-web-forward %s\n", version)
 			return
@@ -62,6 +65,9 @@ Commands:
                  choose the log file (default ./r.log).
   workspace      add/remove/list extra workspaces exposed to the phone
                  (zcode-quick-web-forward workspace add /path/to/dir)
+  update         update the ZCode engine runtime AND this binary from GitHub
+                 Releases, then restart the daemon automatically
+                 (--check = only report versions; --no-engine / --no-self)
   download       resolve/download the latest ZCode runtime
   version        print version
 

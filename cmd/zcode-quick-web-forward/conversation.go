@@ -23,7 +23,7 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 	indexID, runtimeID, convSub := ps.indexListener, ps.runtimeListener, ps.convSubscription
 	ps.mu.Unlock()
 	if indexID > 0 {
-		b, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+		b, _ := json.Marshal(sessionsIndexFrame(ps))
 		engine.SendChannelEvent(indexID, b, send)
 		fmt.Println("zcode: pushed sessions-index snapshot")
 	}

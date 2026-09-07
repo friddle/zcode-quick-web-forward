@@ -405,7 +405,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					fmt.Printf("zcode: drained queued send session=%s text=%q\n", psid, q.text)
 				}
 				if indexID > 0 {
-					ib, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+					ib, _ := json.Marshal(sessionsIndexFrame(ps))
 					engine.SendChannelEvent(indexID, ib, sender.send)
 				}
 			}(p.Session, phoneSid)
