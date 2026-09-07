@@ -82,6 +82,11 @@ type phoneSessions struct {
 	// per phone session. The engine transcript doesn't carry the separator,
 	// so transcript syncs re-append it to keep it visible.
 	compactMarkers map[string]map[string]any
+	// answeredCmds remembers recent conversation-command acks by commandId.
+	// The phone transport re-delivers a command when its ack races the client
+	// retry window; a repeat must replay the ack, never execute again.
+	answeredCmds   map[string]map[string]any
+	answeredOrder  []string
 }
 
 // pendingInteraction is one engine question awaiting a user answer.
@@ -520,6 +525,29 @@ func (p *phoneSessions) compactMarkerFor(sid string) map[string]any {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.compactMarkers[sid]
+}
+
+// replayOrRemember dedupes conversation commands by commandId. It returns
+// (previousAck, true) for a repeat — the caller must re-reply, not execute —
+// and (nil, false) after remembering a fresh command. The remembered map is
+// the live ack object the first execution fills in, so replays carry the
+// original result.
+func (p *phoneSessions) replayOrRemember(cmdID string, ack map[string]any) (map[string]any, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.answeredCmds == nil {
+		p.answeredCmds = map[string]map[string]any{}
+	}
+	if prev, ok := p.answeredCmds[cmdID]; ok {
+		return prev, true
+	}
+	p.answeredCmds[cmdID] = ack
+	p.answeredOrder = append(p.answeredOrder, cmdID)
+	if len(p.answeredOrder) > 256 {
+		delete(p.answeredCmds, p.answeredOrder[0])
+		p.answeredOrder = p.answeredOrder[1:]
+	}
+	return nil, false
 }
 
 // oldestPendingInteractionFor returns the earliest pending question for a

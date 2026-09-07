@@ -76,6 +76,15 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 	if req.Envelope.ClientID != "" {
 		ack["clientId"] = req.Envelope.ClientID
 	}
+	// Transport re-delivery: the client retries a command whose ack raced its
+	// retry window (same commandId). Re-execute would double-send the turn —
+	// replay the remembered ack instead.
+	if req.Envelope.CommandID != "" {
+		if prev, dup := ps.replayOrRemember(req.Envelope.CommandID, ack); dup {
+			fmt.Printf("zcode: duplicate conversation command %s (type=%s) — replaying ack\n", req.Envelope.CommandID, req.Envelope.Type)
+			return prev
+		}
+	}
 
 	switch req.Envelope.Type {
 	case "createSession":
