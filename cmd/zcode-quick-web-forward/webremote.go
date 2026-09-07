@@ -197,7 +197,10 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		ps.mu.Lock()
 		ps.workspacePath = v.WorkspaceKey
 		ps.mu.Unlock()
-		if restartEngine != nil {
+		// A bridge-open must NOT kill the engine while a turn is in flight —
+		// every task view the phone opens fires one, and the kill silently
+		// murders the running turn (no turn.terminal, ghost states forever).
+		if restartEngine != nil && !ps.anyTurnRunning() {
 			restartEngine()
 		}
 		bridge := map[string]any{

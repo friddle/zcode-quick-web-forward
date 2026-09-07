@@ -364,6 +364,15 @@ func (p *phoneSessions) turnRunningFor(sid string) bool {
 	return p.runningSids[sid]
 }
 
+// clearAllTurnRunning resets every in-flight turn flag. Called when the
+// engine process exits: its turns will never emit turn.terminal, so the
+// flags must not linger (they would ghost-block queueing logic).
+func (p *phoneSessions) clearAllTurnRunning() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.runningSids = map[string]bool{}
+}
+
 // rememberRows stores the rows of the last conversation snapshot.
 func (p *phoneSessions) rememberRows(rows []any) {
 	p.mu.Lock()

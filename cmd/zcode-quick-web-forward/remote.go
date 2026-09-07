@@ -144,23 +144,31 @@ func doRemoteOpts(o commonOpts) {
 		engine.Attach(stdin)
 		engClient.Attach(stdin)
 		fmt.Println("zcode: engine (re)started for bridge")
-		go func() {
-			sc := bufio.NewScanner(stdout)
-			sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-			for sc.Scan() {
-				line := sc.Bytes()
-				if len(line) == 0 {
-					continue
+			go func() {
+				sc := bufio.NewScanner(stdout)
+				sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
+				for sc.Scan() {
+					line := sc.Bytes()
+					if len(line) == 0 {
+						continue
+					}
+					fmt.Printf("zcode << %s\n", line)
+					engClient.HandleLine(line)
+					engine.ServerLine(line, sender.send)
 				}
-				fmt.Printf("zcode << %s\n", line)
-				engClient.HandleLine(line)
-				engine.ServerLine(line, sender.send)
-			}
-			werr := cmd.Wait()
-			if atomic.LoadInt32(&engGen) == gen {
-				engineExited <- werr
-			}
-		}()
+				werr := cmd.Wait()
+				if atomic.LoadInt32(&engGen) == gen {
+					engineExited <- werr
+				}
+				// The dead engine's in-flight turns never emit turn.terminal;
+				// lingering running flags would ghost-block queue dispatch.
+				ps.clearAllTurnRunning()
+				// A fresh engine can pick up globally queued tasks again.
+				go func() {
+					time.Sleep(3 * time.Second)
+					dispatchGlobalQueue(engClient, engine, sender.send, ps)
+				}()
+			}()
 	}
 	// Official-host mode: the host spawns and owns the engine itself
 	// (ZCODE_AGENT_SERVER_COMMAND); our engine supervision stays idle.
