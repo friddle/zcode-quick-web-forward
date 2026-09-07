@@ -82,13 +82,24 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
+			// Pure pipe in official-host mode: every assembled channel
+			// message (calls AND initialize acks) goes to the host's service
+			// port verbatim; the host's responses are piped back by
+			// officialHostBridge.onPortBytes. Built-in handlers stay as the
+			// fallback when the official host is off.
 			onCall := func(c *relay.ChannelCall) {
 				if officialHostActive() && forwardCallToOfficialHost(c) {
-					return // answered by the official host's service port
+					return
 				}
 				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
 			}
-			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, engClient, termSvc, onCall)
+			onRaw := func(raw []byte) {
+				if officialHostActive() && forwardRawToOfficialHost(raw) {
+					return
+				}
+				engine.WriteSink(raw)
+			}
+			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, engClient, termSvc, onCall, onRaw)
 		},
 	})
 }
@@ -128,7 +139,7 @@ func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
 	}
 }
 
-func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service, onCall func(*relay.ChannelCall)) {
+func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service, onCall func(*relay.ChannelCall), onRaw func([]byte)) {
 	var p struct {
 		ZcodeType string `json:"zcode_type"`
 		RequestID string `json:"requestId"`
@@ -140,7 +151,7 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		if onCall == nil {
 			onCall = handleChannelCall(engine, reply, workspaces, ps, engClient, termSvc)
 		}
-		engine.HandlePhonePayload(payload, reply, onCall)
+		engine.HandlePhonePayload(payload, reply, onCall, onRaw)
 		return
 	}
 	if p.RequestID == "" {

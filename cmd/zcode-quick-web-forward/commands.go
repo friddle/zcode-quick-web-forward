@@ -155,50 +155,12 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			// running, a new task waits — its text dispatches automatically
 			// when the running turn ends (see dispatchGlobalQueue).
 			if ps.anyTurnRunning() {
-				ps.enqueueGlobalTask(globalQueuedTask{engineSid: sid, phoneSid: sid, text: typedTitle, queuedAt: time.Now().UnixMilli()})
-				if err := zcode.UpsertTask(ws, ws, sid, title, "queued"); err != nil {
-					fmt.Printf("zcode: queued task persist failed: %v\n", err)
-				}
-				pushWorkspaceList(send, ps)
+				enqueueGlobalTaskQueued(engine, send, ps, sid, typedTitle, title, ws)
 				ack["userTextSent"] = typedTitle
 				ack["queuedTask"] = true
 				ack["result"] = map[string]any{
 					"type": "createSession", "sessionId": sid,
 				}
-				fmt.Printf("zcode: task QUEUED session=%s (serial mode, %d waiting) text=%q\n", sid, ps.queuedGlobalCount(), typedTitle)
-				// Push a queued bubble so the open conversation shows the wait.
-				go func(sid, text string) {
-					time.Sleep(150 * time.Millisecond)
-					now := time.Now().UnixMilli()
-					turnID := ps.beginTurn(sid)
-					hdr := map[string]any{
-						"rowId": ps.nextRowID(), "turnId": turnID,
-						"createdAt": now, "createdAtSeq": now,
-						"kind": "turnHeader", "origin": "userInput",
-						"executionKind": "agent", "state": "running", "startedAt": now,
-					}
-					row := map[string]any{
-						"rowId": ps.nextRowID(), "turnId": turnID,
-						"createdAt": now, "createdAtSeq": now,
-						"kind": "userInput", "text": text, "origin": "realUser",
-					}
-					note := map[string]any{
-						"rowId": ps.nextRowID(), "turnId": turnID,
-						"createdAt": now + 1, "createdAtSeq": now + 1,
-						"kind": "assistantText", "assistantResponseId": "queue-note-" + sid,
-						"text": "⏳ 已排队 — 等待上一个任务完成后自动开始", "state": "complete",
-					}
-					rows := append(ps.snapshotRows(), liveTailBoundary(ps.nextRowID(), turnID), hdr, row, note)
-					ps.rememberRows(rows)
-					ps.mu.Lock()
-					convID, convSub, convWs := ps.convListener, ps.convSubscription, ps.workspacePath
-					ps.mu.Unlock()
-					if convID > 0 {
-						frame := conversationSnapshotFrame(ps, sid, convWs, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")
-						b, _ := json.Marshal(frame)
-						engine.SendChannelEvent(convID, b, send)
-					}
-				}(sid, typedTitle)
 				return ack
 			}
 			if !engClient.SendMessage(sid, typedTitle) {
@@ -283,6 +245,31 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 					engine.SendChannelEvent(convID, b, send)
 					fmt.Printf("zcode: pushed queue snapshot session=%s pending=%d\n", sid, len(ps.queueItemsPayload()))
 				}(sid)
+				return ack
+			}
+			// Serial execution (多任务排队): another task's turn is running —
+			// this new task waits its turn and dispatches automatically when
+			// the running turn ends (see dispatchGlobalQueue). The queue check
+			// must live HERE: the real client flow creates an empty draft
+			// session first ("+" button) and then carries the text as a plain
+			// sendText, so the createSession+firstInput intercept never fires.
+			if ps.anyTurnRunning() {
+				ws, _ := taskMeta(ps, sid)
+				if ws == "" {
+					ps.mu.Lock()
+					ws = ps.workspacePath
+					ps.mu.Unlock()
+				}
+				if ws == "" && len(workspaces) > 0 {
+					ws = workspaces[0]
+				}
+				enqueueGlobalTaskQueued(engine, send, ps, sid, text, text, ws)
+				ack["status"] = "accepted"
+				ack["userTextSent"] = text
+				ack["queuedTask"] = true
+				if cmdID := req.Envelope.CommandID; cmdID != "" {
+					ack["result"] = map[string]any{"type": "inputAccepted", "delivery": "queue", "inputId": cmdID}
+				}
 				return ack
 			}
 			// The phone may send into a historical task whose engine session
@@ -825,6 +812,55 @@ func pushAssistantNote(engine *relay.BridgeEngine, send func(any), ps *phoneSess
 // goroutine only waits for that and then lands the compact timelineMarker row
 // (marker.type compact + sourceCommandId) that reconciles the client's
 // optimistic command.
+// enqueueGlobalTaskQueued registers a new task in the serial queue, persists
+// it as queued and pushes the ⏳ waiting bubble into the open conversation.
+// Shared by the createSession+firstInput intercept and the sendText path —
+// the real client flow creates an empty draft first ("+"), so a new task's
+// text arrives as sendText, never as createSession.firstInput.
+func enqueueGlobalTaskQueued(engine *relay.BridgeEngine, send func(any), ps *phoneSessions, sid, text, title, ws string) {
+	ps.enqueueGlobalTask(globalQueuedTask{engineSid: sid, phoneSid: sid, text: text, queuedAt: time.Now().UnixMilli()})
+	if err := zcode.UpsertTask(ws, ws, sid, title, "queued"); err != nil {
+		fmt.Printf("zcode: queued task persist failed: %v\n", err)
+	}
+	pushWorkspaceList(send, ps)
+	fmt.Printf("zcode: task QUEUED session=%s (serial mode, %d waiting) text=%q\n", sid, ps.queuedGlobalCount(), text)
+	// Promote the runtime entry so the row shows in the list immediately.
+	ps.runtimeTask(sid, ws, title, false)
+	// Push a queued bubble so the open conversation shows the wait.
+	go func(sid, text string) {
+		time.Sleep(150 * time.Millisecond)
+		now := time.Now().UnixMilli()
+		turnID := ps.beginTurn(sid)
+		hdr := map[string]any{
+			"rowId": ps.nextRowID(), "turnId": turnID,
+			"createdAt": now, "createdAtSeq": now,
+			"kind": "turnHeader", "origin": "userInput",
+			"executionKind": "agent", "state": "running", "startedAt": now,
+		}
+		row := map[string]any{
+			"rowId": ps.nextRowID(), "turnId": turnID,
+			"createdAt": now, "createdAtSeq": now,
+			"kind": "userInput", "text": text, "origin": "realUser",
+		}
+		note := map[string]any{
+			"rowId": ps.nextRowID(), "turnId": turnID,
+			"createdAt": now + 1, "createdAtSeq": now + 1,
+			"kind": "assistantText", "assistantResponseId": "queue-note-" + sid,
+			"text": "⏳ 已排队 — 等待上一个任务完成后自动开始", "state": "complete",
+		}
+		rows := append(ps.snapshotRows(), liveTailBoundary(ps.nextRowID(), turnID), hdr, row, note)
+		ps.rememberRows(rows)
+		ps.mu.Lock()
+		convID, convSub, convWs := ps.convListener, ps.convSubscription, ps.workspacePath
+		ps.mu.Unlock()
+		if convID > 0 {
+			frame := conversationSnapshotFrame(ps, sid, convWs, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")
+			b, _ := json.Marshal(frame)
+			engine.SendChannelEvent(convID, b, send)
+		}
+	}(sid, text)
+}
+
 // dispatchGlobalQueue starts the next queued task when a turn ends — the
 // serial execution mode (一个任务跑完,下一个自动开始). Called from the
 // turn.terminal path after the per-conversation queue drain.

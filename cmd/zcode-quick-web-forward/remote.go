@@ -175,7 +175,10 @@ func doRemoteOpts(o commonOpts) {
 		}
 		officialStarted = maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid)
 		if officialStarted {
-			restartEngineFn = officialRestartEngine
+			// The host owns the engine — a workspace bridge-open must NOT
+			// restart it (the old restart-on-open semantics killed the host
+			// mid-pairing and stalled the sync).
+			restartEngineFn = func() {}
 		}
 	}
 	if !officialStarted {

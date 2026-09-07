@@ -125,41 +125,32 @@ func officialHostActive() bool {
 }
 
 // forwardCallToOfficialHost pipes one decoded phone channel call to the
-// host's service port (raw channel bytes — the same wire form the desktop
-// renderer writes into its port).
+// host's service port.
 func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
+	return forwardRawToOfficialHost(relay.ChannelCallBytes(c))
+}
+
+// forwardRawToOfficialHost pipes raw channel bytes (calls, initialize acks,
+// any client message) to the host's service port verbatim.
+func forwardRawToOfficialHost(raw []byte) bool {
 	officialState.mu.Lock()
 	b := officialState.active
 	officialState.mu.Unlock()
 	if b == nil || !b.h.Alive() {
 		return false
 	}
-	fmt.Printf("zcode: official-host -> svc %s/%s kind=%d id=%d\n", c.ChannelName, c.Name, c.Kind, c.ID)
-	b.h.RawPortData("svc", relay.ChannelCallBytes(c))
+	b.h.RawPortData("svc", raw)
 	return true
 }
 
-// onPortBytes handles service-port messages from the host.
+// onPortBytes pipes host service-port bytes back to the phone verbatim —
+// responses AND the host's channel initialize; the phone's channel stack
+// speaks the same protocol, so the bridge stays a pure pipe.
 func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 	if portID != "svc" || len(raw) == 0 {
 		return
 	}
-	if relay.IsChannelInitialize(raw) {
-		// Server initialize: answer with the client initialize, otherwise
-		// the host serves nothing on this port.
-		b.h.RawPortData("svc", relay.InitializeMessage())
-		fmt.Println("zcode: official-host <- svc [200] server init; client initialize sent")
-		return
-	}
-	if res, ok := relay.DecodeChannelResponse(raw); ok {
-		if b.sender != nil {
-			b.sender.send(res)
-		} else {
-			fmt.Println("zcode: official-host BUG nil sender; response dropped")
-		}
-		return
-	}
-	fmt.Printf("zcode: official-host <- svc unhandled %d bytes: % x\n", len(raw), raw[:min(24, len(raw))])
+	b.engine.SendRawChannelBytes(raw, func(v any) {})
 }
 
 // officialStopHost tears the host down (its engine child dies with it).

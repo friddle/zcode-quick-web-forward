@@ -351,8 +351,10 @@ func (e *BridgeEngine) PumpServerLine(line []byte, send func(any)) {
 }
 
 // HandlePhonePayload processes one phone data payload. onCall receives
-// decoded channel requests (Promise/EventListen); send replies to the phone.
-func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any), onCall func(*ChannelCall)) {
+// decoded channel requests (Promise/EventListen); onRaw receives assembled
+// channel messages that are NOT calls (initialize acks etc.); send replies
+// to the phone.
+func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any), onCall func(*ChannelCall), onRaw func([]byte)) {
 	var head struct {
 		ZcodeType string `json:"zcode_type"`
 	}
@@ -378,6 +380,10 @@ func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any
 			if onCall != nil {
 				onCall(call)
 			}
+			return
+		}
+		if onRaw != nil {
+			onRaw(msg)
 			return
 		}
 		e.mu.Lock()
@@ -416,4 +422,15 @@ func ChannelCallBytes(c *ChannelCall) []byte {
 // responses are already valid channel messages for the client).
 func (e *BridgeEngine) SendRawChannelBytes(b []byte, send func(any)) {
 	e.sendChannelBytes(b, send)
+}
+
+// WriteSink feeds raw channel bytes into the attached engine's stdin
+// (built-in mode: uncategorized client messages are proxied to app-server).
+func (e *BridgeEngine) WriteSink(msg []byte) {
+	e.mu.Lock()
+	sink := e.sink
+	e.mu.Unlock()
+	if sink != nil {
+		_, _ = sink.Write(msg)
+	}
 }

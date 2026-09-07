@@ -258,37 +258,3 @@ func parseChannelCall(b []byte) *ChannelCall {
 // InitializeMessage is the exported client handshake ([200]) — the official
 // host's channel server expects it before serving requests on a service port.
 func InitializeMessage() []byte { return initializeMessage() }
-
-// IsChannelInitialize reports whether the message is the server's channel
-// initialize handshake ([200]); the client must answer with its own
-// initialize before the server serves requests.
-func IsChannelInitialize(b []byte) bool {
-	r := &chReader{b: b}
-	arr, ok := r.value().([]any)
-	if !ok || len(arr) < 1 {
-		return false
-	}
-	t, _ := arr[0].(int)
-	return t == chInitialize
-}
-
-// DecodeChannelResponse decodes a server channel response —
-// buildMessage([promiseTag, id], result), the same head+data layout as
-// requests — into the phone-transport shape: the bare result value as JSON
-// (the relay reply carries the result; the transport pairs it with the
-// pending request). ok=false for non-promise messages (events etc.).
-func DecodeChannelResponse(b []byte) (resultJSON []byte, ok bool) {
-	r := &chReader{b: b}
-	arr, ok := r.value().([]any)
-	if !ok || len(arr) < 2 {
-		return nil, false
-	}
-	if t, _ := arr[0].(int); t != chPromiseSuccess {
-		return nil, false
-	}
-	res, err := json.Marshal(r.value())
-	if err != nil {
-		return nil, false
-	}
-	return res, true
-}

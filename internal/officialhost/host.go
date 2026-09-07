@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"sync"
@@ -62,7 +63,11 @@ func Start(nodeBin, dir string) (*Host, error) {
 	h.stdin = json.NewEncoder(stdin)
 	h.stdout = bufio.NewReaderSize(stdout, 1<<20)
 	go func() {
-		_ = cmd.Wait() // reap; without this Alive() lies and the child zombifies
+		// reap; without this Alive() lies and the child zombifies. The exit
+		// reason matters: a silent host exit is indistinguishable from a
+		// wedged one otherwise.
+		werr := cmd.Wait()
+		fmt.Fprintf(os.Stderr, "[officialhost] host exited: err=%v\n", werr)
 		close(h.exited)
 	}()
 	go h.readLoop()
