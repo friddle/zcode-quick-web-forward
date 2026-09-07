@@ -44,11 +44,20 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 				if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {
 					rows = messageRows(tx, sid, ps.nextOrdinal)
 					fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
+				} else if engineSid := rebuildContinuedSession(engClient, ps, sid); engineSid != "" {
+					// Engine session died with the daemon — rebuild a
+					// continuation from the saved transcript so VIEWING a
+					// historical task restores its history and the composer
+					// stays writable (otherwise the client unsubscribes).
+					if tx, err2 := engClient.ReadSession(engineSid, 10*time.Second); err2 == nil {
+						rows = messageRows(tx, sid, ps.nextOrdinal)
+						fmt.Printf("zcode: recovery rebuilt session=%s -> %s rows=%d\n", sid, engineSid, len(rows))
+					}
 				} else if stored := zcode.LoadSessionTranscript(sid); stored != nil {
-					// Engine session gone (daemon restarted): restore from the
-					// transcript snapshot we saved when the turn completed.
+					// No rebuildable transcript: restore from the saved
+					// transcript snapshot instead.
 					rows = messageRows(stored, sid, ps.nextOrdinal)
-					fmt.Printf("zcode: recovery from transcript session=%s rows=%d (engine: %v)\n", sid, len(rows), err)
+					fmt.Printf("zcode: recovery from transcript session=%s rows=%d\n", sid, len(rows))
 				} else {
 					fmt.Printf("zcode: recovery read failed: %v (no transcript)\n", err)
 				}
