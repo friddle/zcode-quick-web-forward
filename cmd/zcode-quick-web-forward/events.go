@@ -142,7 +142,8 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				}
 				pi.Prompt = plan
 				pi.Questions = []map[string]any{{
-					"question": "是否批准该计划?",
+					// header is REQUIRED by the client's question schema (El).
+					"question": "是否批准该计划?", "header": "计划",
 					"options": []map[string]any{
 						{"optionId": "approve", "label": "批准"},
 						{"optionId": "reject", "label": "拒绝"},
@@ -174,6 +175,11 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		if b, err := json.Marshal(conversationDeltaFrame(rq.SessionID, convSub, ps.nextOrdinal(), []any{
 			map[string]any{"op": "state.updated", "patch": map[string]any{"pendingInteractions": ps.pendingInteractionsPayload()}},
 		})); err == nil && convID > 0 {
+			// Debug: dump the exact interaction entries so a client-side
+			// schema rejection can be diffed against a working card.
+			if dbg, derr := json.Marshal(ps.pendingInteractionsPayload()); derr == nil {
+				fmt.Printf("zcode: pendingInteractions payload: %s\n", dbg)
+			}
 			engine.SendChannelEvent(convID, b, sender.send)
 			// The client renders the interactive question card from the
 			// snapshot's pendingInteractions, not from the delta (verified

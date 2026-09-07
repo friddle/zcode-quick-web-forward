@@ -607,8 +607,12 @@ func (p *phoneSessions) pendingInteractionsPayload() []any {
 				qo = append(qo, map[string]any{"value": o["optionId"], "label": o["label"]})
 			}
 			entry := map[string]any{"question": q["question"], "options": qo}
+			// header is REQUIRED by the client's question schema (El) — never
+			// omit it, even for synthesized cards.
 			if h, _ := q["header"].(string); h != "" {
 				entry["header"] = h
+			} else {
+				entry["header"] = "确认"
 			}
 			questions = append(questions, entry)
 			// The interaction-level option list mirrors the first question —
