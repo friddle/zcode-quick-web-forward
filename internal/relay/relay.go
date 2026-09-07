@@ -158,7 +158,9 @@ func connectAndAuth(o Options) (*client, state, error) {
 
 	var authed bool
 	var readErr error
-	ws.readLoop(func(msg relayMsg) bool {
+	// Every handshake frame must arrive within 15s; a silent relay is a
+	// retryable failure, not a hang.
+	ws.readLoopDeadline(15*time.Second, func(msg relayMsg) bool {
 		switch msg.Type {
 		case "device_register_ack":
 			st.DeviceSid = msg.DeviceSid
@@ -182,6 +184,9 @@ func connectAndAuth(o Options) (*client, state, error) {
 		}
 		return nil, st, errors.New("relay handshake incomplete")
 	}
+	// Live traffic relies on the keepAlive silence watchdog, not per-frame
+	// deadlines — clear the handshake one.
+	ws.conn.SetReadDeadline(time.Time{})
 	return ws, st, nil
 }
 
@@ -395,7 +400,17 @@ func (c *client) send(m relayMsg) {
 // readLoop reads text frames and hands them to onMsg until it returns
 // false, the socket closes, or a protocol error occurs.
 func (c *client) readLoop(onMsg func(relayMsg) bool) {
+	c.readLoopDeadline(0, onMsg)
+}
+
+// readLoopDeadline is readLoop with a per-frame read deadline. A deadline > 0
+// turns a silent peer into a retryable error instead of a hung caller — the
+// register/auth handshake must not wedge forever on a half-dead connection.
+func (c *client) readLoopDeadline(deadline time.Duration, onMsg func(relayMsg) bool) {
 	for {
+		if deadline > 0 {
+			c.conn.SetReadDeadline(time.Now().Add(deadline))
+		}
 		op, payload, err := c.readFrame()
 		if err != nil {
 			if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
