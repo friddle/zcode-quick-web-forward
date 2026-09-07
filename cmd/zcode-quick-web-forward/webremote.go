@@ -76,13 +76,13 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			fmt.Println("*** web-remote: 手机已配对接入 ***")
 			go func() {
 				time.Sleep(800 * time.Millisecond)
-				sender.send(workspaceListPush(workspaces, ps))
+				sender.send(workspaceListPush(ps.workspacesList(), ps))
 				fmt.Println("zcode: workspace list pushed to phone")
 			}()
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			handleRemoteData(payload, reply, engine, restartEngine, sender.send, workspaces, ps, engClient, termSvc)
+			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, engClient, termSvc)
 		},
 	})
 }

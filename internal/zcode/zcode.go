@@ -481,6 +481,12 @@ func workspaceStorePath() string {
 	return filepath.Join(Home(), "v2", "zqf-workspaces.json")
 }
 
+// StoredWorkspacesPath exposes the stored-workspace file path so a running
+// remote can watch it and hot-reload after `workspace add`.
+func StoredWorkspacesPath() string {
+	return workspaceStorePath()
+}
+
 // StoredWorkspaces returns the extra workspaces registered via `workspace add`
 // (paths only, one per line in a json array).
 func StoredWorkspaces() []string {

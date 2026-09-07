@@ -174,6 +174,9 @@ func doRemoteOpts(o commonOpts) {
 	}()
 
 	go startWebRemote(origin, region, engine, sender, startEngine, workspaces, ps, engClient, termSvc)
+	go watchStoredWorkspaces(o, ps, func(ws []string) {
+		sender.send(workspaceListPush(ws, ps))
+	})
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -277,4 +280,32 @@ func probeOrigin(origin string) error {
 		return nil
 	}
 	return lastErr
+}
+
+// watchStoredWorkspaces polls the stored-workspace file (written by
+// `workspace add`) and hot-reloads the running remote when it changes: the
+// phone session picks up the new list and a workspace-list push goes out, so
+// no daemon restart (and no phone kick) is needed. Polling rather than
+// inotify keeps it portable; the file is tiny, and re-resolving only happens
+// on an actual content change.
+func watchStoredWorkspaces(o commonOpts, ps *phoneSessions, push func([]string)) {
+	path := zcode.StoredWorkspacesPath()
+	last := ""
+	if b, err := os.ReadFile(path); err == nil {
+		last = string(b)
+	}
+	for {
+		time.Sleep(2 * time.Second)
+		b, err := os.ReadFile(path)
+		if err != nil || string(b) == last {
+			continue
+		}
+		last = string(b)
+		ws := o.resolveWorkspaces()
+		ps.setWorkspaces(ws)
+		fmt.Printf("zcode: workspaces updated (hot reload): %s\n", strings.Join(ws, ", "))
+		if push != nil {
+			push(ws)
+		}
+	}
 }

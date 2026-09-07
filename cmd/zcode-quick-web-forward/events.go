@@ -274,7 +274,9 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			engine.SendChannelEvent(convID, b, sender.send)
 		}
 	case "v4/telemetry/event":
-		// stream.chunk carries the assistant's streaming text.
+		// Telemetry drives everything the phone sees while a turn RUNS: tool
+		// lifecycle becomes live tool cards, stream.chunk counters become
+		// ticking 思考中/生成中 rows, turn.terminal finalizes the transcript.
 		var p struct {
 			Kind    string `json:"kind"`
 			Channel string `json:"channel"`
@@ -282,21 +284,29 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			Chunk   string `json:"chunk"`
 			Status  string `json:"status"`
 		}
+		rawParams := map[string]any{}
 		if json.Unmarshal(ev.Params, &p) != nil {
 			return
 		}
-		if p.Kind == "stream.chunk" && p.Channel == "text" && p.Session != "" {
-			ps.mu.Lock()
-			convID := ps.convListener
-			convSub := ps.convSubscription
-			ps.mu.Unlock()
-			phoneSid := ps.phoneFor(p.Session)
-			if convID > 0 {
-				b, _ := json.Marshal(conversationChunkFrame(phoneSid, p.Chunk, convSub, ps.nextOrdinal()))
-				engine.SendChannelEvent(convID, b, sender.send)
+		_ = json.Unmarshal(ev.Params, &rawParams)
+		if p.Kind == "tool.lifecycle" && p.Session != "" {
+			if phoneSid := ps.phoneFor(p.Session); phoneSid != "" {
+				handleLiveToolEvent(engine, sender.send, ps, p.Session, phoneSid, rawParams)
+			}
+		}
+		if p.Kind == "stream.chunk" && p.Session != "" {
+			// The telemetry chunk carries only a length (no body) — push a
+			// ticking placeholder row instead of an empty-text row per chunk.
+			if phoneSid := ps.phoneFor(p.Session); phoneSid != "" {
+				handleLiveChunkEvent(engine, sender.send, ps, p.Session, phoneSid, rawParams)
 			}
 		}
 		if p.Kind == "turn.terminal" && p.Session != "" {
+			// The turn is over: drop the synthetic live rows (the transcript
+			// snapshot below replaces them with the real rows).
+			ps.mu.Lock()
+			ps.endLiveTurn(p.Session)
+			ps.mu.Unlock()
 			// The engine session may be a rebuilt continuation of a phone task;
 			// update the phone-visible task and push under its id.
 			phoneSid := ps.phoneFor(p.Session)

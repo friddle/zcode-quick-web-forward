@@ -94,6 +94,10 @@ type phoneSessions struct {
 	// the conversation subscription id made the client route index frames into
 	// the conversation stream (or drop them), leaving @ 会话 mentions empty.
 	indexSubID string
+	// live tracks the synthetic live-streaming rows (tool cards, 思考中/生成中
+	// counters) per engine session, keyed by engine session id. Guarded by mu;
+	// see streaming.go.
+	live map[string]*liveTurn
 }
 
 // indexSub returns the sessions-index subscription id, minted once.
@@ -126,6 +130,14 @@ func (p *phoneSessions) workspacesList() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.workspaces
+}
+
+// setWorkspaces replaces the configured workspace paths (hot reload after a
+// `workspace add`; the next workspace-list push carries the new entries).
+func (p *phoneSessions) setWorkspaces(ws []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.workspaces = ws
 }
 
 // pendingInteraction is one engine question awaiting a user answer.
@@ -496,11 +508,17 @@ func (p *phoneSessions) setModelConfig(provider, model, thought string) {
 	}
 }
 
+// rowIDSeqMu guards rowIDSeq separately from phoneSessions.mu: row ids are
+// minted inside live-streaming handlers that already hold ps.mu (sync.Mutex
+// is not reentrant — reusing ps.mu here deadlocked the engine event reader
+// on the first streamed chunk).
+var rowIDSeqMu sync.Mutex
+
 // nextRowID mints strictly-increasing conversation row ids for live rows
-// (queue bubbles, model-change markers, question cards).
+// (queue bubbles, model-change markers, question cards, live tool cards).
 func (p *phoneSessions) nextRowID() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	rowIDSeqMu.Lock()
+	defer rowIDSeqMu.Unlock()
 	if p.rowIDSeq < 100000 {
 		p.rowIDSeq = 100000
 	}
