@@ -173,6 +173,11 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	// "List files in /home/friddle") so the phone list shows real names.
 	// (Handled above while reading tx["session"] for the model settings.)
 	rows := messageRows(tx, phoneSid, ps.nextOrdinal)
+	// The engine transcript doesn't carry the compaction separator, so keep
+	// the latest one visible at the end of rebuilt snapshots.
+	if mk := ps.compactMarkerFor(phoneSid); mk != nil {
+		rows = append(rows, mk)
+	}
 	if len(rows) == 0 {
 		fmt.Printf("zcode: syncConversation empty rows session=%s\n", phoneSid)
 		return

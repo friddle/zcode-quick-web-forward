@@ -385,6 +385,38 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				}
 			}()
 		}
+	case "compact":
+		// The phone's /compact sends envelope type "compact" (payload {} — the
+		// menu entry carries no instructions). Compact through the engine's
+		// session/compact, which runs its own turn: composer sends queue behind
+		// it, and its turn.terminal drives the transcript sync + queue drain
+		// like any other turn. The client settles its optimistic compact bubble
+		// once a timelineMarker row (marker.type compact) carrying the command's
+		// sourceCommandId shows up in the projection.
+		sid := req.Envelope.SessionID
+		if sid == "" {
+			sid, _ = ps.get()
+		}
+		if sid == "" {
+			ack["status"] = "failed"
+			ack["message"] = "没有当前会话"
+			return ack
+		}
+		engineSid := ps.engineFor(sid)
+		if _, err := engClient.ReadSession(engineSid, 3*time.Second); err != nil {
+			ack["status"] = "failed"
+			ack["message"] = "无法恢复该历史任务的会话"
+			return ack
+		}
+		cmdID := req.Envelope.CommandID
+		if cmdID == "" {
+			cmdID = uuidNew()
+		}
+		ps.setTurnRunning(engineSid, true)
+		ack["status"] = "accepted"
+		ack["result"] = map[string]any{"type": "compact", "inputId": cmdID}
+		fmt.Printf("zcode: compact requested session=%s (phone=%s) cmd=%s\n", engineSid, sid, cmdID)
+		go runCompactTurn(engClient, engine, send, ps, engineSid, sid, cmdID)
 	case "resolveInteraction":
 		// The phone answered an AskUserQuestion (pendingInteraction).
 		answer := req.Envelope.Payload.Answer
@@ -523,4 +555,70 @@ func resolveInteractionCommand(engClient *enginepkg.Client, engine *relay.Bridge
 	ack["status"] = "accepted"
 	ack["result"] = map[string]any{"type": "resolveInteraction", "interactionId": interactionID}
 	return ack, true
+}
+
+// runCompactTurn drives session/compact and settles the phone's compact
+// bubble. The engine accepts the RPC immediately and runs the compaction as
+// its own turn; when that turn terminals, the turn.terminal event path flips
+// runningSids, syncs the compacted transcript and drains queued sends. This
+// goroutine only waits for that and then lands the compact timelineMarker row
+// (marker.type compact + sourceCommandId) that reconciles the client's
+// optimistic command.
+func runCompactTurn(engClient *enginepkg.Client, engine *relay.BridgeEngine, send func(any), ps *phoneSessions, engineSid, phoneSid, commandID string) {
+	startedAt := time.Now().UnixMilli()
+	res, err := engClient.Call("session/compact", map[string]any{
+		"sessionId": engineSid,
+		"inputId":   commandID,
+	}, 30*time.Second)
+	if err != nil {
+		fmt.Printf("zcode: session/compact failed session=%s: %v\n", engineSid, err)
+		ps.setTurnRunning(engineSid, false)
+		return
+	}
+	state := "accepted"
+	if m, ok := res["compact"].(map[string]any); ok {
+		if s, _ := m["state"].(string); s != "" {
+			state = s
+		}
+	}
+	fmt.Printf("zcode: session/compact state=%s session=%s\n", state, engineSid)
+	if state != "accepted" {
+		// already_running: another compact owns the turn — leave it alone.
+		ps.setTurnRunning(engineSid, false)
+		return
+	}
+	// Wait for the compact turn to terminal (10 min cap for very long contexts).
+	deadline := time.Now().Add(10 * time.Minute)
+	timedOut := false
+	for ps.turnRunningFor(engineSid) {
+		if time.Now().After(deadline) {
+			timedOut = true
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	ps.setTurnRunning(engineSid, false)
+	endedAt := time.Now().UnixMilli()
+	status := "completed"
+	if timedOut {
+		status = "failed"
+	}
+	rowID := ps.nextRowID()
+	marker := map[string]any{
+		"rowId": rowID, "turnId": "turn-" + phoneSid,
+		"entityId":  "compact:" + commandID,
+		"createdAt": endedAt, "createdAtSeq": rowID,
+		"kind": "timelineMarker", "sourceCommandId": commandID,
+		"marker": map[string]any{
+			"type": "compact", "status": status,
+			"trigger": "manual", "startedAt": startedAt, "endedAt": endedAt,
+		},
+	}
+	ps.setCompactMarker(phoneSid, marker)
+	// The turn.terminal sync lands ~immediately when the loop exits; give it a
+	// moment, then push a snapshot that includes the marker row (and the
+	// compacted transcript + refreshed context usage).
+	time.Sleep(1200 * time.Millisecond)
+	go syncConversation(engClient, engine, &relaySender{fn: send}, ps, engineSid, phoneSid)
+	fmt.Printf("zcode: compact %s session=%s phone=%s markerRow=%d\n", status, engineSid, phoneSid, rowID)
 }

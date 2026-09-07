@@ -78,6 +78,10 @@ type phoneSessions struct {
 	// pendingInteractions list; the phone answers via the resolveInteraction
 	// conversation command.
 	pendingInteractions map[string]*pendingInteraction
+	// compactMarkers remembers the latest completed context-compaction marker
+	// per phone session. The engine transcript doesn't carry the separator,
+	// so transcript syncs re-append it to keep it visible.
+	compactMarkers map[string]map[string]any
 }
 
 // pendingInteraction is one engine question awaiting a user answer.
@@ -498,6 +502,24 @@ func (p *phoneSessions) getPendingInteraction(interactionID string) *pendingInte
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.pendingInteractions[interactionID]
+}
+
+// setCompactMarker stores the latest completed context-compaction marker for
+// a phone session so transcript syncs can re-append the separator row.
+func (p *phoneSessions) setCompactMarker(sid string, row map[string]any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.compactMarkers == nil {
+		p.compactMarkers = map[string]map[string]any{}
+	}
+	p.compactMarkers[sid] = row
+}
+
+// compactMarkerFor returns the stored compaction marker for a session, if any.
+func (p *phoneSessions) compactMarkerFor(sid string) map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.compactMarkers[sid]
 }
 
 // oldestPendingInteractionFor returns the earliest pending question for a
