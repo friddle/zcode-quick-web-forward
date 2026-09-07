@@ -246,14 +246,13 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		ps.mu.Unlock()
 		// Engine-initiated mode changes (e.g. the agent leaving plan mode via
 		// ExitPlanMode) must flip the phone's mode picker too: mirror the
-		// engine's mode onto collabMode and push a config patch.
+		// engine's mode onto collabMode and push a config patch. The phone's
+		// option values are build(变更前确认)/edit(自动编辑)/plan/yolo — identity
+		// mapping; engine-only "auto" shows as edit.
 		if m := p.Patch.Mode.Current; m != "" {
 			phoneMode := m
-			switch m {
-			case "build":
-				phoneMode = "confirm" // 变更前确认
-			case "auto":
-				phoneMode = "edit" // 自动编辑
+			if m == "auto" {
+				phoneMode = "edit"
 			}
 			ps.mu.Lock()
 			ps.collabMode = phoneMode
