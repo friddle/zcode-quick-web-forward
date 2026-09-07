@@ -597,16 +597,20 @@ func resolveInteractionCommand(engClient *enginepkg.Client, engine *relay.Bridge
 	// (JAo): {action:"accept", content:{answers:{question:choice}}} → the
 	// tool input gets the answers merged in; any other action is a denial.
 	if pi.IsPlanApproval {
-		// Plan cards are accept/cancel only — no answers to merge.
-		approved := optionID != "reject"
-		if action == "decline" || action == "cancel" {
-			approved = false
-		}
+		// The engine's planApprovalResponseToBrokerResult (T5i) only allows
+		// when action=="accept" AND content yields "approve" for the canonical
+		// plan question key (C5i: answers[key] ?? answer_0 ?? answer); an
+		// accept without it is a DENY. Reject rides action=cancel.
 		act := "cancel"
-		if approved {
+		brokerResult := map[string]any{"action": act}
+		if approved := optionID != "reject" && action != "decline" && action != "cancel"; approved {
 			act = "accept"
+			brokerResult = map[string]any{"action": act, "content": map[string]any{
+				"answers": map[string]any{"Review this implementation plan.": "approve"},
+				"answer":  "approve",
+			}}
 		}
-		engClient.RespondToRequest(pi.EngineReqID, map[string]any{"action": act})
+		engClient.RespondToRequest(pi.EngineReqID, brokerResult)
 		ps.removePendingInteraction(interactionID)
 		fmt.Printf("zcode: plan %s (interaction %s)\n", act, interactionID)
 		ack["status"] = "accepted"
