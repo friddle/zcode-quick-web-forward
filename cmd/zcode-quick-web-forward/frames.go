@@ -168,35 +168,11 @@ func tasksIndexFrame(ps *phoneSessions) map[string]any {
 		live = ps.liveTaskIDs()
 	}
 	items := make([]any, 0, len(tasks)+1)
-	seenWS := map[string]bool{}
 	for _, t := range tasks {
 		if strings.HasPrefix(t.WorkspaceKey, "remote:") {
 			continue
 		}
-		seenWS[t.WorkspacePath] = true
 		items = append(items, taskIndexItem(t, live))
-	}
-	// Registered workspaces without any task yet still need to show up as
-	// projects: the client's project menu is built from this index, so a
-	// freshly `workspace add`-ed path would otherwise be unselectable until
-	// its first real session lands. Synthesize an idle "新任务" entry.
-	if ps != nil {
-		now := time.Now().UnixMilli()
-		for _, ws := range ps.workspacesList() {
-			if ws == "" || seenWS[ws] {
-				continue
-			}
-			seenWS[ws] = true
-			items = append(items, taskIndexItem(zcode.Task{
-				WorkspaceKey:  ws,
-				WorkspacePath: ws,
-				TaskID:        "ws" + strings.NewReplacer("/", "-", ".", "-", " ", "-").Replace(ws),
-				Title:         "新任务",
-				Status:        "idle",
-				CreatedAt:     now,
-				UpdatedAt:     now,
-			}, live))
-		}
 	}
 	return map[string]any{
 		"topic":          "controller/tasks-index",
