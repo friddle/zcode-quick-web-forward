@@ -1,2 +1,0 @@
-[   11480ms] [WARNING] Tooltip is changing from controlled to uncontrolled. Components should not switch from controlled to uncontrolled (or vice versa). Decide between using a controlled or uncontrolled value for the lifetime of the component. @ https://zcode.z.ai/remote/v4/assets/toast-HRdaJheI.js:8
-[   14369ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ https://zcode.z.ai/remote/v4/material-icons/text.svg:0

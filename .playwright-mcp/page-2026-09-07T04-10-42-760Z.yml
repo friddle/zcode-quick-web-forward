@@ -1,8 +1,0 @@
-- generic [ref=f2e5]:
-  - heading "等待桌面端确认配对…" [level=1] [ref=f2e15]
-  - paragraph [ref=f2e9]: 手机端已就绪，等待桌面端会话匹配当前连接。
-  - generic [ref=f2e10]:
-    - generic [ref=f2e11]: 1. 连接中转服务
-    - generic [ref=f2e12]: 2. 设备鉴权
-    - generic [ref=f2e13]: 3. 等待桌面端配对
-    - generic [ref=f2e14]: 4. 同步工作区
