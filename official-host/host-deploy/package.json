@@ -1,3 +1,0 @@
-{"name":"zcode-official-host","private":true,"type":"module","dependencies":{
- "@larksuiteoapi/node-sdk":"^1","axios":"^1","node-forge":"^1","undici":"^6",
- "ws":"^8","yaml":"^2","yazl":"^2","math-intrinsics":"^1"}}
