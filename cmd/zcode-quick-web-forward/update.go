@@ -98,6 +98,25 @@ func selfAsset() string {
 	return fmt.Sprintf("zcode-quick-web-forward-%s-%s%s", goruntime.GOOS, goruntime.GOARCH, ext)
 }
 
+// isNewerVersion compares dotted numeric version strings (v-prefix tolerated).
+func isNewerVersion(candidate, current string) bool {
+	part := func(s string, i int) int {
+		fields := strings.Split(strings.TrimPrefix(s, "v"), ".")
+		if i >= len(fields) {
+			return 0
+		}
+		n := 0
+		fmt.Sscanf(fields[i], "%d", &n)
+		return n
+	}
+	for i := 0; i < 6; i++ {
+		if a, b := part(candidate, i), part(current, i); a != b {
+			return a > b
+		}
+	}
+	return false
+}
+
 // latestSelfVersion returns the newest release tag ("" when unknown).
 func latestSelfVersion() string {
 	client := &httpClientTimeout
@@ -145,6 +164,15 @@ func doUpdate(args []string) {
 	}
 
 	// ---- 2) this binary ----------------------------------------------------
+	latest := latestSelfVersion()
+	if latest != "" {
+		fmt.Printf("zcode: latest release %s (local %s)\n", latest, version)
+	}
+	force := hasFlag(args, "--force")
+	if !selfSkip && latest != "" && !isNewerVersion(latest, version) && !force {
+		fmt.Println("zcode: 本地版本不落后于 latest release,跳过自身更新 (--force 可强制)")
+		selfSkip = true
+	}
 	if !selfSkip {
 		cache, err := os.UserCacheDir()
 		if err == nil {
@@ -162,10 +190,6 @@ func doUpdate(args []string) {
 				staged = ""
 			}
 		}
-	}
-
-	if latest := latestSelfVersion(); latest != "" {
-		fmt.Printf("zcode: latest release %s (local %s)\n", latest, version)
 	}
 
 	if check {
