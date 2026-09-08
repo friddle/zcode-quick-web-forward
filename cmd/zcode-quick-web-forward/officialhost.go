@@ -131,11 +131,15 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	}
 
 	// init-local: the task-realtime bridge attaches its port first.
+	// IMPORTANT: never hand the host OUR deviceMid — its realtime bridge
+	// connects to the relay under that identity, the relay sees two desktop
+	// sessions with one mid and evicts them in turn, and the phone's
+	// connection drops every ~60s (every UI view resets). Use a distinct id.
 	h.ParentPort(map[string]any{
 		"type":                  "init-local",
 		"hostId":                "zqf-" + strings.ReplaceAll(hostname(), " ", "-"),
 		"deliveryKind":          "desktop_window",
-		"deviceMid":             mid,
+		"deviceMid":             "zqf-host-" + uuidNew(),
 		"agentSpawnFallbackCwd": workspace,
 	}, "taskport")
 	h.PortOpen("taskport")

@@ -113,6 +113,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			fmt.Printf("zcode: engine createSession failed (%v) — deferring session to first send\n", err)
 			draftID := "draft-" + uuidNew()
 			ps.setSession(draftID, ws)
+			ps.setModelConfig(provider, model, "")
 			ps.runtimeTask(draftID, ws, "新任务", true)
 			ack["result"] = map[string]any{"type": "createSession", "sessionId": draftID}
 			if in := req.Envelope.Payload.FirstInput.Text; in != "" {
