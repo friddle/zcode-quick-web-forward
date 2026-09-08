@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -217,6 +219,17 @@ func freePort() (string, error) {
 }
 
 func launchOnPort(chrome, port string) (*Browser, error) {
+	// If something already serves CDP on this port it is NOT ours — adopting
+	// it made every later CDP call target a foreign (or dead) browser. Skip
+	// to the next port instead.
+	if resp, err := http.Get("http://127.0.0.1:" + port + "/json/version"); err == nil {
+		resp.Body.Close()
+		return nil, fmt.Errorf("port %s already has a CDP endpoint (foreign browser)", port)
+	}
+	// Previous daemon runs can leave orphaned chromium instances holding the
+	// ports (their devtools bind failure then poisons every later launch).
+	killOrphanedChromium()
+
 	b := &Browser{
 		generation: time.Now().UnixMilli(),
 		id:         fmt.Sprintf("iab:%d", time.Now().UnixMilli()),
@@ -243,10 +256,15 @@ func launchOnPort(chrome, port string) (*Browser, error) {
 	}
 	b.cmd = cmd
 
-	// Wait for the CDP endpoint to accept requests.
+	// Wait for the CDP endpoint to accept requests, and make sure it is OUR
+	// process (a bind failure used to look like success by adopting whatever
+	// else answered).
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get("http://127.0.0.1:" + port + "/json")
+		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			return nil, fmt.Errorf("chromium exited before CDP was ready on port %s", port)
+		}
+		resp, err := http.Get("http://127.0.0.1:" + port + "/json/version")
 		if err == nil {
 			resp.Body.Close()
 			b.cdpPort = port
@@ -258,6 +276,40 @@ func launchOnPort(chrome, port string) (*Browser, error) {
 	}
 	_ = cmd.Process.Kill()
 	return nil, fmt.Errorf("chromium CDP port %s not ready", port)
+}
+
+// killOrphanedChromium reaps chromium processes left by earlier daemon runs
+// (temp profiles named zqf-chromium-*). Only our own orphaned instances are
+// matched, never user-facing browsers.
+func killOrphanedChromium() {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !isPID(e.Name()) {
+			continue
+		}
+		cmdline, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(cmdline), "zqf-chromium-") &&
+			strings.Contains(string(cmdline), "remote-debugging-port") {
+			if p, err := strconv.Atoi(e.Name()); err == nil {
+				_ = syscall.Kill(p, syscall.SIGKILL)
+			}
+		}
+	}
+}
+
+func isPID(name string) bool {
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return name != ""
 }
 
 // ID returns the browser instance id.
@@ -445,7 +497,12 @@ func (b *Browser) Execute(command map[string]any) map[string]any {
 	case "closeTab":
 		return map[string]any{"ok": true, "elapsedMs": elapsed()}
 	default:
-		// Unknown commands: return ok so the agent can continue.
+		// Full action dispatcher (navigate/back/snapshot/click/fill/press/
+		// playwright ...). A nil result means the method is unknown; still
+		// return ok so the agent can continue instead of stalling.
+		if res := b.executeAction(command); res != nil {
+			return res
+		}
 		return map[string]any{"ok": true, "elapsedMs": elapsed()}
 	}
 }
@@ -705,8 +762,15 @@ func (b *Browser) pageWS(id string) (string, error) {
 	return "", fmt.Errorf("no browser tab")
 }
 
+// cdpSeq generates CDP command ids. Chrome rejects ids outside the signed
+// 32-bit range ("Message must have integer 'id' property") and answers those
+// with an id-less error frame, so a time-based id silently deadlocks every
+// call into its read deadline.
+var cdpSeq atomic.Int64
+
 // cdpCall sends a CDP command over WebSocket and returns the result.
 func (b *Browser) cdpCall(wsURL, targetID, method string, params map[string]any) (map[string]any, error) {
+	cdpDebug := os.Getenv("ZQF_CDP_DEBUG") != ""
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		return nil, err
@@ -715,7 +779,10 @@ func (b *Browser) cdpCall(wsURL, targetID, method string, params map[string]any)
 	// Hard read deadline: the deadline loop below only runs after a message
 	// arrives, so without this a silent peer blocks us forever.
 	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	id := time.Now().UnixMilli()
+	id := cdpSeq.Add(1)
+	if cdpDebug {
+		fmt.Printf("cdpCall >> %s (ws=%s id=%d)\n", method, wsURL, id)
+	}
 	if err := conn.WriteJSON(map[string]any{
 		"id": id, "method": method, "params": params,
 	}); err != nil {
@@ -728,15 +795,24 @@ func (b *Browser) cdpCall(wsURL, targetID, method string, params map[string]any)
 		if err != nil {
 			return nil, err
 		}
+		if cdpDebug {
+			fmt.Printf("cdpCall << %.120s\n", msg)
+		}
 		var out struct {
 			ID     int64          `json:"id"`
 			Result map[string]any `json:"result"`
 			Error  *struct {
+				Code    int    `json:"code"`
 				Message string `json:"message"`
 			} `json:"error"`
 		}
 		if json.Unmarshal(msg, &out) != nil {
 			continue
+		}
+		if out.Error != nil && out.ID == 0 {
+			// Id-less protocol error (e.g. invalid id): fail fast instead of
+			// spinning to the deadline.
+			return nil, fmt.Errorf("cdp %s: %s", method, out.Error.Message)
 		}
 		if out.ID == id {
 			if out.Error != nil {
