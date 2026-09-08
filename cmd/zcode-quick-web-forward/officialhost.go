@@ -173,7 +173,10 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 // recover loop. Default OFF: the host runs and stays warm, the phone rides
 // the proven built-in pipeline. ZCODE_HOST_FORWARD=1 re-enables the pipe.
 func hostForwardEnabled() bool {
-	return os.Getenv("ZCODE_HOST_FORWARD") == "1"
+	// main is OFFICIAL-ONLY: the host->phone return pipe is on by default
+	// (it was env-gated off and every host response was dropped at the
+	// onPortBytes entry — the phone re-bootstrapped forever).
+	return os.Getenv("ZCODE_HOST_FORWARD") != "0"
 }
 
 // officialHostActive reports whether channel traffic should be forwarded to
