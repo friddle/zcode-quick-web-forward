@@ -317,14 +317,20 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			}
 		}
 		if p.Kind == "turn.terminal" && p.Session != "" {
-			// The turn is over: drop the synthetic live rows (the transcript
-			// snapshot below replaces them with the real rows).
+			// The turn is over: flush the last streamed content as complete
+			// rows, then drop the synthetic live rows (the transcript snapshot
+			// below replaces them with the real rows).
+			phoneSid := ps.phoneFor(p.Session)
 			ps.mu.Lock()
+			var deltas []any
+			if lt := ps.live[p.Session]; lt != nil {
+				deltas = lt.flushLiveTurn(ps.currentTurnIDLocked(phoneSid))
+			}
 			ps.endLiveTurn(p.Session)
 			ps.mu.Unlock()
+			pushLiveDeltas(engine, sender.send, ps, phoneSid, deltas)
 			// The engine session may be a rebuilt continuation of a phone task;
 			// update the phone-visible task and push under its id.
-			phoneSid := ps.phoneFor(p.Session)
 			go func(sid string) {
 				ws, title := taskMeta(ps, sid)
 				// Normalize the engine's terminal status to the display

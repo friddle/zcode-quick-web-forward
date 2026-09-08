@@ -81,10 +81,25 @@ func (p *phoneSessions) liveTurnFor(engSid, turnID string) *liveTurn {
 }
 
 // endLiveTurn drops live-turn state (called on turn.terminal; the post-turn
-// snapshot replaces the synthetic rows with the real transcript). Caller
-// holds ps.mu.
+// snapshot replaces the synthetic rows with the real transcript). Caller holds
+// ps.mu.
 func (p *phoneSessions) endLiveTurn(engSid string) {
 	delete(p.live, engSid)
+}
+
+// flushLiveTurn pushes any un-flushed streamed text/reasoning as "complete"
+// rows right before turn.terminal drops the state — otherwise the tail of the
+// stream (up to liveFlushInterval of content) is lost and the last blocks stay
+// in the animated streaming look. Caller holds ps.mu.
+func (lt *liveTurn) flushLiveTurn(rowTurn string) []any {
+	var deltas []any
+	if lt.textRowID != 0 && lt.textBuf != "" {
+		deltas = append(deltas, map[string]any{"op": "row.upserted", "row": liveCounterRow(lt.textRowID, rowTurn, "assistantText", lt.textBuf, "complete")})
+	}
+	if lt.reasonRowID != 0 && lt.reasonBuf != "" {
+		deltas = append(deltas, map[string]any{"op": "row.upserted", "row": liveCounterRow(lt.reasonRowID, rowTurn, "reasoning", lt.reasonBuf, "complete")})
+	}
+	return deltas
 }
 
 // liveToolRow renders a toolCall row in the exact shape the transcript mapper
@@ -115,10 +130,12 @@ func liveToolRow(rowID int, turnID, toolCallID, toolName, status, inputText stri
 	return row
 }
 
-// liveCounterRow renders a streaming reasoning/assistantText row. With real
-// content it carries the accumulated text; as a telemetry fallback it shows
-// the ticking counter.
-func liveCounterRow(rowID int, turnID, kind, text string) map[string]any {
+// liveCounterRow renders a reasoning/assistantText row. state "streaming"
+// makes the client show the animated 正在思考 label; "complete" makes it a
+// collapsible 思考 card with the text. Rows must flip to complete when their
+// assistant message ends, otherwise every sealed block stays a live
+// 正在思考 placeholder forever.
+func liveCounterRow(rowID int, turnID, kind, text, state string) map[string]any {
 	return map[string]any{
 		"rowId":               rowID,
 		"turnId":              turnID,
@@ -128,7 +145,7 @@ func liveCounterRow(rowID int, turnID, kind, text string) map[string]any {
 		"kind":                kind,
 		"assistantResponseId": turnID,
 		"text":                text,
-		"state":               "streaming",
+		"state":               state,
 	}
 }
 
@@ -323,7 +340,7 @@ func handleLiveChunkEvent(engine *relay.BridgeEngine, send func(v any), ps *phon
 		return
 	}
 	*lastAt = now
-	deltas := lt.liveTailOps(liveCounterRow(rowID, rowTurn, kind, text))
+	deltas := lt.liveTailOps(liveCounterRow(rowID, rowTurn, kind, text, "streaming"))
 	ps.mu.Unlock()
 
 	pushLiveDeltas(engine, send, ps, phoneSid, deltas)
@@ -357,9 +374,11 @@ func handleSessionEvent(engine *relay.BridgeEngine, send func(v any), ps *phoneS
 			var deltas []any
 			if kind == "text_delta" {
 				if lt.textMsgID != msgID {
-					// new assistant message: seal the previous text row
+					// new assistant message: seal the previous text row — must
+					// land as "complete" or the client keeps it as a live
+					// 正在思考/生成中 placeholder forever
 					if lt.textRowID != 0 && lt.textBuf != "" {
-						deltas = append(deltas, map[string]any{"op": "row.upserted", "row": liveCounterRow(lt.textRowID, rowTurn, "assistantText", lt.textBuf)})
+						deltas = append(deltas, map[string]any{"op": "row.upserted", "row": liveCounterRow(lt.textRowID, rowTurn, "assistantText", lt.textBuf, "complete")})
 					}
 					lt.textMsgID, lt.textBuf, lt.textRowID = msgID, "", liveRowID(ps)
 					lt.textReal = true
@@ -368,12 +387,12 @@ func handleSessionEvent(engine *relay.BridgeEngine, send func(v any), ps *phoneS
 				lt.textBuf += delta
 				if now-lt.textAt >= liveFlushInterval.Milliseconds() {
 					lt.textAt = now
-					deltas = append(deltas, lt.liveTailOps(liveCounterRow(lt.textRowID, rowTurn, "assistantText", lt.textBuf))...)
+					deltas = append(deltas, lt.liveTailOps(liveCounterRow(lt.textRowID, rowTurn, "assistantText", lt.textBuf, "streaming"))...)
 				}
 			} else {
 				if lt.reasonMsgID != msgID {
 					if lt.reasonRowID != 0 && lt.reasonBuf != "" {
-						deltas = append(deltas, map[string]any{"op": "row.upserted", "row": liveCounterRow(lt.reasonRowID, rowTurn, "reasoning", lt.reasonBuf)})
+						deltas = append(deltas, map[string]any{"op": "row.upserted", "row": liveCounterRow(lt.reasonRowID, rowTurn, "reasoning", lt.reasonBuf, "complete")})
 					}
 					lt.reasonMsgID, lt.reasonBuf, lt.reasonRowID = msgID, "", liveRowID(ps)
 					lt.reasonReal = true
@@ -382,7 +401,7 @@ func handleSessionEvent(engine *relay.BridgeEngine, send func(v any), ps *phoneS
 				lt.reasonBuf += delta
 				if now-lt.reasonAt >= liveFlushInterval.Milliseconds() {
 					lt.reasonAt = now
-					deltas = append(deltas, lt.liveTailOps(liveCounterRow(lt.reasonRowID, rowTurn, "reasoning", lt.reasonBuf))...)
+					deltas = append(deltas, lt.liveTailOps(liveCounterRow(lt.reasonRowID, rowTurn, "reasoning", lt.reasonBuf, "streaming"))...)
 				}
 			}
 			ps.mu.Unlock()
