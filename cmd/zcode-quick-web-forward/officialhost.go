@@ -145,12 +145,21 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	h.PortOpen("taskport")
 	// attach-service-port: the renderer-equivalent service port. Phone channel
 	// calls go in as raw channel bytes; responses come back the same way.
+	// The local scope MUST carry the workspacePath (matching the desktop
+	// main's schema {kind:"local",workspacePath,workspacePurpose}) — without
+	// it the host's resolveWorkspaceKey throws on the first workspace-scoped
+	// subscription (zcode-agent.onDynamicConversationFrame) and the
+	// uncaughtException kills the whole host.
 	h.ParentPort(map[string]any{
 		"type":         "attach-service-port",
 		"requestId":    uuidNew(),
 		"attachmentId": "zqf-svc",
 		"clientMode":   "desktop-continuous",
-		"scope":        map[string]any{"kind": "local"},
+		"scope": map[string]any{
+			"kind":             "local",
+			"workspacePath":    workspace,
+			"workspacePurpose": "project",
+		},
 	}, "svc")
 	h.PortOpen("svc")
 
