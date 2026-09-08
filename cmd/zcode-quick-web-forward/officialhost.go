@@ -141,6 +141,9 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 		"deliveryKind":          "desktop_window",
 		"deviceMid":             "zqf-host-" + uuidNew(),
 		"agentSpawnFallbackCwd": workspace,
+		// seed the host's workspace registry — without it
+		// resolveWorkspaceKey throws on the first workspace-scoped subscribe
+		"workspacePath": workspace,
 	}, "taskport")
 	h.PortOpen("taskport")
 	// attach-service-port: the renderer-equivalent service port. Phone channel
