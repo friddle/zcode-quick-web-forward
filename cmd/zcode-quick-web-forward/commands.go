@@ -111,7 +111,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 			// engine session materializes from the first sendText (rebuild
 			// path) or the serial-queue dispatch.
 			fmt.Printf("zcode: engine createSession failed (%v) — deferring session to first send\n", err)
-			draftID := "draft-" + uuidNew()
+			draftID := ps.stableDraft(ws)
 			ps.setSession(draftID, ws)
 			ps.setModelConfig(provider, model, "")
 			ps.runtimeTask(draftID, ws, "新任务", true)
@@ -302,6 +302,7 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 				ack["status"] = "failed"
 				ack["message"] = "无法恢复该历史任务的会话"
 			} else {
+				ps.clearStableDraftByID(sid)
 				if !engClient.SendMessage(engineSid, text) {
 					ack["status"] = "failed"
 					ack["message"] = "engine stdin closed"

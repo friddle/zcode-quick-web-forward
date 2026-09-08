@@ -43,6 +43,9 @@ type phoneSessions struct {
 	// Multiple phone tasks can run turns concurrently; a send that targets a
 	// *different* session must not be queued behind it.
 	runningSids map[string]bool
+	// stableDrafts holds one reusable synthetic draft id per workspace for
+	// createSession requests the engine can't serve while busy.
+	stableDrafts map[string]string
 	// pendingQueue holds sendText submissions that arrived while a turn was
 	// still running. The phone renders them as queued bubbles (projection
 	// queue.items); they drain FIFO on turn.terminal.
@@ -367,6 +370,36 @@ func (p *phoneSessions) turnRunningFor(sid string) bool {
 // clearAllTurnRunning resets every in-flight turn flag. Called when the
 // engine process exits: its turns will never emit turn.terminal, so the
 // flags must not linger (they would ghost-block queueing logic).
+// stableDraft returns a reusable synthetic draft id for a workspace while
+// the engine is too busy to create real sessions. The client re-fires bare
+// createSessions on every sync — returning a NEW id each time remounts the
+// composer and wipes whatever the user typed mid-sentence.
+func (p *phoneSessions) stableDraft(ws string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stableDrafts == nil {
+		p.stableDrafts = map[string]string{}
+	}
+	id := p.stableDrafts[ws]
+	if id == "" {
+		id = "draft-" + uuidNew()
+		p.stableDrafts[ws] = id
+	}
+	return id
+}
+
+// clearStableDraftByID drops the reusable draft once it has been sent (the
+// session becomes a real task) so a later busy period mints a fresh one.
+func (p *phoneSessions) clearStableDraftByID(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for ws, draft := range p.stableDrafts {
+		if draft == id {
+			delete(p.stableDrafts, ws)
+		}
+	}
+}
+
 func (p *phoneSessions) clearAllTurnRunning() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
