@@ -1,28 +1,21 @@
-// Engine + relay bring-up for `remote`: single-instance flock, runtime/
-// node/browser/terminal services, engine (re)start supervision, the
-// persistent `workspace` subcommand and relay origin probing.
+// Relay bring-up for `remote`: single-instance flock, runtime/node services,
+// the official host lifecycle, the persistent `workspace` subcommand and
+// relay origin probing.
 
 package main
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
-	"github.com/friddle/zcode-quick-web-forward/internal/terminal"
 	"github.com/friddle/zcode-quick-web-forward/internal/zcode"
 )
 
@@ -85,128 +78,29 @@ func doRemoteOpts(o commonOpts) {
 	}
 	fmt.Printf("zcode: relay origin %s 可达 (region=%s)\n", origin, region)
 
+	// OFFICIAL-ONLY: the desktop app's official host (out/host under Node via
+	// official-host/shim.mjs) is the ONLY channel implementation. It spawns the
+	// engine itself (ZCODE_AGENT_SERVER_COMMAND) and answers every phone
+	// channel; this process is a pure relay<->host pipe plus the pairing
+	// state machine (workspace list, bridge-open, tasks index). The hand
+	// written channel layer lives on the with_self_implement branch.
 	engine := relay.NewBridgeEngine()
-	engClient := enginepkg.New()
 	sender := &relaySender{}
-
 	ps := &phoneSessions{workspaces: workspaces}
-	br := launchBrowser()
-	termSvc := terminal.New()
-	termSvc.SetCallbacks(
-		func(listenID int, data string) {
-			engine.SendChannelEventString(listenID, data, sender.send)
-		},
-		func(listenID, code int) {
-			engine.SendChannelEventInt(listenID, code, sender.send)
-		},
-	)
-	engClient.OnEvent = func(m json.RawMessage) {
-		handleEngineEvent(engClient, engine, sender, ps, m, br)
+
+	cache, _ := os.UserCacheDir()
+	mid := loadOrCreateDeviceMid(filepath.Join(cache, "zcode-quick-web-forward"))
+	defWS := ""
+	if len(workspaces) > 0 {
+		defWS = workspaces[0]
 	}
-
-	var engMu sync.Mutex
-	var engCmd *exec.Cmd
-	var engGen, shuttingDown int32
-	engineExited := make(chan error, 1)
-
-	startEngine := func() {
-		gen := atomic.AddInt32(&engGen, 1)
-		engMu.Lock()
-		if engCmd != nil && engCmd.Process != nil {
-			_ = engCmd.Process.Kill()
-			_, _ = engCmd.Process.Wait()
-		}
-		engMu.Unlock()
-
-		cmd := exec.Command(node, scriptPath(rt), "app-server")
-		cmd.Dir = dirOf(scriptPath(rt))
-		cmd.Stderr = os.Stderr
-		// Let the engine discover the browser-use plugin and Playwright
-		// chromium (headless browser capability).
-		cmd.Env = append(os.Environ(),
-			"ZCODE_PLUGIN_ROOT="+filepath.Join(filepath.Dir(scriptPath(rt)), "packages", "browser-use-plugin"),
-			"PLAYWRIGHT_BROWSERS_PATH="+defaultPlaywrightPath(),
-		)
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			fatal("engine stdin: %v", err)
-		}
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			fatal("engine stdout: %v", err)
-		}
-		if err := cmd.Start(); err != nil {
-			fatal("engine start: %v", err)
-		}
-		engMu.Lock()
-		engCmd = cmd
-		engMu.Unlock()
-		engine.Attach(stdin)
-		engClient.Attach(stdin)
-		fmt.Println("zcode: engine (re)started for bridge")
-		go func() {
-			sc := bufio.NewScanner(stdout)
-			sc.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024)
-			for sc.Scan() {
-				line := sc.Bytes()
-				if len(line) == 0 {
-					continue
-				}
-				fmt.Printf("zcode << %s\n", line)
-				engClient.HandleLine(line)
-				engine.ServerLine(line, sender.send)
-			}
-			werr := cmd.Wait()
-			if atomic.LoadInt32(&engGen) == gen {
-				engineExited <- werr
-			}
-			// The dead engine's in-flight turns never emit turn.terminal;
-			// lingering running flags would ghost-block queue dispatch.
-			ps.clearAllTurnRunning()
-			// A fresh engine can pick up globally queued tasks again.
-			go func() {
-				time.Sleep(3 * time.Second)
-				dispatchGlobalQueue(engClient, engine, sender.send, ps)
-			}()
-		}()
+	if !maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid) {
+		fatal("official host 启动失败 (~/.zcode/host-official 缺失或未就绪)。" +
+			"本版本只保留官方实现; 手写通信层在 with_self_implement 分支 (ZCODE_OFFICIAL_HOST=0)。")
 	}
-	// Official-host mode is the DEFAULT: the host runs alongside and serves
-	// the channels the built-in handlers don't implement (file transfers,
-	// uploads, terminal IO, automations, cua…). Opt out with
-	// ZCODE_OFFICIAL_HOST=0. OUR engine still runs either way — the built-in
-	// handlers answer the engine/task channels against it (the host's own
-	// engine path crashes without the desktop's workspace registry).
-	restartEngineFn := startEngine
-	if os.Getenv("ZCODE_OFFICIAL_HOST") != "0" {
-		cache, _ := os.UserCacheDir()
-		mid := loadOrCreateDeviceMid(filepath.Join(cache, "zcode-quick-web-forward"))
-		defWS := ""
-		if len(workspaces) > 0 {
-			defWS = workspaces[0]
-		}
-		maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid)
-		if officialHostActive() {
-			// The engine must NOT restart on workspace bridge-opens here:
-			// every "+" the phone taps fires one, and the 2s engine respawn
-			// window swallows the draft's createSession ("stdin closed"),
-			// which degrades the bridge and bounces the phone to the
-			// pairing screen. The engine persists across workspaces —
-			// workspacePath rides per session.
-			restartEngineFn = func() {}
-		}
-	}
-	startEngine()
+	restartEngineFn := func() {}
 
-	go func() {
-		if err := <-engineExited; err != nil && atomic.LoadInt32(&shuttingDown) == 0 {
-			fmt.Fprintf(os.Stderr, "\nzcode: ERROR: ZCode engine exited: %v\n", err)
-			fmt.Fprintf(os.Stderr, "zcode: 常见原因: node 版本过低 (需要 >= 22.5, 支持 node:sqlite)。\n")
-			fmt.Fprintf(os.Stderr, "zcode: 可用 --node / ZCODE_NODE 指定 node。\n")
-			os.Exit(1)
-		}
-	}()
-
-	go startWebRemote(origin, region, engine, sender, restartEngineFn, workspaces, ps, engClient, termSvc)
+	go startWebRemote(origin, region, engine, sender, restartEngineFn, workspaces, ps)
 	go watchStoredWorkspaces(o, ps, func(ws []string) {
 		sender.send(workspaceListPush(ws, ps))
 	})
@@ -214,17 +108,7 @@ func doRemoteOpts(o commonOpts) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
-	atomic.StoreInt32(&shuttingDown, 1)
-	// Tear down the engine (node app-server) and the browser host so a stopped
-	// daemon doesn't leave orphan children behind.
-	engMu.Lock()
-	if engCmd != nil && engCmd.Process != nil {
-		_ = engCmd.Process.Kill()
-	}
-	engMu.Unlock()
-	if br != nil {
-		br.Close()
-	}
+	officialStopHost()
 }
 
 // doWorkspace manages the persistent extra-workspace list.

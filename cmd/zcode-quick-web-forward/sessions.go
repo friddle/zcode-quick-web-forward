@@ -97,10 +97,6 @@ type phoneSessions struct {
 	// the conversation subscription id made the client route index frames into
 	// the conversation stream (or drop them), leaving @ 会话 mentions empty.
 	indexSubID string
-	// live tracks the synthetic live-streaming rows (tool cards, 思考中/生成中
-	// counters) per engine session, keyed by engine session id. Guarded by mu;
-	// see streaming.go.
-	live map[string]*liveTurn
 	// convoSeq is the conversation projection's transcript seq ledger. The
 	// client drops a deltas frame unless fromSeq equals its current seq and
 	// toSeq is newer (otherwise it either silently drops the frame or flags a
@@ -484,7 +480,7 @@ func (p *phoneSessions) beginTurn(phoneSid string) string {
 		p.turnSeqs = map[string]int{}
 	}
 	p.turnSeqs[phoneSid]++
-	id := fmt.Sprintf("turn-%s-%d", shortSessionID(phoneSid), p.turnSeqs[phoneSid])
+	id := fmt.Sprintf("turn-%s-%d", phoneSid[:8], p.turnSeqs[phoneSid])
 	if p.curTurn == nil {
 		p.curTurn = map[string]string{}
 	}

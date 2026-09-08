@@ -15,9 +15,7 @@ import (
 	"sync"
 	"time"
 
-	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
-	"github.com/friddle/zcode-quick-web-forward/internal/terminal"
 	"github.com/friddle/zcode-quick-web-forward/internal/zcode"
 )
 
@@ -42,7 +40,7 @@ func (s *relaySender) send(v any) {
 	}
 }
 
-func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *relaySender, restartEngine func(), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) {
+func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *relaySender, restartEngine func(), workspaces []string, ps *phoneSessions) {
 	cache, err := os.UserCacheDir()
 	if err == nil {
 		cache = filepath.Join(cache, "zcode-quick-web-forward")
@@ -82,41 +80,17 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			// Division of labor in official-host mode: the FULL built-in
-			// pipeline (answer from real state + engine forwarding — our
-			// engine owns every live session) serves all core channels.
-			// Only channels the built-in has no implementation for forward
-			// to the official host, which serves them from its own service
-			// registry (file transfer, uploads, automations, plugins…).
-			// Routing zcode-session/zcode-agent calls to the host hangs the
-			// phone forever: those sessions live in OUR engine.
-			hostPrimary := map[string]bool{
-				"file": true, "prompt-attachment-transfer": true, "file-watcher": true,
-				"off-peak-task": true, "cua-permission": true, "cua-pip-session": true,
-				"plugin-management": true, "plugins": true, "plugin-sync": true,
-				"mcp-sync": true, "skills": true, "skill-sync": true,
-				"hooks": true, "memory": true, "feedback": true,
-				"client-scenes": true, "bots": true, "git-checkpoint": true,
-				"output-style": true, "repo-wiki": true,
-			}
+			// OFFICIAL-ONLY: every phone channel call and raw frame goes to
+			// the official host's service port — the host (and the engine it
+			// spawns) is the sole implementation. This process is a pipe.
 			onCall := func(c *relay.ChannelCall) {
-				if officialHostActive() && hostPrimary[c.ChannelName] {
-					fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
-					forwardCallToOfficialHost(c)
-					return
-				}
-				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
+				fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
+				forwardCallToOfficialHost(c)
 			}
 			onRaw := func(raw []byte) {
-				if officialHostActive() {
-					fmt.Printf("zcode: official-host phone -> svc raw %d bytes\n", len(raw))
-					if forwardRawToOfficialHost(raw) {
-						return
-					}
-				}
-				engine.WriteSink(raw)
+				forwardRawToOfficialHost(raw)
 			}
-			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, engClient, termSvc, onCall, onRaw)
+			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, onCall, onRaw)
 		},
 	})
 }
@@ -156,7 +130,7 @@ func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
 	}
 }
 
-func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service, onCall func(*relay.ChannelCall), onRaw func([]byte)) {
+func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, onCall func(*relay.ChannelCall), onRaw func([]byte)) {
 	var p struct {
 		ZcodeType string `json:"zcode_type"`
 		RequestID string `json:"requestId"`
@@ -165,9 +139,6 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		return
 	}
 	if p.ZcodeType == "rpc-frame" || p.ZcodeType == "rpc-frame-ack" {
-		if onCall == nil {
-			onCall = handleChannelCall(engine, reply, workspaces, ps, engClient, termSvc)
-		}
 		engine.HandlePhonePayload(payload, reply, onCall, onRaw)
 		return
 	}
@@ -266,11 +237,6 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 				"activeWorkspaceKey": active,
 			},
 		})
-		go func() {
-			time.Sleep(1200 * time.Millisecond)
-			engine.SendChannelInitialize(replyFrames)
-			fmt.Println("zcode: channel initialize sent")
-		}()
 	case "workspace-reconnect-request":
 		reply(map[string]any{
 			"zcode_type": "workspace-reconnect-response", "requestId": p.RequestID, "success": true,
