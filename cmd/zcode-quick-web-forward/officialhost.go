@@ -34,6 +34,12 @@ type officialHostBridge struct {
 	// answered records promise-call ids the host replied to, so the bridge
 	// can fall back to the built-in handlers for calls the host ignores.
 	answered map[int]bool
+	// svcPort is the CURRENT emulated service-port id. Each phone bridge-open
+	// re-attaches with a FRESH attachmentId — the host rejects (or ignores)
+	// a re-attach of an already-seen/disposed id, which silently killed the
+	// pipe on the second pairing (page reload = stuck at Paired. Loading…).
+	svcPort   string
+	attachSeq int
 }
 
 type officialHostState struct {
@@ -214,7 +220,13 @@ func forwardRawToOfficialHost(raw []byte) bool {
 	if b == nil || !b.h.Alive() {
 		return false
 	}
-	b.h.RawPortData("svc", raw)
+	b.mu.Lock()
+	port := b.svcPort
+	if port == "" {
+		port = "svc"
+	}
+	b.mu.Unlock()
+	b.h.RawPortData(port, raw)
 	return true
 }
 
@@ -252,8 +264,17 @@ func leb128(b []byte, off int) (int, int, bool) {
 // responses AND the host's channel initialize; the phone's channel stack
 // speaks the same protocol, so the bridge stays a pure pipe.
 func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
-	if portID != "svc" || len(raw) == 0 {
+	if len(raw) == 0 {
 		return
+	}
+	b.mu.Lock()
+	want := b.svcPort
+	if want == "" {
+		want = "svc"
+	}
+	b.mu.Unlock()
+	if portID != want {
+		return // stale port from a previous bridge generation
 	}
 	fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
 	if !hostForwardEnabled() {
@@ -293,6 +314,32 @@ func senderSend() func(any) {
 			s.send(v)
 		}
 	}
+}
+
+// officialReattach attaches a FRESH service port on the live host. Called on
+// every workspace-bridge-open; a repeated attach with the same attachmentId
+// does not survive the host's dispose of the previous bridge generation.
+func officialReattach() {
+	officialState.mu.Lock()
+	b := officialState.active
+	officialState.mu.Unlock()
+	if b == nil || !b.h.Alive() {
+		return
+	}
+	b.mu.Lock()
+	b.attachSeq++
+	id := fmt.Sprintf("zqf-svc-%d", b.attachSeq)
+	b.svcPort = id
+	b.mu.Unlock()
+	b.h.ParentPort(map[string]any{
+		"type":         "attach-service-port",
+		"requestId":    uuidNew(),
+		"attachmentId": id,
+		"clientMode":   "desktop-continuous",
+		"scope":        map[string]any{"kind": "local"},
+	}, id)
+	b.h.PortOpen(id)
+	fmt.Printf("zcode: official-host reattached service port %s\n", id)
 }
 
 // officialCallAnswered reports whether the host replied to a promise call.

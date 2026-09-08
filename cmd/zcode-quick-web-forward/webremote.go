@@ -194,6 +194,9 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		// The host sent its channel initialize before the phone's bridge
 		// existed — flush it now, or the phone's channel stack never
 		// initializes and it can't issue a single call (sync spinner forever).
+		// Re-attach first: a repeated bridge-open on the same host needs a
+		// fresh service port (see officialReattach).
+		officialReattach()
 		officialFlushOut()
 		ps.mu.Lock()
 		prevWS := ps.workspacePath
