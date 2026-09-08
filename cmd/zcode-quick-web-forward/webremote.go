@@ -237,6 +237,16 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 				"activeWorkspaceKey": active,
 			},
 		})
+		// The phone's channel client cannot issue a single call until it
+		// receives this bridge→client initialize handshake (removed once and
+		// the phone hung at 已配对，正在加载工作区 with zero calls). The host's
+		// own initialize reaches the phone through the pendingOut flush —
+		// both directions are needed.
+		go func() {
+			time.Sleep(1200 * time.Millisecond)
+			engine.SendChannelInitialize(replyFrames)
+			fmt.Println("zcode: channel initialize sent")
+		}()
 	case "workspace-reconnect-request":
 		reply(map[string]any{
 			"zcode_type": "workspace-reconnect-response", "requestId": p.RequestID, "success": true,
