@@ -89,33 +89,32 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			// fallback when the official host is off.
 			// Engine/task channels must be answered by the host ONLY — a
 			// built-in fallback would run them against a second engine.
-			hostOnlyChannel := map[string]bool{
+			// Division of labor in official-host mode: engine/task channels
+			// are served by the HOST (it spawns and owns the engine — the
+			// desktop's real path), desktop-owned services by the built-in
+			// handlers (proven to satisfy the phone's boot), and anything the
+			// built-in doesn't implement (file, terminal, uploads,
+			// automations…) forwards to the host natively.
+			hostPrimary := map[string]bool{
 				"zcode-agent": true, "zcode-task": true, "zcode-session": true, "off-peak-task": true,
 			}
 			onCall := func(c *relay.ChannelCall) {
 				if officialHostActive() {
-					fmt.Printf("zcode: official-host phone -> svc call id=%d %s.%s\n", c.ID, c.ChannelName, c.Name)
+					fmt.Printf("zcode: official-host call id=%d %s.%s\n", c.ID, c.ChannelName, c.Name)
 					if c.Kind == 102 || c.Kind == 103 {
-						// The host subscribes listeners but never promises
-						// them; the built-in handler records + acks locally
-						// while the subscription still reaches the host.
+						// record listeners for our own pushes AND let the
+						// host push its events on the same subscriptions
 						handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
 						forwardCallToOfficialHost(c)
 						return
 					}
-					if c.Kind == 100 && c.ID != 0 && !hostOnlyChannel[c.ChannelName] {
-						// Desktop-owned service: if the host stays silent the
-						// built-in handler answers from real state, so the
-						// phone's boot never stalls on one missing reply.
-						go func(c *relay.ChannelCall) {
-							time.Sleep(400 * time.Millisecond)
-							if !officialCallAnswered(c.ID) {
-								fmt.Printf("zcode: official-host fallback answering id=%d %s.%s\n", c.ID, c.ChannelName, c.Name)
-								handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
-							}
-						}(c)
+					if hostPrimary[c.ChannelName] {
+						forwardCallToOfficialHost(c)
+						return
 					}
-					forwardCallToOfficialHost(c)
+					if !answerDesktopChannel(engine, c, reply, ps.workspacesList(), ps, engClient, termSvc) {
+						forwardCallToOfficialHost(c)
+					}
 					return
 				}
 				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
@@ -185,6 +184,13 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		return
 	}
 	if p.RequestID == "" {
+		// The phone streams its own view of the connection here —
+		// mobile-diagnostic carries state transitions, degradation and close
+		// reasons. Log instead of silently dropping; it's the only window
+		// into WHY the frontend retries bootstrap/bridge-open.
+		if p.ZcodeType == "mobile-diagnostic" {
+			fmt.Printf("zcode: mobile-diagnostic %s\n", string(payload))
+		}
 		return
 	}
 	wsList := workspaceListPayload(workspaces)
