@@ -100,8 +100,9 @@ func doRemoteOpts(o commonOpts) {
 	}
 	// The official host has no browser service on a headless box; the engine's
 	// browser-use plugin then falls back to probing local CDP on 9333. Park a
-	// healthy headless chromium there (supervised) so that fallback works.
-	go keepBrowserAlive("9333")
+	// healthy browser there (supervised) so that fallback works.
+	parkDone := make(chan struct{})
+	go keepBrowserAlive("9333", parkDone)
 	restartEngineFn := func() {}
 
 	go startWebRemote(origin, region, engine, sender, restartEngineFn, workspaces, ps)
@@ -112,6 +113,7 @@ func doRemoteOpts(o commonOpts) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
+	close(parkDone) // takes the parked browser (and its port) down with us
 	officialStopHost()
 }
 

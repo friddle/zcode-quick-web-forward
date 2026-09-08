@@ -169,7 +169,7 @@ func launchDockerOnPort(image, uiPort string) (*Browser, error) {
 	// 9223, which is exactly what it exists for.
 	run := exec.Command("docker", "run", "-d", "--name", name,
 		"--shm-size=1g",
-		"-p", uiPort+":9223",
+		"-p", "127.0.0.1:"+uiPort+":9223",
 		image)
 	if out, err := run.Output(); err != nil {
 		return nil, fmt.Errorf("docker run %s: %v: %s", image, err, out)

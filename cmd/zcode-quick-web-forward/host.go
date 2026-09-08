@@ -54,22 +54,52 @@ func launchBrowser() *browser.Browser {
 	return b
 }
 
-// keepBrowserAlive parks a headless chromium on the given CDP port (9333 —
-// the desktop in-app browser's default) for the lifetime of the daemon. The
-// engine's browser-use plugin probes that endpoint directly when no host
-// browser service exists, so a healthy browser there IS the browser backend.
-// Crashes are restarted after a short pause; giving up entirely when no
-// chromium is available keeps a broken box from spinning.
-func keepBrowserAlive(port string) {
+// keepBrowserAlive parks a browser on CDP port 9333 (the desktop in-app
+// browser's default) for the lifetime of the daemon, so the engine's
+// browser-use fallback always finds a healthy endpoint there. Two backends:
+// ZCODE_BROWSER_DOCKER_IMAGE runs the chrome-driverless container with a
+// standard-CDP façade on 9333 (Chromium inside the container only binds
+// container-localhost, so the raw port is unreachable); otherwise a local
+// Playwright chromium is launched pinned to the port. Crashes restart after
+// a short pause; giving up entirely when no backend exists keeps a broken
+// box from spinning.
+func keepBrowserAlive(port string, done <-chan struct{}) {
 	failures := 0
 	for {
-		if image := os.Getenv("ZCODE_BROWSER_DOCKER_IMAGE"); image != "" || browser.FindChromium() == "" {
-			b := launchBrowser()
-			if b == nil {
+		image := os.Getenv("ZCODE_BROWSER_DOCKER_IMAGE")
+		if image == "" && browser.FindChromium() == "" {
+			image = browser.DefaultDockerImage
+		}
+		if image != "" {
+			b, err := browser.LaunchDocker(image)
+			if err != nil {
+				failures++
+				fmt.Printf("zcode: docker browser launch failed: %v\n", err)
+				if failures >= 3 {
+					fmt.Printf("zcode: docker browser giving up after %d failures\n", failures)
+					return
+				}
+				if !sleepUntil(done, time.Duration(failures)*3*time.Second) {
+					return
+				}
+				continue
+			}
+			failures = 0
+			fmt.Printf("zcode: browser parked via docker %s (%s), CDP facade on %s\n", image, b.ID(), port)
+			errCh := make(chan error, 1)
+			go func() { errCh <- b.ServeCDP(port) }()
+			exit := make(chan struct{})
+			go func() { b.Wait(); close(exit) }()
+			select {
+			case <-exit:
+			case <-errCh:
+				fmt.Printf("zcode: CDP facade on %s failed; browser unreachable for the engine\n", port)
+			case <-done:
+				b.Close()
 				return
 			}
-			b.Wait()
 			b.Close()
+			fmt.Printf("zcode: docker browser exited; restarting\n")
 		} else {
 			b, err := browser.LaunchPinned(port)
 			if err != nil {
@@ -79,16 +109,37 @@ func keepBrowserAlive(port string) {
 					fmt.Printf("zcode: browser park giving up after %d failures\n", failures)
 					return
 				}
-				time.Sleep(time.Duration(failures) * 3 * time.Second)
+				if !sleepUntil(done, time.Duration(failures)*3*time.Second) {
+					return
+				}
 				continue
 			}
 			failures = 0
 			fmt.Printf("zcode: browser parked on CDP %s (%s)\n", port, b.ID())
-			b.Wait()
+			exit := make(chan struct{})
+			go func() { b.Wait(); close(exit) }()
+			select {
+			case <-exit:
+			case <-done:
+				b.Close()
+				return
+			}
 			b.Close()
 			fmt.Printf("zcode: browser parked on %s exited; restarting\n", port)
 		}
-		time.Sleep(2 * time.Second)
+		if !sleepUntil(done, 2*time.Second) {
+			return
+		}
+	}
+}
+
+// sleepUntil waits for d or until done closes; false means done.
+func sleepUntil(done <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-done:
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 
