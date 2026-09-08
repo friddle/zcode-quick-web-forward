@@ -32,6 +32,14 @@ func sessionsIndexFrame(ps *phoneSessions) map[string]any {
 		inWorkspace = all // workspace unknown — expose everything rather than nothing
 	}
 	tasks := inWorkspace
+	// Cap the index: 100+ sessions pushed as one snapshot produce a >48KiB
+	// fragmented rpc-frame, and the frontend chokes on reassembly — the
+	// connection drops and re-pairs in a tight loop. The landing shows the
+	// most recent tasks anyway (ListTasks is newest-first).
+	const maxIndexSessions = 30
+	if len(tasks) > maxIndexSessions {
+		tasks = tasks[:maxIndexSessions]
+	}
 	sessions := make([]any, 0, len(tasks))
 	seen := map[string]bool{}
 	for _, t := range tasks {
@@ -57,7 +65,9 @@ func sessionsIndexFrame(ps *phoneSessions) map[string]any {
 		for _, rt := range ps.runtimeTaskList() {
 			m, _ := rt.(map[string]any)
 			sid, _ := m["taskId"].(string)
-			if sid == "" || seen[sid] {
+			if sid == "" || seen[sid] || strings.HasPrefix(sid, "draft-") {
+				// synthetic drafts ("draft-*") never live in the engine and
+				// their id shape breaks the client's session schema
 				continue
 			}
 			seen[sid] = true
@@ -163,6 +173,11 @@ func taskIndexItem(t zcode.Task, extraLive map[string]bool) map[string]any {
 // wireVersion wrapper — unlike conversation/sessions-index frames).
 func tasksIndexFrame(ps *phoneSessions) map[string]any {
 	tasks, _ := zcode.ListTasks("", "")
+	// Cap at the most recent 30: with ~100 tasks the frame crossed 48KiB and
+	// the fragmented rpc-frame made the frontend choke (reconnect loop).
+	if len(tasks) > 30 {
+		tasks = tasks[:30]
+	}
 	live := map[string]bool{}
 	if ps != nil {
 		live = ps.liveTaskIDs()
