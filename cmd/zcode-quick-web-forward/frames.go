@@ -421,6 +421,8 @@ func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub,
 	if title != "" {
 		titleSource = "generated"
 	}
+	// The composer's "/" palette lists the session's slash commands from this
+	// snapshot field; without it the palette renders "没有匹配的命令".
 	snapshot := map[string]any{
 		"protocolVersion": 1,
 		"sessionId":       sessionID,
@@ -428,6 +430,12 @@ func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub,
 		"seq":             snapSeq,
 		"revision":        0,
 		"control":         control,
+		"slashCommands": []any{
+			map[string]any{"name": "compact", "description": "压缩当前会话上下文", "inputHint": "[instructions]", "source": "builtin"},
+			map[string]any{"name": "plan", "description": "切换到 Plan 模式并可选下发任务", "inputHint": "[task]", "source": "builtin"},
+			map[string]any{"name": "goal", "description": "查看或设置当前会话目标", "inputHint": "[pause|resume|clear|replace <objective>|<objective>]", "source": "builtin"},
+			map[string]any{"name": "init", "description": "创建或更新工作区 AGENTS.md", "inputHint": "[notes]", "source": "builtin"},
+		},
 		"availability": map[string]any{
 			"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
 			"switchModelConfig": map[string]any{"allowed": true}, "setFollowupMode": map[string]any{"allowed": true},
