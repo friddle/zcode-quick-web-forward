@@ -4,3 +4,9 @@ zqwf-new
 /tmp/
 zcode-quick-web-forward
 official-host/host-deploy/
+zqf
+zcode-tasks.db
+r.log
+r.log.pid
+live-ok.txt
+zcode-quick-web-forward.git/
