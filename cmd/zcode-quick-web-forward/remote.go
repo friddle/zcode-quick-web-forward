@@ -98,6 +98,10 @@ func doRemoteOpts(o commonOpts) {
 		fatal("official host 启动失败 (~/.zcode/host-official 缺失或未就绪)。" +
 			"本版本只保留官方实现; 手写通信层在 with_self_implement 分支 (ZCODE_OFFICIAL_HOST=0)。")
 	}
+	// The official host has no browser service on a headless box; the engine's
+	// browser-use plugin then falls back to probing local CDP on 9333. Park a
+	// healthy headless chromium there (supervised) so that fallback works.
+	go keepBrowserAlive("9333")
 	restartEngineFn := func() {}
 
 	go startWebRemote(origin, region, engine, sender, restartEngineFn, workspaces, ps)

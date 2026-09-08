@@ -95,21 +95,49 @@ func FindChromium() string {
 
 // Launch starts headless chromium with CDP on an auto port.
 func Launch() (*Browser, error) {
-	chrome := FindChromium()
-	if chrome == "" {
-		return nil, fmt.Errorf("no Playwright chromium found; install playwright browsers")
-	}
 	// Try a range of CDP ports so a busy/conflicting port doesn't kill the
 	// browser host (the box may already run other chromium instances).
 	var b *Browser
 	var lastErr error
 	for _, port := range []string{"9333", "9334", "9335", "9336", "9337"} {
-		b, lastErr = launchOnPort(chrome, port)
+		b, lastErr = launchOnPort(chromiumPath(), port)
 		if b != nil {
 			return b, nil
 		}
 	}
 	return nil, fmt.Errorf("chromium CDP not ready on any port: %w", lastErr)
+}
+
+// LaunchPinned starts headless chromium with CDP on exactly the given port.
+// The engine's browser-use plugin probes 127.0.0.1:9333 (the desktop IAB's
+// default) when no host browser service exists, so the parked browser must
+// not drift to a neighbor port.
+func LaunchPinned(port string) (*Browser, error) {
+	return launchOnPort(chromiumPath(), port)
+}
+
+func chromiumPath() string {
+	chrome := FindChromium()
+	if chrome == "" {
+		return ""
+	}
+	return chrome
+}
+
+// Wait blocks until the browser process exits (local launches). In docker
+// mode it polls the container; it returns when the container is gone.
+func (b *Browser) Wait() {
+	if b.dockerName != "" {
+		for {
+			if err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", b.dockerName).Run(); err != nil {
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+	if b.cmd != nil {
+		_ = b.cmd.Wait()
+	}
 }
 
 // LaunchDocker starts the chrome-driverless container and attaches to its CDP

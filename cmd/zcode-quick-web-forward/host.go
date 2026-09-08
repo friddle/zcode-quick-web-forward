@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/browser"
 	"github.com/friddle/zcode-quick-web-forward/internal/runtime"
@@ -51,6 +52,44 @@ func launchBrowser() *browser.Browser {
 	}
 	fmt.Printf("zcode: browser host ready (%s)\n", b.ID())
 	return b
+}
+
+// keepBrowserAlive parks a headless chromium on the given CDP port (9333 —
+// the desktop in-app browser's default) for the lifetime of the daemon. The
+// engine's browser-use plugin probes that endpoint directly when no host
+// browser service exists, so a healthy browser there IS the browser backend.
+// Crashes are restarted after a short pause; giving up entirely when no
+// chromium is available keeps a broken box from spinning.
+func keepBrowserAlive(port string) {
+	failures := 0
+	for {
+		if image := os.Getenv("ZCODE_BROWSER_DOCKER_IMAGE"); image != "" || browser.FindChromium() == "" {
+			b := launchBrowser()
+			if b == nil {
+				return
+			}
+			b.Wait()
+			b.Close()
+		} else {
+			b, err := browser.LaunchPinned(port)
+			if err != nil {
+				failures++
+				fmt.Printf("zcode: browser park on %s failed: %v\n", port, err)
+				if failures >= 3 {
+					fmt.Printf("zcode: browser park giving up after %d failures\n", failures)
+					return
+				}
+				time.Sleep(time.Duration(failures) * 3 * time.Second)
+				continue
+			}
+			failures = 0
+			fmt.Printf("zcode: browser parked on CDP %s (%s)\n", port, b.ID())
+			b.Wait()
+			b.Close()
+			fmt.Printf("zcode: browser parked on %s exited; restarting\n", port)
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func resolveRuntime(runtimePath string) (dir string) {
