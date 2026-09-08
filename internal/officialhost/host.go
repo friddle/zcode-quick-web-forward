@@ -99,41 +99,56 @@ func (h *Host) readLoop() {
 	for {
 		line, err := h.stdout.ReadString('\n')
 		if line != "" {
-			var m struct {
-				T   string         `json:"t"`
-				ID  string         `json:"id"`
-				B64 string         `json:"b64"`
-				Msg map[string]any `json:"msg"`
-			}
-			if json.Unmarshal([]byte(line), &m) == nil {
-				switch m.T {
-				case "pp":
-					if h.OnParentPort != nil && m.Msg != nil {
-						h.OnParentPort(m.Msg)
+			// A panicking callback must not take the whole daemon down (a
+			// panic in this goroutine crashes the process); log and keep
+			// draining so the pipe never backs up.
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Fprintf(os.Stderr, "[officialhost] callback panic: %v\n", r)
 					}
-				case "port":
-					var v any
-					if raw, err := base64.StdEncoding.DecodeString(m.B64); err == nil {
-						_ = json.Unmarshal(raw, &v)
-					}
-					if h.OnPortData != nil {
-						h.OnPortData(m.ID, v)
-					}
-				case "ready":
-					select {
-					case <-h.ready:
-					default:
-						close(h.ready)
-					}
-				case "raw":
-					if raw, err := base64.StdEncoding.DecodeString(m.B64); err == nil && h.OnRawPortData != nil {
-						h.OnRawPortData(m.ID, raw)
-					}
-				}
-			}
+				}()
+				h.dispatch(line)
+			}()
 		}
 		if err != nil {
 			return
+		}
+	}
+}
+
+func (h *Host) dispatch(line string) {
+	var m struct {
+		T   string         `json:"t"`
+		ID  string         `json:"id"`
+		B64 string         `json:"b64"`
+		Msg map[string]any `json:"msg"`
+	}
+	if json.Unmarshal([]byte(line), &m) != nil {
+		return
+	}
+	switch m.T {
+	case "pp":
+		if h.OnParentPort != nil && m.Msg != nil {
+			h.OnParentPort(m.Msg)
+		}
+	case "port":
+		var v any
+		if raw, err := base64.StdEncoding.DecodeString(m.B64); err == nil {
+			_ = json.Unmarshal(raw, &v)
+		}
+		if h.OnPortData != nil {
+			h.OnPortData(m.ID, v)
+		}
+	case "ready":
+		select {
+		case <-h.ready:
+		default:
+			close(h.ready)
+		}
+	case "raw":
+		if raw, err := base64.StdEncoding.DecodeString(m.B64); err == nil && h.OnRawPortData != nil {
+			h.OnRawPortData(m.ID, raw)
 		}
 	}
 }

@@ -170,6 +170,7 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 	}
 	switch p.ZcodeType {
 	case "bootstrap-request":
+		fmt.Println("zcode: bootstrap-request received — answering with workspace list")
 		reply(map[string]any{
 			"zcode_type": "bootstrap-response", "requestId": p.RequestID, "success": true,
 			"result": map[string]any{
@@ -200,17 +201,22 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 			return
 		}
 		engine.SetIdentity(v.BridgeSessionID, v.BridgeGeneration, v.RecoveryID)
+		fmt.Printf("zcode: workspace-bridge-open session=%s ws=%s task=%s\n", v.BridgeSessionID, v.WorkspaceKey, v.TaskID)
 		// The host sent its channel initialize before the phone's bridge
 		// existed — flush it now, or the phone's channel stack never
 		// initializes and it can't issue a single call (sync spinner forever).
 		officialFlushOut()
 		ps.mu.Lock()
+		prevWS := ps.workspacePath
 		ps.workspacePath = v.WorkspaceKey
 		ps.mu.Unlock()
 		// A bridge-open must NOT kill the engine while a turn is in flight —
 		// every task view the phone opens fires one, and the kill silently
 		// murders the running turn (no turn.terminal, ghost states forever).
-		if restartEngine != nil && !ps.anyTurnRunning() {
+		// It must also not restart on EVERY open: the phone re-opens the bridge
+		// on each reload, and engine-restart → resync → reload → bridge-open is
+		// a frontend restart loop. Only a real workspace switch justifies one.
+		if restartEngine != nil && !ps.anyTurnRunning() && prevWS != "" && prevWS != v.WorkspaceKey {
 			restartEngine()
 		}
 		bridge := map[string]any{

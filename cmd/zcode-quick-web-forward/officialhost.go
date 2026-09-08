@@ -54,6 +54,21 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	if os.Getenv("ZCODE_OFFICIAL_HOST") == "0" {
 		return false // explicit opt-out
 	}
+	// Already running? Reuse it — respawning on every relay reconnect kills
+	// the host (and its engine child) out from under the phone, which reloads
+	// the frontend and immediately re-opens the bridge: a restart loop.
+	officialState.mu.Lock()
+	if b := officialState.active; b != nil && b.h.Alive() {
+		officialState.engine, officialState.sender = engine, sender
+		officialState.mu.Unlock()
+		b.mu.Lock()
+		b.engine, b.sender = engine, sender
+		b.mu.Unlock()
+		fmt.Println("zcode: official host already running — reusing")
+		officialFlushOut()
+		return true
+	}
+	officialState.mu.Unlock()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return false
@@ -181,7 +196,7 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		return
 	}
 	fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
-	if !b.engine.HasIdentity() {
+	if b.engine == nil || !b.engine.HasIdentity() {
 		// The host speaks before the phone's bridge exists (its channel
 		// initialize arrives at attach time). Buffer until bridge-open.
 		b.mu.Lock()
@@ -206,6 +221,9 @@ func officialFlushOut() {
 	b.pendingOut = nil
 	b.mu.Unlock()
 	for _, raw := range pending {
+		if b.engine == nil {
+			break
+		}
 		fmt.Printf("zcode: official-host flushing buffered %d bytes\n", len(raw))
 		b.engine.SendRawChannelBytes(raw, func(v any) {})
 	}
