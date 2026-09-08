@@ -104,9 +104,24 @@ func bridgeSendCommand(c *relay.ChannelCall, engClient *enginepkg.Client, ps *ph
 		}
 		res, err := engClient.CreateSession(ws, ws, provider, model, 15*time.Second)
 		if err != nil {
-			fmt.Printf("zcode: engine createSession failed: %v\n", err)
-			ack["status"] = "failed"
-			ack["message"] = err.Error()
+			// The engine serializes session/create behind an in-flight turn,
+			// so while any task runs the "+" draft times out and bounces the
+			// phone back to the landing. Hand back a synthetic draft id
+			// instead: bare drafts are runtime-only anyway, and the real
+			// engine session materializes from the first sendText (rebuild
+			// path) or the serial-queue dispatch.
+			fmt.Printf("zcode: engine createSession failed (%v) — deferring session to first send\n", err)
+			draftID := "draft-" + uuidNew()
+			ps.setSession(draftID, ws)
+			ps.runtimeTask(draftID, ws, "新任务", true)
+			ack["result"] = map[string]any{"type": "createSession", "sessionId": draftID}
+			if in := req.Envelope.Payload.FirstInput.Text; in != "" {
+				// createSession carried input AND the engine is busy — park it
+				// in the serial queue exactly like the sendText intercept.
+				enqueueGlobalTaskQueued(engine, send, ps, draftID, in, in, ws)
+				ack["userTextSent"] = in
+				ack["queuedTask"] = true
+			}
 			return ack
 		}
 		sid, _ := res["sessionId"].(string)
@@ -872,18 +887,28 @@ func dispatchGlobalQueue(engClient *enginepkg.Client, engine *relay.BridgeEngine
 	if !ok {
 		return
 	}
-	if !engClient.SendMessage(t.engineSid, t.text) {
+	// The queued task may be a synthetic draft (created while the engine was
+	// busy — see createSession) or hold a dead engine session: materialize a
+	// live engine session before sending.
+	engineSid := t.engineSid
+	if _, err := engClient.ReadSession(engineSid, 3*time.Second); err != nil {
+		if ns := rebuildContinuedSession(engClient, ps, t.phoneSid); ns != "" {
+			engineSid = ns
+		}
+	}
+	if engineSid == "" || !engClient.SendMessage(engineSid, t.text) {
+		t.engineSid = engineSid
 		ps.enqueueGlobalTask(t) // engine gone — put it back
 		fmt.Printf("zcode: dispatch failed (stdin closed), task re-queued session=%s\n", t.phoneSid)
 		return
 	}
-	ps.setTurnRunning(t.engineSid, true)
-	engClient.SubscribeSession(t.engineSid)
+	ps.setTurnRunning(engineSid, true)
+	engClient.SubscribeSession(engineSid)
 	if err := zcode.SetTaskStatus(t.phoneSid, "running"); err != nil {
 		fmt.Printf("zcode: queued task status flip failed: %v\n", err)
 	}
 	pushWorkspaceList(send, ps)
-	fmt.Printf("zcode: dispatched QUEUED task session=%s text=%q (%d still waiting)\n", t.phoneSid, t.text, ps.queuedGlobalCount())
+	fmt.Printf("zcode: dispatched QUEUED task session=%s engine=%s text=%q (%d still waiting)\n", t.phoneSid, engineSid, t.text, ps.queuedGlobalCount())
 }
 
 func runCompactTurn(engClient *enginepkg.Client, engine *relay.BridgeEngine, send func(any), ps *phoneSessions, engineSid, phoneSid, commandID string) {
