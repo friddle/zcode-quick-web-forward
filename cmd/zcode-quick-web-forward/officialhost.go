@@ -191,22 +191,34 @@ func forwardRawToOfficialHost(raw []byte) bool {
 	return true
 }
 
-// channelPromiseID extracts the call id from a PromiseSuccess (201) channel
-// message: [201][varint id][value]. Returns false for any other message.
+// channelPromiseID extracts the call id from a PromiseSuccess channel
+// message: [0x04 array][len=2][0x06 kind=201][0x06 id][data]. Returns false
+// for any other message kind.
 func channelPromiseID(b []byte) (int, bool) {
-	if len(b) < 2 || b[0] != 201 {
+	if len(b) < 7 || b[0] != 4 || b[1] != 2 || b[2] != 6 {
 		return 0, false
 	}
+	kind, next, ok := leb128(b, 3)
+	if !ok || kind != 201 || next >= len(b) || b[next] != 6 {
+		return 0, false
+	}
+	id, _, ok := leb128(b, next+1)
+	return id, ok
+}
+
+// leb128 reads one LEB128 varint at off; returns the value, the offset just
+// past it, and whether a complete varint was present.
+func leb128(b []byte, off int) (int, int, bool) {
 	id, shift := 0, uint(0)
-	for i := 1; i < len(b) && i < 7; i++ {
+	for i := off; i < len(b) && i < off+5; i++ {
 		v := b[i]
 		id |= int(v&0x7f) << shift
 		if v&0x80 == 0 {
-			return id, true
+			return id, i + 1, true
 		}
 		shift += 7
 	}
-	return 0, false
+	return 0, off, false
 }
 
 // onPortBytes pipes host service-port bytes back to the phone verbatim —
