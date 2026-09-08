@@ -265,7 +265,24 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		b.mu.Unlock()
 		return
 	}
-	b.engine.SendRawChannelBytes(raw, func(v any) {})
+	// Route through the CURRENT relay sender. An empty send func here
+	// silently swallowed every host response — the phone waited forever on
+	// its channel calls and re-bootstrapped in a loop (Paired. Loading
+	// workspace… with RPCs answered host-side but nothing arriving).
+	b.engine.SendRawChannelBytes(raw, senderSend())
+}
+
+// senderSend returns a routing func that always targets the relay connection
+// current at call time.
+func senderSend() func(any) {
+	return func(v any) {
+		officialState.mu.Lock()
+		s := officialState.sender
+		officialState.mu.Unlock()
+		if s != nil {
+			s.send(v)
+		}
+	}
 }
 
 // officialCallAnswered reports whether the host replied to a promise call.
@@ -299,7 +316,7 @@ func officialFlushOut() {
 			break
 		}
 		fmt.Printf("zcode: official-host flushing buffered %d bytes\n", len(raw))
-		b.engine.SendRawChannelBytes(raw, func(v any) {})
+		b.engine.SendRawChannelBytes(raw, senderSend())
 	}
 }
 
