@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -24,6 +25,11 @@ type officialHostBridge struct {
 	h      *officialhost.Host
 	engine *relay.BridgeEngine
 	sender *relaySender // routes to the phone's latest pending reply
+	mu     sync.Mutex
+	// pendingOut holds host->phone bytes that arrived before the phone
+	// opened its workspace bridge (no rpc-frame identity yet — the framed
+	// send would silently drop them). Flushed on bridge-open.
+	pendingOut [][]byte
 }
 
 type officialHostState struct {
@@ -56,7 +62,18 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 		fmt.Println("zcode: official host bundle missing (~/.zcode/host-official/shim.mjs) — using built-in handlers")
 		return false
 	}
-	h, err := officialhost.Start(nodeBin, dir)
+	// The host spawns the engine ITSELF, so it needs the exact command we
+	// would have run (absolute node + runtime zcode.cjs app-server). Without
+	// ZCODE_AGENT_SERVER_COMMAND* the host falls back to the desktop's
+	// default engine command, its spawn fails, and every engine-backed
+	// channel hangs — the "intermittent serving" symptom.
+	nodeAbs, lerr := exec.LookPath(nodeBin)
+	if lerr != nil {
+		nodeAbs = nodeBin
+	}
+	env := officialhost.Env(nodeAbs, []string{script, "app-server"}, filepath.Dir(script),
+		filepath.Join(home, ".zcode"), "zcode-quick-web-forward", nil)
+	h, err := officialhost.StartEnv(nodeBin, dir, env)
 	if err != nil {
 		fmt.Printf("zcode: official host start failed: %v — using built-in handlers\n", err)
 		return false
@@ -150,7 +167,35 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 	if portID != "svc" || len(raw) == 0 {
 		return
 	}
+	fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
+	if !b.engine.HasIdentity() {
+		// The host speaks before the phone's bridge exists (its channel
+		// initialize arrives at attach time). Buffer until bridge-open.
+		b.mu.Lock()
+		b.pendingOut = append(b.pendingOut, raw)
+		b.mu.Unlock()
+		return
+	}
 	b.engine.SendRawChannelBytes(raw, func(v any) {})
+}
+
+// officialFlushOut sends buffered host bytes now that the phone bridge
+// identity exists. Called from the workspace-bridge-open handler.
+func officialFlushOut() {
+	officialState.mu.Lock()
+	b := officialState.active
+	officialState.mu.Unlock()
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	pending := b.pendingOut
+	b.pendingOut = nil
+	b.mu.Unlock()
+	for _, raw := range pending {
+		fmt.Printf("zcode: official-host flushing buffered %d bytes\n", len(raw))
+		b.engine.SendRawChannelBytes(raw, func(v any) {})
+	}
 }
 
 // officialStopHost tears the host down (its engine child dies with it).

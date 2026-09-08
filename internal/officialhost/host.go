@@ -42,11 +42,23 @@ type Host struct {
 	OnLog         func(line string)
 }
 
-// Start launches `node shim.mjs` in dir. Node must be >= 18.
+// Start launches `node shim.mjs` in dir with the current environment.
+// Node must be >= 18.
 func Start(nodeBin, dir string) (*Host, error) {
+	return StartEnv(nodeBin, dir, nil)
+}
+
+// StartEnv launches `node shim.mjs` in dir with an explicit environment.
+// Without ZCODE_AGENT_SERVER_COMMAND* the host falls back to the desktop's
+// default engine command (which does not exist on a bare server) and its
+// engine spawn fails — every engine-backed channel then hangs.
+func StartEnv(nodeBin, dir string, env []string) (*Host, error) {
 	h := &Host{exited: make(chan struct{}), ready: make(chan struct{})}
 	cmd := exec.Command(nodeBin, "shim.mjs")
 	cmd.Dir = dir
+	if len(env) > 0 {
+		cmd.Env = env
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

@@ -434,3 +434,11 @@ func (e *BridgeEngine) WriteSink(msg []byte) {
 		_, _ = sink.Write(msg)
 	}
 }
+
+// HasIdentity reports whether a phone workspace bridge has been opened
+// (rpc-frames can only be encoded once the bridge identity is known).
+func (e *BridgeEngine) HasIdentity() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.identity.BridgeSessionID != ""
+}
