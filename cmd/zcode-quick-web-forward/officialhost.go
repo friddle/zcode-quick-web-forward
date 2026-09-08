@@ -167,9 +167,22 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	return true
 }
 
+// hostForwardEnabled gates the host↔phone pipe. The host answers only part
+// of the phone's traffic and emits its own channel bytes; until the serving
+// gaps are closed, piping them degrades the phone's bridge into the 2s
+// recover loop. Default OFF: the host runs and stays warm, the phone rides
+// the proven built-in pipeline. ZCODE_HOST_FORWARD=1 re-enables the pipe.
+func hostForwardEnabled() bool {
+	return os.Getenv("ZCODE_HOST_FORWARD") == "1"
+}
+
 // officialHostActive reports whether channel traffic should be forwarded to
-// the official host instead of the built-in handlers.
+// the official host instead of the built-in handlers. Requires the host to
+// be alive AND the pipe enabled (ZCODE_HOST_FORWARD=1).
 func officialHostActive() bool {
+	if !hostForwardEnabled() {
+		return false
+	}
 	officialState.mu.Lock()
 	b := officialState.active
 	officialState.mu.Unlock()
@@ -233,6 +246,9 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		return
 	}
 	fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
+	if !hostForwardEnabled() {
+		return // pipe disabled — log only, don't leak host bytes to the phone
+	}
 	if id, ok := channelPromiseID(raw); ok {
 		b.mu.Lock()
 		if b.answered == nil {
