@@ -170,12 +170,13 @@ func doRemoteOpts(o commonOpts) {
 			}()
 		}()
 	}
-	// Official-host mode is the DEFAULT: the host spawns and owns the engine
-	// itself (ZCODE_AGENT_SERVER_COMMAND); our engine supervision stays idle.
-	// Opt out with ZCODE_OFFICIAL_HOST=0 (falls back to the built-in
-	// hand-written channel handlers).
+	// Official-host mode is the DEFAULT: the host runs alongside and serves
+	// the channels the built-in handlers don't implement (file transfers,
+	// uploads, terminal IO, automations, cua…). Opt out with
+	// ZCODE_OFFICIAL_HOST=0. OUR engine still runs either way — the built-in
+	// handlers answer the engine/task channels against it (the host's own
+	// engine path crashes without the desktop's workspace registry).
 	restartEngineFn := startEngine
-	var officialStarted bool
 	if os.Getenv("ZCODE_OFFICIAL_HOST") != "0" {
 		cache, _ := os.UserCacheDir()
 		mid := loadOrCreateDeviceMid(filepath.Join(cache, "zcode-quick-web-forward"))
@@ -183,17 +184,9 @@ func doRemoteOpts(o commonOpts) {
 		if len(workspaces) > 0 {
 			defWS = workspaces[0]
 		}
-		officialStarted = maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid)
-		if officialStarted {
-			// The host owns the engine — a workspace bridge-open must NOT
-			// restart it (the old restart-on-open semantics killed the host
-			// mid-pairing and stalled the sync).
-			restartEngineFn = func() {}
-		}
+		maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid)
 	}
-	if !officialStarted {
-		startEngine()
-	}
+	startEngine()
 
 	go func() {
 		if err := <-engineExited; err != nil && atomic.LoadInt32(&shuttingDown) == 0 {

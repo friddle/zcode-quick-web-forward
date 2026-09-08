@@ -82,37 +82,27 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			// Pure pipe in official-host mode: every assembled channel
-			// message (calls AND initialize acks) goes to the host's service
-			// port verbatim; the host's responses are piped back by
-			// officialHostBridge.onPortBytes. Built-in handlers stay as the
-			// fallback when the official host is off.
-			// Engine/task channels must be answered by the host ONLY — a
-			// built-in fallback would run them against a second engine.
-			// Division of labor in official-host mode: engine/task channels
-			// are served by the HOST (it spawns and owns the engine — the
-			// desktop's real path), desktop-owned services by the built-in
-			// handlers (proven to satisfy the phone's boot), and anything the
-			// built-in doesn't implement (file, terminal, uploads,
-			// automations…) forwards to the host natively.
-			hostPrimary := map[string]bool{
-				"zcode-agent": true, "zcode-task": true, "zcode-session": true, "off-peak-task": true,
-			}
+			// Division of labor in official-host mode: the built-in handlers
+			// serve EVERYTHING they implement — including engine traffic on
+			// our own engine child — because the host's channel server
+			// crashes (resolveWorkspaceKey uncaughtException) on
+			// sessions-index subscriptions and its task path needs the
+			// desktop's workspace registry. Calls the built-in doesn't
+			// implement (file, terminal transfers, uploads, automations,
+			// cua…) forward to the official host natively, which is the
+			// whole point of running it alongside.
 			onCall := func(c *relay.ChannelCall) {
 				if officialHostActive() {
-					fmt.Printf("zcode: official-host call id=%d %s.%s\n", c.ID, c.ChannelName, c.Name)
 					if c.Kind == 102 || c.Kind == 103 {
-						// record listeners for our own pushes AND let the
-						// host push its events on the same subscriptions
+						// NEVER forward these: the host's channel server
+						// throws an uncaught resolveWorkspaceKey exception
+						// on sessions-index subscriptions (no desktop
+						// workspace registry) and the whole host dies.
 						handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
-						forwardCallToOfficialHost(c)
-						return
-					}
-					if hostPrimary[c.ChannelName] {
-						forwardCallToOfficialHost(c)
 						return
 					}
 					if !answerDesktopChannel(engine, c, reply, ps.workspacesList(), ps, engClient, termSvc) {
+						fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
 						forwardCallToOfficialHost(c)
 					}
 					return
