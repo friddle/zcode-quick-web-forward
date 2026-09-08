@@ -503,11 +503,16 @@ func phaseForStatus(display string) (string, bool) {
 		return "running", false
 	case "error", "failed":
 		return "error", true
-	case "completed", "completedInterrupted":
+	case "completedInterrupted":
 		return "completedInterrupted", true
+	case "completed", "completedSuccess":
+		// "completed" is displayStatus's collapsed form of every finished
+		// state — mapping it to completedInterrupted made every finished
+		// task's turn header read 已停止.
+		return "completedSuccess", true
 	case "idle", "cancelled", "paused":
 		return "draft", true
-	default: // completed / completedSuccess and unknown
+	default: // unknown
 		return "completedSuccess", true
 	}
 }

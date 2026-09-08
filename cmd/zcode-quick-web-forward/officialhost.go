@@ -1,4 +1,4 @@
-// Official-host integration: when ZCODE_OFFICIAL_HOST=1 and
+// Official-host integration (the DEFAULT): when
 // ~/.zcode/host-official/shim.mjs exists, phone channel traffic is forwarded
 // to the DESKTOP APP's official web-remote host (running under Node via
 // official-host/shim.mjs) instead of the hand-rolled channel handlers. The
@@ -44,8 +44,8 @@ var officialState officialHostState
 // ZCODE_AGENT_SERVER_COMMAND); workspace is the engine cwd. Returns false
 // when disabled or the bundle is missing.
 func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nodeBin, script, workspace, mid string) bool {
-	if os.Getenv("ZCODE_OFFICIAL_HOST") == "" {
-		return false
+	if os.Getenv("ZCODE_OFFICIAL_HOST") == "0" {
+		return false // explicit opt-out
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -53,7 +53,7 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	}
 	dir := filepath.Join(home, ".zcode", "host-official")
 	if _, err := os.Stat(filepath.Join(dir, "shim.mjs")); err != nil {
-		fmt.Println("zcode: ZCODE_OFFICIAL_HOST set but ~/.zcode/host-official/shim.mjs missing — using built-in handlers")
+		fmt.Println("zcode: official host bundle missing (~/.zcode/host-official/shim.mjs) — using built-in handlers")
 		return false
 	}
 	h, err := officialhost.Start(nodeBin, dir)

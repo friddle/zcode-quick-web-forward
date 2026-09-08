@@ -202,7 +202,7 @@ func stateUpdatedFrame(ps *phoneSessions, sessionID, phase, convSub string, ordi
 	fromSeq, toSeq := ps.convoFrameSeq(false)
 	ended := phase != "running" && phase != "prewarming" && phase != "draft"
 	control := map[string]any{
-		"phase": phase, "sessionEnded": false,
+		"phase": phase, "sessionEnded": ended,
 		"canStop": false, "stopState": "idle", "stopTargetKind": "unknown",
 		"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
 	}
@@ -355,6 +355,25 @@ func phaseForSession(ps *phoneSessions, sessionID string) string {
 	return "completedSuccess"
 }
 
+// sessionTitle resolves the display title for a conversation view header:
+// the persisted task title first, then the runtime draft entry. The client
+// falls back to "New session" when the snapshot meta carries no title.
+func sessionTitle(ps *phoneSessions, sessionID string) string {
+	if t, ok, err := zcode.GetTask(sessionID); err == nil && ok && t.Title != "" {
+		return t.Title
+	}
+	if ps != nil {
+		for _, rt := range ps.runtimeTaskList() {
+			if m, _ := rt.(map[string]any); m != nil && m["taskId"] == sessionID {
+				if s, _ := m["title"].(string); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub, deliveryKind string, ordinal int, rows []any, mode, phase string) map[string]any {
 	if convSub == "" {
 		convSub = sessionID + ":sub"
@@ -382,6 +401,11 @@ func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub,
 	// A snapshot re-bases the client's transcript seq — reset the delta
 	// ledger so the next deltas frame continues from the snapshot's seq.
 	snapSeq, _ := ps.convoFrameSeq(true)
+	title := sessionTitle(ps, sessionID)
+	titleSource := "default"
+	if title != "" {
+		titleSource = "generated"
+	}
 	snapshot := map[string]any{
 		"protocolVersion": 1,
 		"sessionId":       sessionID,
@@ -398,7 +422,7 @@ func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub,
 			"resumeGoal":    map[string]any{"allowed": false, "reasonCode": "noGoalToResume"},
 		},
 		"inputRouting":        map[string]any{"mode": "startNow"},
-		"meta":                map[string]any{"title": "", "titleSource": "default"},
+		"meta":                map[string]any{"title": title, "titleSource": titleSource},
 		"config":              ps.modelCfg(),
 		"modelTransition":     nil,
 		"usage":               ps.usageCfg(),
