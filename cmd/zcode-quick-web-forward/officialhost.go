@@ -11,9 +11,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -118,8 +120,9 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 			// print the payload or engine-spawn/service failures stay invisible.
 			if raw, err := json.Marshal(msg); err == nil && len(raw) > 0 {
 				line := string(raw)
-				if len(line) > 400 {
-					line = line[:400] + "…"
+				maybeAnswerRuntimeHeadersRequest(line)
+				if len(line) > 4000 {
+					line = line[:4000] + "…"
 				}
 				fmt.Println("zcode: official-host | " + line)
 			}
@@ -228,6 +231,99 @@ func forwardRawToOfficialHost(raw []byte) bool {
 	b.mu.Unlock()
 	b.h.RawPortData(port, raw)
 	return true
+}
+
+// ---------------------------------------------------------------------------
+// provider runtime headers auto-answer.
+//
+// Before the engine's first model call of a turn it asks the host for
+// "provider runtime headers" (interaction/requestProviderRuntimeHeaders). The
+// host forwards that request to the DESKTOP RENDERER, which answers via
+// zcode-agent.respondProviderRuntimeHeaders with the user's auth headers. We
+// have no renderer: the request used to dangle forever and the turn stalled
+// with "Working…" and no model call ever starting. The engine falls back to
+// its own credential chain when the answer says headersApplied=false (the CLI
+// proves that chain works), so we synthesize exactly that answer.
+//
+// The trigger is the host's own log line (it prints requestId + sessionId);
+// requestId format: "<sessionId>:provider-runtime-headers:<millis>".
+// ---------------------------------------------------------------------------
+
+var runtimeHeadersAnswered sync.Map
+
+func maybeAnswerRuntimeHeadersRequest(logLine string) {
+	const marker = `收到 ZCode provider runtime headers 请求`
+	if !strings.Contains(logLine, marker) {
+		return
+	}
+	m := regexp.MustCompile(`requestId\\+":\\"([A-Za-z0-9:_-]+)`).FindStringSubmatch(logLine)
+	if m == nil {
+		log.Println("zcode: runtime-headers request seen but requestId not parsed")
+		return
+	}
+	requestID := m[1]
+	if _, dup := runtimeHeadersAnswered.LoadOrStore(requestID, true); dup {
+		return
+	}
+	sessionID := requestID
+	if i := strings.Index(requestID, ":provider-runtime-headers:"); i > 0 {
+		sessionID = requestID[:i]
+	}
+	officialState.mu.Lock()
+	ws := officialState.workspace
+	officialState.mu.Unlock()
+	if ws == "" || sessionID == requestID {
+		return
+	}
+	// NOTE: the request/response keys resolve the workspace from the TOP-LEVEL
+	// workspacePath/workspaceIdentity fields (resolveWorkspaceKey of the args
+	// object itself) — the desktop renderer passes them flat, not nested under
+	// a "workspace" key.
+	//
+	// headersApplied=true with empty headers makes the host build the session's
+	// runtime model from ITS provider registry (which holds the refreshed
+	// coding-plan API key) — the engine then calls the gateway with valid auth.
+	// headersApplied=false made the engine call with no credentials and die.
+	args := fmt.Sprintf(`{"workspacePath":%q,"sessionId":%q,"requestId":%q,"response":{"headersApplied":true,"runtimeProviderHeaders":{}}}`,
+		ws, sessionID, requestID)
+	frame := buildChannelCall("zcode-agent", "respondProviderRuntimeHeaders", args, 0x4000)
+	if forwardRawToOfficialHost(frame) {
+		fmt.Printf("zcode: answered provider runtime headers request %s (headersApplied=false)\n", requestID)
+	}
+}
+
+// appendVQL appends v as a LEB128-style varint (VSCode rpc wire encoding).
+func appendVQL(buf []byte, v int) []byte {
+	for {
+		b := byte(v & 0x7f)
+		v >>= 7
+		if v != 0 {
+			buf = append(buf, b|0x80)
+		} else {
+			return append(buf, b)
+		}
+	}
+}
+
+// buildChannelCall encodes one channel PromiseCall frame:
+//
+//	[4,4] [6,100] [6,id] [1,len]channel [1,len]method  args
+//	args := [4,1] [5,len]json   (one-element array holding the params object —
+//	the host's call adapters spread the wire arg positionally)
+func buildChannelCall(channel, method, argsJSON string, id int) []byte {
+	var buf []byte
+	buf = append(buf, 0x04, 0x04, 0x06, 0x64, 0x06)
+	buf = appendVQL(buf, id)
+	buf = append(buf, 0x01)
+	buf = appendVQL(buf, len(channel))
+	buf = append(buf, channel...)
+	buf = append(buf, 0x01)
+	buf = appendVQL(buf, len(method))
+	buf = append(buf, method...)
+	buf = append(buf, 0x04, 0x01, 0x05)
+	buf = appendVQL(buf, len(argsJSON))
+	buf = append(buf, argsJSON...)
+	return buf
 }
 
 // channelPromiseID extracts the call id from a PromiseSuccess channel
