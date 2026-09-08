@@ -185,6 +185,15 @@ func doRemoteOpts(o commonOpts) {
 			defWS = workspaces[0]
 		}
 		maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid)
+		if officialHostActive() {
+			// The engine must NOT restart on workspace bridge-opens here:
+			// every "+" the phone taps fires one, and the 2s engine respawn
+			// window swallows the draft's createSession ("stdin closed"),
+			// which degrades the bridge and bounces the phone to the
+			// pairing screen. The engine persists across workspaces —
+			// workspacePath rides per session.
+			restartEngineFn = func() {}
+		}
 	}
 	startEngine()
 
