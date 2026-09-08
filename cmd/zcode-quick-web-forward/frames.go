@@ -421,6 +421,14 @@ func conversationSnapshotFrame(ps *phoneSessions, sessionID, workspace, convSub,
 	if title != "" {
 		titleSource = "generated"
 	}
+	// Cap the recovery window: long transcripts (160+ rows) fragment into
+	// many rpc-frames and the client fails reassembly — it degrades the
+	// bridge and re-subscribes, receiving the same giant snapshot forever
+	// (the endless restart loop). The visible tail is what matters.
+	const maxSnapshotRows = 24
+	if len(rows) > maxSnapshotRows {
+		rows = rows[len(rows)-maxSnapshotRows:]
+	}
 	// The composer's "/" palette lists the session's slash commands from this
 	// snapshot field; without it the palette renders "没有匹配的命令".
 	snapshot := map[string]any{
