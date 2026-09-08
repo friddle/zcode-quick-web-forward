@@ -87,12 +87,36 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			// port verbatim; the host's responses are piped back by
 			// officialHostBridge.onPortBytes. Built-in handlers stay as the
 			// fallback when the official host is off.
+			// Engine/task channels must be answered by the host ONLY — a
+			// built-in fallback would run them against a second engine.
+			hostOnlyChannel := map[string]bool{
+				"zcode-agent": true, "zcode-task": true, "zcode-session": true, "off-peak-task": true,
+			}
 			onCall := func(c *relay.ChannelCall) {
 				if officialHostActive() {
 					fmt.Printf("zcode: official-host phone -> svc call id=%d %s.%s\n", c.ID, c.ChannelName, c.Name)
-					if forwardCallToOfficialHost(c) {
+					if c.Kind == 102 || c.Kind == 103 {
+						// The host subscribes listeners but never promises
+						// them; the built-in handler records + acks locally
+						// while the subscription still reaches the host.
+						handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
+						forwardCallToOfficialHost(c)
 						return
 					}
+					if c.Kind == 100 && c.ID != 0 && !hostOnlyChannel[c.ChannelName] {
+						// Desktop-owned service: if the host stays silent the
+						// built-in handler answers from real state, so the
+						// phone's boot never stalls on one missing reply.
+						go func(c *relay.ChannelCall) {
+							time.Sleep(400 * time.Millisecond)
+							if !officialCallAnswered(c.ID) {
+								fmt.Printf("zcode: official-host fallback answering id=%d %s.%s\n", c.ID, c.ChannelName, c.Name)
+								handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
+							}
+						}(c)
+					}
+					forwardCallToOfficialHost(c)
+					return
 				}
 				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
 			}

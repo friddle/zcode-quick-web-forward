@@ -31,6 +31,9 @@ type officialHostBridge struct {
 	// opened its workspace bridge (no rpc-frame identity yet — the framed
 	// send would silently drop them). Flushed on bridge-open.
 	pendingOut [][]byte
+	// answered records promise-call ids the host replied to, so the bridge
+	// can fall back to the built-in handlers for calls the host ignores.
+	answered map[int]bool
 }
 
 type officialHostState struct {
@@ -188,6 +191,24 @@ func forwardRawToOfficialHost(raw []byte) bool {
 	return true
 }
 
+// channelPromiseID extracts the call id from a PromiseSuccess (201) channel
+// message: [201][varint id][value]. Returns false for any other message.
+func channelPromiseID(b []byte) (int, bool) {
+	if len(b) < 2 || b[0] != 201 {
+		return 0, false
+	}
+	id, shift := 0, uint(0)
+	for i := 1; i < len(b) && i < 7; i++ {
+		v := b[i]
+		id |= int(v&0x7f) << shift
+		if v&0x80 == 0 {
+			return id, true
+		}
+		shift += 7
+	}
+	return 0, false
+}
+
 // onPortBytes pipes host service-port bytes back to the phone verbatim —
 // responses AND the host's channel initialize; the phone's channel stack
 // speaks the same protocol, so the bridge stays a pure pipe.
@@ -196,6 +217,14 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		return
 	}
 	fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
+	if id, ok := channelPromiseID(raw); ok {
+		b.mu.Lock()
+		if b.answered == nil {
+			b.answered = map[int]bool{}
+		}
+		b.answered[id] = true
+		b.mu.Unlock()
+	}
 	if b.engine == nil || !b.engine.HasIdentity() {
 		// The host speaks before the phone's bridge exists (its channel
 		// initialize arrives at attach time). Buffer until bridge-open.
@@ -205,6 +234,19 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		return
 	}
 	b.engine.SendRawChannelBytes(raw, func(v any) {})
+}
+
+// officialCallAnswered reports whether the host replied to a promise call.
+func officialCallAnswered(id int) bool {
+	officialState.mu.Lock()
+	b := officialState.active
+	officialState.mu.Unlock()
+	if b == nil {
+		return true // not active — never fall back
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.answered[id]
 }
 
 // officialFlushOut sends buffered host bytes now that the phone bridge
