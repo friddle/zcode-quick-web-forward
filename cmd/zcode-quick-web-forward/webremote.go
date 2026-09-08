@@ -82,29 +82,27 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			// Division of labor in official-host mode: the built-in handlers
-			// serve EVERYTHING they implement — including engine traffic on
-			// our own engine child — because the host's channel server
-			// crashes (resolveWorkspaceKey uncaughtException) on
-			// sessions-index subscriptions and its task path needs the
-			// desktop's workspace registry. Calls the built-in doesn't
-			// implement (file, terminal transfers, uploads, automations,
-			// cua…) forward to the official host natively, which is the
-			// whole point of running it alongside.
+			// Division of labor in official-host mode: the FULL built-in
+			// pipeline (answer from real state + engine forwarding — our
+			// engine owns every live session) serves all core channels.
+			// Only channels the built-in has no implementation for forward
+			// to the official host, which serves them from its own service
+			// registry (file transfer, uploads, automations, plugins…).
+			// Routing zcode-session/zcode-agent calls to the host hangs the
+			// phone forever: those sessions live in OUR engine.
+			hostPrimary := map[string]bool{
+				"file": true, "prompt-attachment-transfer": true, "file-watcher": true,
+				"off-peak-task": true, "cua-permission": true, "cua-pip-session": true,
+				"plugin-management": true, "plugins": true, "plugin-sync": true,
+				"mcp-sync": true, "skills": true, "skill-sync": true,
+				"hooks": true, "memory": true, "feedback": true,
+				"client-scenes": true, "bots": true, "git-checkpoint": true,
+				"output-style": true, "repo-wiki": true,
+			}
 			onCall := func(c *relay.ChannelCall) {
-				if officialHostActive() {
-					if c.Kind == 102 || c.Kind == 103 {
-						// NEVER forward these: the host's channel server
-						// throws an uncaught resolveWorkspaceKey exception
-						// on sessions-index subscriptions (no desktop
-						// workspace registry) and the whole host dies.
-						handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
-						return
-					}
-					if !answerDesktopChannel(engine, c, reply, ps.workspacesList(), ps, engClient, termSvc) {
-						fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
-						forwardCallToOfficialHost(c)
-					}
+				if officialHostActive() && hostPrimary[c.ChannelName] {
+					fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
+					forwardCallToOfficialHost(c)
 					return
 				}
 				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
