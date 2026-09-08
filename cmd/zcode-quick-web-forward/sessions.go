@@ -422,22 +422,49 @@ func (p *phoneSessions) snapshotRows() []any {
 	return out
 }
 
+// maxRememberedRows bounds the remembered-row buffer. It grows per streamed
+// delta; unbounded it reached 15k+ rows on bi, and every recovery snapshot
+// then serialized a >10MB single frame that choked the phone frontend into a
+// reload → re-pair loop.
+const maxRememberedRows = 2000
+
 // appendRemembered extends the remembered conversation rows (send bubbles,
 // live tool cards, streaming text) without discarding earlier rows — recovery
 // snapshots replay these so a mid-turn subscriber sees the turn so far.
+// Trims from the head when over maxRememberedRows, but never past the last
+// tail-boundary marker (rows before it are history; rows after it are the
+// live turn the streaming tail needs).
 func (p *phoneSessions) appendRemembered(rows []any) {
 	p.mu.Lock()
 	p.lastRows = append(p.lastRows, rows...)
+	if len(p.lastRows) > maxRememberedRows {
+		floor := 0
+		for i, r := range p.lastRows {
+			if m, ok := r.(map[string]any); ok {
+				if kind, _ := m["kind"].(string); kind == "timelineMarker" {
+					floor = i
+				}
+			}
+		}
+		cut := len(p.lastRows) - maxRememberedRows
+		if cut > floor {
+			cut = floor
+		}
+		if cut > 0 {
+			p.lastRows = append([]any{}, p.lastRows[cut:]...)
+		}
+	}
 	p.mu.Unlock()
 }
 
 // rememberUpsert replaces a remembered row in place by rowId (live tool cards
-// flip running→success / gain output after the fact).
+// flip running→success / gain output after the fact). Scans backwards: upserts
+// overwhelmingly target recently appended rows.
 func (p *phoneSessions) rememberUpsert(row map[string]any) {
 	id, _ := row["rowId"].(int)
 	p.mu.Lock()
-	for i, r := range p.lastRows {
-		if m, ok := r.(map[string]any); ok {
+	for i := len(p.lastRows) - 1; i >= 0; i-- {
+		if m, ok := p.lastRows[i].(map[string]any); ok {
 			if mid, _ := m["rowId"].(int); mid == id {
 				p.lastRows[i] = row
 				break

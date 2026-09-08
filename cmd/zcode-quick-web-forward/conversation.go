@@ -82,6 +82,11 @@ func recoveryRows(engClient *enginepkg.Client, ps *phoneSessions, sid string) []
 	// a subscriber that opens during a running task see only history.
 	// Transcripts are the fallback for after a daemon restart (memory empty).
 	if rows := ps.snapshotRows(); len(rows) > 0 {
+		// Hard-cap the recovery frame: one giant message (>10MB) stalls the
+		// phone frontend and bounces it back to the pairing screen.
+		if len(rows) > 1200 {
+			rows = rows[len(rows)-1200:]
+		}
 		fmt.Printf("zcode: recovery from remembered rows session=%s rows=%d\n", sid, len(rows))
 		return rows
 	}
