@@ -19,8 +19,28 @@ import (
 
 // launchBrowser starts the headless chromium browser host, or returns nil when
 // no chromium is available (browser tasks then report backend_unavailable).
+// On servers without a Playwright chromium install it falls back to the
+// chrome-driverless docker image (ZCODE_BROWSER_DOCKER_IMAGE overrides).
 func launchBrowser() *browser.Browser {
+	if image := os.Getenv("ZCODE_BROWSER_DOCKER_IMAGE"); image != "" {
+		b, err := browser.LaunchDocker(image)
+		if err != nil {
+			fmt.Printf("zcode: docker browser launch failed: %v (browser tasks unavailable)\n", err)
+			return nil
+		}
+		fmt.Printf("zcode: browser host ready via docker %s (%s)\n", image, b.ID())
+		return b
+	}
 	if browser.FindChromium() == "" {
+		if _, err := exec.LookPath("docker"); err == nil {
+			b, err := browser.LaunchDocker(browser.DefaultDockerImage)
+			if err != nil {
+				fmt.Printf("zcode: docker browser launch failed: %v (browser tasks unavailable)\n", err)
+				return nil
+			}
+			fmt.Printf("zcode: browser host ready via docker %s (%s)\n", browser.DefaultDockerImage, b.ID())
+			return b
+		}
 		fmt.Println("zcode: no chromium found; browser tasks unavailable (set PLAYWRIGHT_BROWSERS_PATH)")
 		return nil
 	}

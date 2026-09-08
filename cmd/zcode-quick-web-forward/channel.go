@@ -600,18 +600,22 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 		}
 		// A collaboration-mode switch needs a snapshot push so the phone's
 		// picker reflects the new mode (the engine doesn't relay setMode).
+		// The snapshot REPLACES the phone's conversation state, so it must
+		// carry the full transcript rows — an empty one wipes the history.
 		if mode, ok := ack["modeChanged"].(string); ok && mode != "" {
 			sid, _ := ps.get()
 			if sid != "" {
 				go func() {
 					time.Sleep(400 * time.Millisecond)
+					rows := recoveryRows(engClient, ps, sid)
+					ps.rememberRows(rows)
 					ps.mu.Lock()
-					convID, convSub := ps.convListener, ps.convSubscription
+					convID, convSub, ws := ps.convListener, ps.convSubscription, ps.workspacePath
 					ps.mu.Unlock()
 					if convID > 0 {
-						b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), nil, mode, "running"))
+						b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, mode, phaseForSession(ps, sid)))
 						engine.SendChannelEvent(convID, b, send)
-						fmt.Printf("zcode: pushed mode snapshot session=%s mode=%s\n", sid, mode)
+						fmt.Printf("zcode: pushed mode snapshot session=%s mode=%s rows=%d\n", sid, mode, len(rows))
 					}
 				}()
 			}

@@ -9,20 +9,29 @@ package browser
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+// DefaultDockerImage is the container image used when no local chromium is
+// available (headless servers): it runs Xvfb + a Playwright-driven Chromium
+// with a CDP endpoint, plus a control service on 9223.
+const DefaultDockerImage = "ghcr.io/friddle/chrome-driverless:ca3cf9a"
+
 // Browser is a running headless chromium with a CDP debugging port.
 type Browser struct {
 	mu          sync.Mutex
 	cmd         *exec.Cmd
+	dockerName  string // non-empty when the browser runs in a docker container
 	cdpPort     string
 	generation  int64
 	id          string
@@ -30,6 +39,8 @@ type Browser struct {
 	nextTabID   int
 	debuggerURL string
 	wsURL       string
+	uiPort      string // chrome-driverless control service (9223) host port
+	viaControl  bool   // docker mode: CDP only reachable via the control service bridge
 }
 
 // Tab is one chromium page/target.
@@ -99,6 +110,112 @@ func Launch() (*Browser, error) {
 	return nil, fmt.Errorf("chromium CDP not ready on any port: %w", lastErr)
 }
 
+// LaunchDocker starts the chrome-driverless container and attaches to its CDP
+// endpoint. The container launches Chromium lazily, so we warm it up via the
+// control service (pw/init_browser) before polling CDP.
+func LaunchDocker(image string) (*Browser, error) {
+	if image == "" {
+		image = DefaultDockerImage
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		uiPort, err := freePort()
+		if err != nil {
+			return nil, err
+		}
+		b, err := launchDockerOnPort(image, uiPort)
+		if b != nil {
+			return b, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("docker chrome not ready: %w", lastErr)
+}
+
+func launchDockerOnPort(image, uiPort string) (*Browser, error) {
+	name := fmt.Sprintf("zqf-chrome-%d", time.Now().UnixMilli())
+	// Chromium binds its CDP port to container-localhost, so we do NOT publish
+	// 9222 — everything goes through the control service's DevTools bridge on
+	// 9223, which is exactly what it exists for.
+	run := exec.Command("docker", "run", "-d", "--name", name,
+		"--shm-size=1g",
+		"-p", uiPort+":9223",
+		image)
+	if out, err := run.Output(); err != nil {
+		return nil, fmt.Errorf("docker run %s: %v: %s", image, err, out)
+	}
+	b := &Browser{
+		dockerName:  name,
+		generation:  time.Now().UnixMilli(),
+		id:          fmt.Sprintf("iab:%d", time.Now().UnixMilli()),
+		tabs:        map[string]*Tab{},
+		uiPort:      uiPort,
+		viaControl:  true,
+		debuggerURL: "http://127.0.0.1:" + uiPort,
+	}
+
+	// Wait for the control service inside the container.
+	health := fmt.Sprintf("http://127.0.0.1:%s/health", uiPort)
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(health)
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Warm up: ask the control service to launch Chromium (it starts lazily).
+	go func() {
+		payload := `{"method":"pw/init_browser"}`
+		req, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("http://127.0.0.1:%s/mcp", uiPort), strings.NewReader(payload))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 150 * time.Second}
+		if resp, err := client.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+
+	// Wait for the DevTools bridge to report at least one page target.
+	deadline = time.Now().Add(150 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(b.debuggerURL + "/devtools/targets")
+		if err == nil {
+			var body struct {
+				Targets []map[string]any `json:"targets"`
+				Error   string           `json:"error"`
+			}
+			err = json.NewDecoder(resp.Body).Decode(&body)
+			resp.Body.Close()
+			if err == nil && body.Error == "" && len(body.Targets) > 0 {
+				b.refreshTabs()
+				return b, nil
+			}
+			lastErr = fmt.Errorf("devtools bridge: %v", err)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	_ = exec.Command("docker", "rm", "-f", name).Run()
+	return nil, fmt.Errorf("docker chrome devtools bridge on port %s not ready: %v", uiPort, lastErr)
+}
+
+func freePort() (string, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	defer l.Close()
+	return strconv.Itoa(l.Addr().(*net.TCPAddr).Port), nil
+}
+
 func launchOnPort(chrome, port string) (*Browser, error) {
 	b := &Browser{
 		generation: time.Now().UnixMilli(),
@@ -144,6 +261,15 @@ func launchOnPort(chrome, port string) (*Browser, error) {
 }
 
 // ID returns the browser instance id.
+// CDPPort reports the local host port serving CDP traffic (direct port for
+// local launches, the control-service bridge port in docker mode).
+func (b *Browser) CDPPort() string {
+	if b.dockerName != "" {
+		return b.uiPort
+	}
+	return b.cdpPort
+}
+
 func (b *Browser) ID() string {
 	return b.id
 }
@@ -172,26 +298,61 @@ func (b *Browser) List() []Instance {
 
 // refreshTabs lists chromium CDP targets and maps them to tabs.
 func (b *Browser) refreshTabs() {
-	var targets []struct {
-		ID    string `json:"id"`
-		Type  string `json:"type"`
-		Title string `json:"title"`
-		URL   string `json:"url"`
-		WsURL string `json:"webSocketDebuggerUrl"`
+	type target struct {
+		ID    string
+		Title string
+		URL   string
+		WsURL string
 	}
-	resp, err := http.Get(b.debuggerURL + "/json")
-	if err != nil {
-		return
+	var targets []target
+	if b.viaControl {
+		// Docker: /devtools/targets on the control service lists page targets;
+		// CDP WS goes through the bridge at /devtools/page/<id>.
+		resp, err := http.Get(b.debuggerURL + "/devtools/targets")
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Targets []struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+				URL   string `json:"url"`
+			} `json:"targets"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&body) != nil {
+			return
+		}
+		for _, t := range body.Targets {
+			targets = append(targets, target{ID: t.ID, Title: t.Title, URL: t.URL,
+				WsURL: "ws://127.0.0.1:" + b.uiPort + "/devtools/page/" + t.ID})
+		}
+	} else {
+		var list []struct {
+			ID    string `json:"id"`
+			Type  string `json:"type"`
+			Title string `json:"title"`
+			URL   string `json:"url"`
+			WsURL string `json:"webSocketDebuggerUrl"`
+		}
+		resp, err := http.Get(b.debuggerURL + "/json")
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		if json.NewDecoder(resp.Body).Decode(&list) != nil {
+			return
+		}
+		for _, t := range list {
+			if t.Type == "page" {
+				targets = append(targets, target{ID: t.ID, Title: t.Title, URL: t.URL, WsURL: t.WsURL})
+			}
+		}
 	}
-	defer resp.Body.Close()
-	_ = json.NewDecoder(resp.Body).Decode(&targets)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	seen := map[string]bool{}
 	for _, t := range targets {
-		if t.Type != "page" {
-			continue
-		}
 		seen[t.ID] = true
 		if _, ok := b.tabs[t.ID]; !ok {
 			b.nextTabID++
@@ -345,6 +506,31 @@ func (b *Browser) tabByID(id string) *Tab {
 // the tab descriptor the engine expects (Ikt: tabId/url/title/viewport).
 // Chromium 111+ requires PUT for /json/new; fall back to GET for older builds.
 func (b *Browser) newTab() (map[string]any, error) {
+	if b.viaControl {
+		// Docker: /json/new isn't bridged; use the control service MCP method.
+		payload := `{"method":"pw/new_tab","params":{"url":"about:blank"}}`
+		resp, err := http.Post(b.debuggerURL+"/mcp", "application/json", strings.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("pw/new_tab: HTTP %d", resp.StatusCode)
+		}
+		b.refreshTabs()
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		var newest *Tab
+		for _, t := range b.tabs {
+			if newest == nil || t.viewID > newest.viewID {
+				newest = t
+			}
+		}
+		if newest == nil {
+			return nil, fmt.Errorf("pw/new_tab: no tab appeared")
+		}
+		return tabPayload(newest), nil
+	}
 	target := b.debuggerURL + "/json/new?about:blank"
 	resp, err := func() (*http.Response, error) {
 		req, err := http.NewRequest(http.MethodPut, target, nil)
@@ -405,9 +591,65 @@ func (b *Browser) Navigate(url string) error {
 	return b.NavigateTab("", url)
 }
 
+// firstTabTitle returns the first page tab's title ("" when unknown).
+func (b *Browser) firstTabTitle() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, t := range b.tabs {
+		return t.Title
+	}
+	return ""
+}
+
+// mcpCall invokes a chrome-driverless control-service method (POST /mcp) and
+// returns its "result" object.
+func (b *Browser) mcpCall(method string, params map[string]any) (map[string]any, error) {
+	body, err := json.Marshal(map[string]any{"method": method, "params": params})
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Post(b.debuggerURL+"/mcp", "application/json",
+		strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Result map[string]any `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return nil, fmt.Errorf("mcp %s: bad response", method)
+	}
+	if out.Error != nil {
+		return nil, fmt.Errorf("mcp %s: %s", method, out.Error.Message)
+	}
+	return out.Result, nil
+}
+
 // NavigateTab navigates the given tab (by CDP target id) to url; empty tabID
 // uses the first page target.
 func (b *Browser) NavigateTab(tabID, url string) error {
+	if b.viaControl {
+		// Playwright owns the CDP sessions over --remote-debugging-pipe, so
+		// external page WebSockets never answer; drive it over MCP instead.
+		if _, err := b.mcpCall("pw/navigate", map[string]any{"url": url}); err != nil {
+			return err
+		}
+		// The devtools target list lags the navigation; give the title a few
+		// chances to catch up so tab descriptors aren't stuck on about:blank.
+		for i := 0; i < 5; i++ {
+			b.refreshTabs()
+			if b.firstTabTitle() != "" {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		return nil
+	}
 	wsURL, err := b.pageWS(tabID)
 	if err != nil {
 		return err
@@ -418,6 +660,17 @@ func (b *Browser) NavigateTab(tabID, url string) error {
 
 // Screenshot captures the first page via CDP Page.captureScreenshot.
 func (b *Browser) Screenshot() (string, error) {
+	if b.viaControl {
+		res, err := b.mcpCall("pw/screenshot", nil)
+		if err != nil {
+			return "", err
+		}
+		data, _ := res["image"].(string)
+		if data == "" {
+			return "", fmt.Errorf("empty screenshot")
+		}
+		return data, nil
+	}
 	wsURL, err := b.pageWS("")
 	if err != nil {
 		return "", err
@@ -459,6 +712,9 @@ func (b *Browser) cdpCall(wsURL, targetID, method string, params map[string]any)
 		return nil, err
 	}
 	defer conn.Close()
+	// Hard read deadline: the deadline loop below only runs after a message
+	// arrives, so without this a silent peer blocks us forever.
+	_ = conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	id := time.Now().UnixMilli()
 	if err := conn.WriteJSON(map[string]any{
 		"id": id, "method": method, "params": params,
@@ -492,8 +748,12 @@ func (b *Browser) cdpCall(wsURL, targetID, method string, params map[string]any)
 	return nil, fmt.Errorf("cdp %s: timeout", method)
 }
 
-// Close shuts down chromium.
+// Close shuts down chromium (local process or docker container).
 func (b *Browser) Close() {
+	if b.dockerName != "" {
+		_ = exec.Command("docker", "rm", "-f", b.dockerName).Run()
+		return
+	}
 	if b.cmd != nil && b.cmd.Process != nil {
 		_ = b.cmd.Process.Kill()
 	}

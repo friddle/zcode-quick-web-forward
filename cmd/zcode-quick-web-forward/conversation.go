@@ -39,20 +39,7 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 		c.Name == "subscribeConversationV4") && (c.Name != "subscribeSessionsIndexV4") {
 		sid, _ := ps.get()
 		if sid != "" {
-			rows := []any{}
-			if engClient != nil {
-				if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {
-					rows = messageRows(tx, sid, ps.nextOrdinal)
-					fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
-				} else if stored := zcode.LoadSessionTranscript(sid); stored != nil {
-					// Engine session gone (daemon restarted): restore from the
-					// transcript snapshot we saved when the turn completed.
-					rows = messageRows(stored, sid, ps.nextOrdinal)
-					fmt.Printf("zcode: recovery from transcript session=%s rows=%d (engine: %v)\n", sid, len(rows), err)
-				} else {
-					fmt.Printf("zcode: recovery read failed: %v (no transcript)\n", err)
-				}
-			}
+			rows := recoveryRows(engClient, ps, sid)
 			// workspacePath: prefer the one persisted for this task in sqlite.
 			ws := ps.workspacePath
 			if tasks, err := zcode.ListTasks("", ""); err == nil {
@@ -68,6 +55,28 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 			fmt.Printf("zcode: pushed recovery snapshot session=%s rows=%d\n", sid, len(rows))
 		}
 	}
+}
+
+// recoveryRows rebuilds the conversation rows for sid from the live engine
+// session, falling back to the persisted transcript snapshot when the engine
+// no longer has it (e.g. after a daemon restart).
+func recoveryRows(engClient *enginepkg.Client, ps *phoneSessions, sid string) []any {
+	rows := []any{}
+	if engClient == nil {
+		return rows
+	}
+	if tx, err := engClient.ReadSession(sid, 10*time.Second); err == nil {
+		rows = messageRows(tx, sid, ps.nextOrdinal)
+		fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
+	} else if stored := zcode.LoadSessionTranscript(sid); stored != nil {
+		// Engine session gone (daemon restarted): restore from the
+		// transcript snapshot we saved when the turn completed.
+		rows = messageRows(stored, sid, ps.nextOrdinal)
+		fmt.Printf("zcode: recovery from transcript session=%s rows=%d (engine: %v)\n", sid, len(rows), err)
+	} else {
+		fmt.Printf("zcode: recovery read failed: %v (no transcript)\n", err)
+	}
+	return rows
 }
 
 // pushConversationFrame pushes an initial conversation snapshot for the opened

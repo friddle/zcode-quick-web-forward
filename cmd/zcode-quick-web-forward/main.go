@@ -28,6 +28,12 @@ func main() {
 		case "download", "fetch":
 			doDownload(os.Args[2:])
 			return
+		case "install":
+			doInstall(os.Args[2:])
+			return
+		case "chrome":
+			doChrome(os.Args[2:])
+			return
 		case "workspace":
 			doWorkspace(os.Args[2:])
 			return
@@ -63,6 +69,11 @@ Commands:
   workspace      add/remove/list extra workspaces exposed to the phone
                  (zcode-quick-web-forward workspace add /path/to/dir)
   download       resolve/download the latest ZCode runtime
+  install chrome set up docker + the chrome-driverless browser image
+                 (--dry-run prints the steps; --doctor diagnoses an install)
+  chrome open [url] [--out PATH]
+                 drive chrome-driverless directly: open url (default
+                 https://www.baidu.com) and save a screenshot
   version        print version
 
 Flags:
