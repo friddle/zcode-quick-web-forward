@@ -37,6 +37,9 @@ func main() {
 		case "workspace":
 			doWorkspace(os.Args[2:])
 			return
+		case "update":
+			doUpdate(os.Args[2:])
+			return
 		case "version", "-version", "--version", "-v":
 			fmt.Printf("zcode-quick-web-forward %s\n", version)
 			return
@@ -68,6 +71,9 @@ Commands:
                  choose the log file (default ./r.log).
   workspace      add/remove/list extra workspaces exposed to the phone
                  (zcode-quick-web-forward workspace add /path/to/dir)
+  update         update the ZCode engine runtime only: download the latest
+                 release .deb, re-extract and install into the runtime cache
+                 (--check = only report the resolved runtime version)
   download       resolve/download the latest ZCode runtime
   install chrome set up docker + the chrome-driverless browser image
                  (--dry-run prints the steps; --doctor diagnoses an install)

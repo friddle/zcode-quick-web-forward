@@ -45,6 +45,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,12 +102,42 @@ type Handler struct {
 	OnData   func(payload json.RawMessage, reply func(payload any))
 }
 
+// lastFrameUnix tracks the last received relay frame (unix ms) for the
+// liveness monitor below.
+var lastFrameUnix atomic.Int64
+
+// watchLiveness runs alongside the relay loop. If no frame has arrived for
+// 25s (heartbeats ack every 10s) it dumps every goroutine stack to a local
+// file — a wedge anywhere in the message handlers stops the read loop, which
+// stops replies, which stalls the phone with no visible trace. The dump file
+// is the forensic record; stderr may itself be the blocked writer.
+func watchLiveness(ctx context.Context) {
+	lastFrameUnix.Store(time.Now().UnixMilli())
+	for ctx.Err() == nil {
+		if !sleepCtx(ctx, 5*time.Second) {
+			return
+		}
+		last := lastFrameUnix.Load()
+		if time.Since(time.UnixMilli(last)) < 25*time.Second {
+			continue
+		}
+		buf := make([]byte, 8<<20)
+		n := goruntime.Stack(buf, true)
+		path := fmt.Sprintf("/tmp/zqwf-stacks-%d.log", os.Getpid())
+		_ = os.WriteFile(path, buf[:n], 0o644)
+		fmt.Fprintf(os.Stderr, "webremote: liveness: no relay frames for %v — stacks in %s\n",
+			time.Since(time.UnixMilli(last)).Round(time.Second), path)
+		lastFrameUnix.Store(time.Now().UnixMilli()) // one dump per silent stretch
+	}
+}
+
 // Run drives the whole device lifecycle: register/auth, report the phone URL
 // via h.OnReady, then keep the pairing window open (heartbeat, pair
 // notifications, data forwarding, reconnect on drops) until ctx is
 // cancelled. It never returns an error for a dropped connection — it
 // retries; it only stops on ctx cancellation.
 func Run(ctx context.Context, o Options, h Handler) {
+	go watchLiveness(ctx)
 	for ctx.Err() == nil {
 		ws, st, err := connectAndAuth(o)
 		if err != nil {
@@ -158,7 +189,9 @@ func connectAndAuth(o Options) (*client, state, error) {
 
 	var authed bool
 	var readErr error
-	ws.readLoop(func(msg relayMsg) bool {
+	// Every handshake frame must arrive within 15s; a silent relay is a
+	// retryable failure, not a hang.
+	ws.readLoopDeadline(15*time.Second, func(msg relayMsg) bool {
 		switch msg.Type {
 		case "device_register_ack":
 			st.DeviceSid = msg.DeviceSid
@@ -182,6 +215,9 @@ func connectAndAuth(o Options) (*client, state, error) {
 		}
 		return nil, st, errors.New("relay handshake incomplete")
 	}
+	// Live traffic relies on the keepAlive silence watchdog, not per-frame
+	// deadlines — clear the handshake one.
+	ws.conn.SetReadDeadline(time.Time{})
 	return ws, st, nil
 }
 
@@ -206,7 +242,26 @@ func keepAlive(ctx context.Context, ws *client, sid string, h Handler) {
 		ws.send(relayMsg{Type: "data", Payload: mustJSON(payload)})
 	}
 	var lastTerminal string
+	// Liveness watchdog: the relay can silently stop routing a device (no
+	// FIN, no data — e.g. after the phone reconnected elsewhere) while the
+	// TCP socket stays open. A read stuck on such a half-dead session never
+	// returns, so the Run loop never reconnects and every later pairing
+	// attempt times out ("Desktop did not respond"). If nothing at all
+	// arrives for 30s — heartbeats ack every 10s — tear the socket down.
+	watchdog := time.AfterFunc(30*time.Second, func() {
+		fmt.Fprintln(os.Stderr, "webremote: relay silent for 30s, reconnecting")
+		// A silent relay usually means OUR side stopped answering (a wedged
+		// handler blocks the read loop, so nothing is processed or acked).
+		// Dump every goroutine stack so the wedge point is in the log.
+		buf := make([]byte, 4<<20)
+		n := goruntime.Stack(buf, true)
+		fmt.Fprintf(os.Stderr, "webremote: goroutine dump at silence:\n%s\n", buf[:n])
+		ws.close()
+	})
+	defer watchdog.Stop()
+	_ = watchdog // kept alive via resets below
 	ws.readLoop(func(msg relayMsg) bool {
+		watchdog.Reset(30 * time.Second)
 		if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
 			b, _ := json.Marshal(msg)
 			fmt.Fprintf(os.Stderr, "webremote debug << %s\n", b)
@@ -326,6 +381,10 @@ func dial(o Options) (*client, error) {
 	keyB := make([]byte, 16)
 	rand.Read(keyB)
 	path := "/ws?mid=" + url.QueryEscape(o.DeviceMid)
+	// Cap the whole handshake (TLS + upgrade response) — a server that
+	// accepts TCP but never answers the upgrade would otherwise hang this
+	// goroutine forever with no "connect failed" trace.
+	tconn.SetDeadline(time.Now().Add(20 * time.Second))
 	fmt.Fprintf(tconn, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nX-Device-ID: %s\r\n\r\n",
 		path, u.Host, base64.StdEncoding.EncodeToString(keyB), o.DeviceMid)
 	br := bufio.NewReader(tconn)
@@ -338,6 +397,8 @@ func dial(o Options) (*client, error) {
 		tconn.Close()
 		return nil, fmt.Errorf("webremote: relay upgrade failed: %s", resp.Status)
 	}
+	// Handshake complete: drop the handshake deadline for live traffic.
+	tconn.SetDeadline(time.Time{})
 	return &client{conn: tconn, br: br, done: make(chan struct{})}, nil
 }
 
@@ -376,7 +437,17 @@ func (c *client) send(m relayMsg) {
 // readLoop reads text frames and hands them to onMsg until it returns
 // false, the socket closes, or a protocol error occurs.
 func (c *client) readLoop(onMsg func(relayMsg) bool) {
+	c.readLoopDeadline(0, onMsg)
+}
+
+// readLoopDeadline is readLoop with a per-frame read deadline. A deadline > 0
+// turns a silent peer into a retryable error instead of a hung caller — the
+// register/auth handshake must not wedge forever on a half-dead connection.
+func (c *client) readLoopDeadline(deadline time.Duration, onMsg func(relayMsg) bool) {
 	for {
+		if deadline > 0 {
+			c.conn.SetReadDeadline(time.Now().Add(deadline))
+		}
 		op, payload, err := c.readFrame()
 		if err != nil {
 			if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
@@ -385,6 +456,7 @@ func (c *client) readLoop(onMsg func(relayMsg) bool) {
 			c.markClosed()
 			return
 		}
+		lastFrameUnix.Store(time.Now().UnixMilli())
 		switch op {
 		case 0x1: // text
 			var m relayMsg

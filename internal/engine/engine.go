@@ -140,6 +140,43 @@ func (c *Client) ReadSession(sessionID string, timeout time.Duration) (map[strin
 	}
 }
 
+// Call performs a generic request/response round trip with the engine and
+// returns the parsed result object.
+func (c *Client) Call(method string, params any, timeout time.Duration) (map[string]any, error) {
+	c.mu.Lock()
+	c.nextID++
+	id := c.nextID
+	ch := make(chan json.RawMessage, 1)
+	c.pending[id] = ch
+	c.mu.Unlock()
+	if !c.Write(map[string]any{"id": id, "method": method, "params": params}) {
+		c.forget(id)
+		return nil, fmt.Errorf("engine stdin closed")
+	}
+	select {
+	case line := <-ch:
+		c.forget(id)
+		var resp struct {
+			Result json.RawMessage `json:"result"`
+			Error  json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(line, &resp) != nil {
+			return nil, fmt.Errorf("bad reply")
+		}
+		if len(resp.Error) > 0 {
+			return nil, fmt.Errorf("%s: %s", method, resp.Error)
+		}
+		var m map[string]any
+		if json.Unmarshal(resp.Result, &m) != nil {
+			return nil, fmt.Errorf("bad result")
+		}
+		return m, nil
+	case <-time.After(timeout):
+		c.forget(id)
+		return nil, fmt.Errorf("%s timeout", method)
+	}
+}
+
 // SendMessage sends a user message to a session (fire-and-forget; streaming
 // results arrive via OnEvent).
 func (c *Client) SendMessage(sessionID, content string) bool {
@@ -155,6 +192,59 @@ func (c *Client) SendMessage(sessionID, content string) bool {
 			"content":   content,
 		},
 	})
+}
+
+// SubscribeSession registers the bridge as a live event subscriber so the
+// engine pushes session/event notifications during turns (model streaming
+// deltas with real text/reasoning content, tool.updated with input/output).
+// Idempotent engine-side. Fire-and-forget: the reply lands in HandleLine as
+// an unsolicited result, which it tolerates.
+func (c *Client) SubscribeSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	c.Write(map[string]any{
+		"id":     0,
+		"method": "session/subscribe",
+		"params": map[string]any{
+			"sessionId":       sessionID,
+			"deliveryKind":    "web-remote-replayable",
+			"includeSnapshot": false,
+		},
+	})
+}
+
+// StopSession interrupts the session's running turn (the phone's 停止/暂停
+// controls map here, mirroring the desktop's session/stop).
+func (c *Client) StopSession(sessionID string) bool {
+	c.mu.Lock()
+	c.nextID++
+	id := c.nextID
+	c.mu.Unlock()
+	return c.Write(map[string]any{
+		"id":     id,
+		"method": "session/stop",
+		"params": map[string]any{"sessionId": sessionID},
+	})
+}
+
+// SendMessageWithAttachments sends a user message plus file attachments (the
+// phone's upload flow). Attachments follow the engine's session/send schema:
+// [{type:"file", file:{path, name?}, ...}] — the bridge materializes uploaded
+// bytes into workspace files first and passes absolute paths.
+func (c *Client) SendMessageWithAttachments(sessionID, content string, attachments []any) bool {
+	c.mu.Lock()
+	c.nextID++
+	id := c.nextID
+	c.mu.Unlock()
+	params := map[string]any{
+		"sessionId": sessionID,
+		"content":   content,
+	}
+	if len(attachments) > 0 {
+		params["attachments"] = attachments
+	}
+	return c.Write(map[string]any{"id": id, "method": "session/send", "params": params})
 }
 
 // RespondToRequest answers an engine->client request (e.g.

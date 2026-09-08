@@ -23,7 +23,7 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 	indexID, runtimeID, convSub := ps.indexListener, ps.runtimeListener, ps.convSubscription
 	ps.mu.Unlock()
 	if indexID > 0 {
-		b, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+		b, _ := json.Marshal(sessionsIndexFrame(ps))
 		engine.SendChannelEvent(indexID, b, send)
 		fmt.Println("zcode: pushed sessions-index snapshot")
 	}
@@ -37,7 +37,22 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 	// history so the conversation is restored, not left empty.
 	if (c.Name == "resyncConversationV4" || c.Name == "resyncSessionsIndexV4" ||
 		c.Name == "subscribeConversationV4") && (c.Name != "subscribeSessionsIndexV4") {
-		sid, _ := ps.get()
+		// The recovery must target the session THE CLIENT ASKED about, not the
+		// bridge's "current" session: the phone juggles several conversations
+		// (e.g. deleting a stale draft) and a stale resync would otherwise
+		// clobber the freshly opened one.
+		var subReq struct {
+			SessionID string `json:"sessionId"`
+		}
+		if raw, ok := c.Arg.(json.RawMessage); ok {
+			_ = json.Unmarshal(raw, &subReq)
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			_ = json.Unmarshal(b, &subReq)
+		}
+		sid := subReq.SessionID
+		if sid == "" {
+			sid, _ = ps.get()
+		}
 		if sid != "" {
 			rows := recoveryRows(engClient, ps, sid)
 			// workspacePath: prefer the one persisted for this task in sqlite.
@@ -61,6 +76,15 @@ func pushSubscriptionFrames(engine *relay.BridgeEngine, send func(any), ps *phon
 // session, falling back to the persisted transcript snapshot when the engine
 // no longer has it (e.g. after a daemon restart).
 func recoveryRows(engClient *enginepkg.Client, ps *phoneSessions, sid string) []any {
+	// Prefer the REMEMBERED rows — they include everything pushed so far this
+	// turn (send bubbles, live tool cards, streamed text, queue notes). The
+	// engine transcript lags until turn.terminal, so reading it mid-turn makes
+	// a subscriber that opens during a running task see only history.
+	// Transcripts are the fallback for after a daemon restart (memory empty).
+	if rows := ps.snapshotRows(); len(rows) > 0 {
+		fmt.Printf("zcode: recovery from remembered rows session=%s rows=%d\n", sid, len(rows))
+		return rows
+	}
 	rows := []any{}
 	if engClient == nil {
 		return rows
@@ -69,8 +93,9 @@ func recoveryRows(engClient *enginepkg.Client, ps *phoneSessions, sid string) []
 		rows = messageRows(tx, sid, ps.nextOrdinal)
 		fmt.Printf("zcode: recovery read session=%s rows=%d\n", sid, len(rows))
 	} else if stored := zcode.LoadSessionTranscript(sid); stored != nil {
-		// Engine session gone (daemon restarted): restore from the
+		// Engine session gone (daemon restart): restore from the
 		// transcript snapshot we saved when the turn completed.
+		// (Continuing the task rebuilds a live session on send.)
 		rows = messageRows(stored, sid, ps.nextOrdinal)
 		fmt.Printf("zcode: recovery from transcript session=%s rows=%d (engine: %v)\n", sid, len(rows), err)
 	} else {
@@ -138,6 +163,7 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 						fmt.Printf("zcode: task title sync failed: %v\n", err)
 					} else {
 						fmt.Printf("zcode: task title synced %s title=%q\n", phoneSid, t)
+						pushWorkspaceList(sender.send, ps)
 					}
 				}
 			}
@@ -182,6 +208,11 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	// "List files in /home/friddle") so the phone list shows real names.
 	// (Handled above while reading tx["session"] for the model settings.)
 	rows := messageRows(tx, phoneSid, ps.nextOrdinal)
+	// The engine transcript doesn't carry the compaction separator, so keep
+	// the latest one visible at the end of rebuilt snapshots.
+	if mk := ps.compactMarkerFor(phoneSid); mk != nil {
+		rows = append(rows, mk)
+	}
 	if len(rows) == 0 {
 		fmt.Printf("zcode: syncConversation empty rows session=%s\n", phoneSid)
 		return
@@ -189,7 +220,7 @@ func syncConversation(engClient *enginepkg.Client, engine *relay.BridgeEngine, s
 	// The turn just ended: the projection must leave "running" — the live
 	// session stays open (follow-ups), so it completes, not drafts.
 	phase := "completedSuccess"
-	if ps.turnIsRunning() {
+	if ps.turnRunningFor(ps.engineFor(phoneSid)) {
 		phase = "running"
 	}
 	b, _ := json.Marshal(conversationSnapshotFrame(ps, phoneSid, ps.workspacePath, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, phase))
@@ -480,11 +511,16 @@ func phaseForStatus(display string) (string, bool) {
 		return "running", false
 	case "error", "failed":
 		return "error", true
-	case "completed", "completedInterrupted":
+	case "completedInterrupted":
 		return "completedInterrupted", true
+	case "completed", "completedSuccess":
+		// "completed" is displayStatus's collapsed form of every finished
+		// state — mapping it to completedInterrupted made every finished
+		// task's turn header read 已停止.
+		return "completedSuccess", true
 	case "idle", "cancelled", "paused":
 		return "draft", true
-	default: // completed / completedSuccess and unknown
+	default: // unknown
 		return "completedSuccess", true
 	}
 }

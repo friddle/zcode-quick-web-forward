@@ -89,7 +89,7 @@ func doRemoteOpts(o commonOpts) {
 	engClient := enginepkg.New()
 	sender := &relaySender{}
 
-	ps := &phoneSessions{}
+	ps := &phoneSessions{workspaces: workspaces}
 	br := launchBrowser()
 	termSvc := terminal.New()
 	termSvc.SetCallbacks(
@@ -160,7 +160,31 @@ func doRemoteOpts(o commonOpts) {
 			if atomic.LoadInt32(&engGen) == gen {
 				engineExited <- werr
 			}
+			// The dead engine's in-flight turns never emit turn.terminal;
+			// lingering running flags would ghost-block queue dispatch.
+			ps.clearAllTurnRunning()
+			// A fresh engine can pick up globally queued tasks again.
+			go func() {
+				time.Sleep(3 * time.Second)
+				dispatchGlobalQueue(engClient, engine, sender.send, ps)
+			}()
 		}()
+	}
+	// Official-host mode is the DEFAULT: the host runs alongside and serves
+	// the channels the built-in handlers don't implement (file transfers,
+	// uploads, terminal IO, automations, cua…). Opt out with
+	// ZCODE_OFFICIAL_HOST=0. OUR engine still runs either way — the built-in
+	// handlers answer the engine/task channels against it (the host's own
+	// engine path crashes without the desktop's workspace registry).
+	restartEngineFn := startEngine
+	if os.Getenv("ZCODE_OFFICIAL_HOST") != "0" {
+		cache, _ := os.UserCacheDir()
+		mid := loadOrCreateDeviceMid(filepath.Join(cache, "zcode-quick-web-forward"))
+		defWS := ""
+		if len(workspaces) > 0 {
+			defWS = workspaces[0]
+		}
+		maybeStartOfficialHost(engine, sender, node, scriptPath(rt), defWS, mid)
 	}
 	startEngine()
 
@@ -173,7 +197,10 @@ func doRemoteOpts(o commonOpts) {
 		}
 	}()
 
-	go startWebRemote(origin, region, engine, sender, startEngine, workspaces, ps, engClient, termSvc)
+	go startWebRemote(origin, region, engine, sender, restartEngineFn, workspaces, ps, engClient, termSvc)
+	go watchStoredWorkspaces(o, ps, func(ws []string) {
+		sender.send(workspaceListPush(ws, ps))
+	})
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -254,16 +281,55 @@ func (o commonOpts) baseURL() string {
 }
 
 // probeOrigin checks the relay origin answers before promising a pairing URL.
+// Degraded networks regularly push TLS setup past 5s, so tolerate 15s per
+// attempt and retry — a slow origin beats refusing to start.
 func probeOrigin(origin string) error {
-	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(strings.TrimRight(origin, "/") + "/")
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+		c := &http.Client{Timeout: 15 * time.Second}
+		resp, err := c.Get(strings.TrimRight(origin, "/") + "/")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+		if resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			continue
+		}
+		return nil
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-	if resp.StatusCode >= 500 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	return lastErr
+}
+
+// watchStoredWorkspaces polls the stored-workspace file (written by
+// `workspace add`) and hot-reloads the running remote when it changes: the
+// phone session picks up the new list and a workspace-list push goes out, so
+// no daemon restart (and no phone kick) is needed. Polling rather than
+// inotify keeps it portable; the file is tiny, and re-resolving only happens
+// on an actual content change.
+func watchStoredWorkspaces(o commonOpts, ps *phoneSessions, push func([]string)) {
+	path := zcode.StoredWorkspacesPath()
+	last := ""
+	if b, err := os.ReadFile(path); err == nil {
+		last = string(b)
 	}
-	return nil
+	for {
+		time.Sleep(2 * time.Second)
+		b, err := os.ReadFile(path)
+		if err != nil || string(b) == last {
+			continue
+		}
+		last = string(b)
+		ws := o.resolveWorkspaces()
+		ps.setWorkspaces(ws)
+		fmt.Printf("zcode: workspaces updated (hot reload): %s\n", strings.Join(ws, ", "))
+		if push != nil {
+			push(ws)
+		}
+	}
 }

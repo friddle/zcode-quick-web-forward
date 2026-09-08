@@ -132,8 +132,35 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		if pi.Prompt == "" && len(pi.Questions) > 0 {
 			pi.Prompt = pi.Questions[0]["question"].(string)
 		}
+		// Plan approval (ExitPlanMode): the engine sends input {plan: "..."}
+		// with no questions. Synthesize an approve/reject card so the phone
+		// can answer it like any question.
+		if len(pi.Questions) == 0 {
+			if plan, ok := raw.Input["plan"].(string); ok && plan != "" {
+				if len(plan) > 2000 {
+					plan = plan[:2000] + "…"
+				}
+				pi.Prompt = plan
+				pi.Questions = []map[string]any{{
+					// header is REQUIRED by the client's question schema (El).
+					"question": "是否批准该计划?", "header": "计划",
+					"options": []map[string]any{
+						{"optionId": "approve", "label": "批准"},
+						{"optionId": "reject", "label": "拒绝"},
+					},
+				}}
+				pi.IsPlanApproval = true
+			}
+		}
 		if ps.getPendingInteraction(interactionID) != nil {
 			return // engine retry of an interaction we already surfaced
+		}
+		// Retried requests carry a fresh requestId each time; supersede the
+		// stale one so the user's answer reaches the engine's active waiter.
+		if prev := ps.pendingInteractionForToolCall(rq.ToolCallID); prev != nil {
+			engClient.RespondToRequest(prev.EngineReqID, map[string]any{"action": "cancel"})
+			ps.removePendingInteraction(prev.InteractionID)
+			fmt.Printf("zcode: superseded stale interaction %s (same tool call %s)\n", prev.InteractionID, rq.ToolCallID)
 		}
 		pi.RowID = ps.nextRowID()
 		ps.addPendingInteraction(pi)
@@ -145,9 +172,14 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 		// transcript) covers the visual, the pendingInteractions patch drives
 		// the interactive question card. Bundling a synthetic row.appended
 		// here made the client drop the whole frame.
-		if b, err := json.Marshal(conversationDeltaFrame(rq.SessionID, convSub, ps.nextOrdinal(), []any{
+		if b, err := json.Marshal(conversationDeltaFrame(ps, rq.SessionID, convSub, ps.nextOrdinal(), []any{
 			map[string]any{"op": "state.updated", "patch": map[string]any{"pendingInteractions": ps.pendingInteractionsPayload()}},
 		})); err == nil && convID > 0 {
+			// Debug: dump the exact interaction entries so a client-side
+			// schema rejection can be diffed against a working card.
+			if dbg, derr := json.Marshal(ps.pendingInteractionsPayload()); derr == nil {
+				fmt.Printf("zcode: pendingInteractions payload: %s\n", dbg)
+			}
 			engine.SendChannelEvent(convID, b, sender.send)
 			// The client renders the interactive question card from the
 			// snapshot's pendingInteractions, not from the delta (verified
@@ -197,25 +229,69 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			SessionID string `json:"sessionId"`
 			Patch     struct {
 				Status string `json:"status"`
+				Mode   struct {
+					Current string `json:"current"`
+				} `json:"mode"`
 			} `json:"patch"`
 			Revision int `json:"revision"`
 		}
-		if json.Unmarshal(ev.Params, &p) == nil && p.SessionID != "" && p.Patch.Status != "" {
+		_ = json.Unmarshal(ev.Params, &p)
+		if p.SessionID == "" {
+			return
+		}
+		phoneSid := ps.phoneFor(p.SessionID)
+		ps.mu.Lock()
+		convID := ps.convListener
+		convSub := ps.convSubscription
+		ps.mu.Unlock()
+		// Engine-initiated mode changes (e.g. the agent leaving plan mode via
+		// ExitPlanMode) must flip the phone's mode picker too: mirror the
+		// engine's mode onto collabMode and push a config patch. The phone's
+		// option values are build(变更前确认)/edit(自动编辑)/plan/yolo — identity
+		// mapping; engine-only "auto" shows as edit.
+		if m := p.Patch.Mode.Current; m != "" {
+			phoneMode := m
+			if m == "auto" {
+				phoneMode = "edit"
+			}
 			ps.mu.Lock()
-			convID := ps.convListener
-			convSub := ps.convSubscription
+			ps.collabMode = phoneMode
 			ps.mu.Unlock()
-			phoneSid := ps.phoneFor(p.SessionID)
+			fmt.Printf("zcode: engine mode change %s -> phone %s (session=%s)\n", m, phoneMode, p.SessionID)
 			if convID > 0 {
-				// Engine statuses (running/completed/idle/error…) map onto the
-				// projection's phase enum before pushing the control patch.
-				phase, _ := phaseForStatus(displayStatus(p.Patch.Status))
-				b, _ := json.Marshal(stateUpdatedFrame(phoneSid, phase, convSub, ps.nextOrdinal()))
-				engine.SendChannelEvent(convID, b, sender.send)
+				if b, err := json.Marshal(conversationDeltaFrame(ps, phoneSid, convSub, ps.nextOrdinal(), []any{
+					map[string]any{"op": "state.updated", "patch": map[string]any{"config": ps.modelCfg()}},
+				})); err == nil {
+					engine.SendChannelEvent(convID, b, sender.send)
+				}
 			}
 		}
+		if p.Patch.Status != "" && convID > 0 {
+			// Engine statuses (running/completed/idle/error…) map onto the
+			// projection's phase enum before pushing the control patch.
+			phase, _ := phaseForStatus(displayStatus(p.Patch.Status))
+			b, _ := json.Marshal(stateUpdatedFrame(ps, phoneSid, phase, convSub, ps.nextOrdinal()))
+			engine.SendChannelEvent(convID, b, sender.send)
+		}
+	case "session/event":
+		// Rich event stream pushed after session/subscribe: model.streaming
+		// carries REAL text/reasoning/tool-input deltas, tool.updated carries
+		// real results — the content parity channel (telemetry only counts).
+		var p struct {
+			Session string `json:"sessionId"`
+		}
+		if json.Unmarshal(ev.Params, &p) != nil || p.Session == "" {
+			return
+		}
+		rawParams := map[string]any{}
+		_ = json.Unmarshal(ev.Params, &rawParams)
+		if phoneSid := ps.phoneFor(p.Session); phoneSid != "" {
+			handleSessionEvent(engine, sender.send, ps, p.Session, phoneSid, rawParams)
+		}
 	case "v4/telemetry/event":
-		// stream.chunk carries the assistant's streaming text.
+		// Telemetry drives everything the phone sees while a turn RUNS: tool
+		// lifecycle becomes live tool cards, stream.chunk counters become
+		// ticking 思考中/生成中 rows, turn.terminal finalizes the transcript.
 		var p struct {
 			Kind    string `json:"kind"`
 			Channel string `json:"channel"`
@@ -223,39 +299,61 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			Chunk   string `json:"chunk"`
 			Status  string `json:"status"`
 		}
+		rawParams := map[string]any{}
 		if json.Unmarshal(ev.Params, &p) != nil {
 			return
 		}
-		if p.Kind == "stream.chunk" && p.Channel == "text" && p.Session != "" {
-			ps.mu.Lock()
-			convID := ps.convListener
-			convSub := ps.convSubscription
-			ps.mu.Unlock()
-			phoneSid := ps.phoneFor(p.Session)
-			if convID > 0 {
-				b, _ := json.Marshal(conversationChunkFrame(phoneSid, p.Chunk, convSub, ps.nextOrdinal()))
-				engine.SendChannelEvent(convID, b, sender.send)
+		_ = json.Unmarshal(ev.Params, &rawParams)
+		if p.Kind == "tool.lifecycle" && p.Session != "" {
+			if phoneSid := ps.phoneFor(p.Session); phoneSid != "" {
+				handleLiveToolEvent(engine, sender.send, ps, p.Session, phoneSid, rawParams)
+			}
+		}
+		if p.Kind == "stream.chunk" && p.Session != "" {
+			// The telemetry chunk carries only a length (no body) — push a
+			// ticking placeholder row instead of an empty-text row per chunk.
+			if phoneSid := ps.phoneFor(p.Session); phoneSid != "" {
+				handleLiveChunkEvent(engine, sender.send, ps, p.Session, phoneSid, rawParams)
 			}
 		}
 		if p.Kind == "turn.terminal" && p.Session != "" {
+			// The turn is over: flush the last streamed content as complete
+			// rows, then drop the synthetic live rows (the transcript snapshot
+			// below replaces them with the real rows).
+			phoneSid := ps.phoneFor(p.Session)
+			ps.mu.Lock()
+			var deltas []any
+			if lt := ps.live[p.Session]; lt != nil {
+				deltas = lt.flushLiveTurn(ps.currentTurnIDLocked(phoneSid))
+			}
+			ps.endLiveTurn(p.Session)
+			ps.mu.Unlock()
+			pushLiveDeltas(engine, sender.send, ps, phoneSid, deltas)
 			// The engine session may be a rebuilt continuation of a phone task;
 			// update the phone-visible task and push under its id.
-			phoneSid := ps.phoneFor(p.Session)
-			st := p.Status
-			if st != "success" && st != "interrupted" && st != "failed" {
-				st = "completed"
-			}
 			go func(sid string) {
 				ws, title := taskMeta(ps, sid)
+				// Normalize the engine's terminal status to the display
+				// vocabulary — "success" isn't recognized downstream and made
+				// finished tasks show as 运行中 forever.
+				st := "completed"
+				switch p.Status {
+				case "failed", "error":
+					st = "failed"
+				case "interrupted", "cancelled":
+					st = "interrupted"
+				}
 				if ws != "" {
 					if err := zcode.UpsertTask(ws, ws, sid, title, st); err != nil {
 						fmt.Printf("zcode: task finalize failed: %v\n", err)
 					}
 				}
+				// Landing list (项目 tabs) must reflect the new status.
+				pushWorkspaceList(sender.send, ps)
 			}(phoneSid)
 			// The turn is over: queued submissions (sent while this turn was
 			// running) may now dispatch.
-			ps.setTurnRunning(false)
+			ps.setTurnRunning(p.Session, false)
 			// Mirror the desktop's completed-state patch: control back to idle,
 			// activeWorks cleared, follow-ups route startNow again. The
 			// controller tasks-index is refreshed too so the sidebar's live
@@ -268,7 +366,7 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				controllerID := ps.listeners["controllerFrame"]
 				ps.mu.Unlock()
 				if convID > 0 && psid != "" {
-					b, _ := json.Marshal(stateUpdatedFrame(psid, "completedSuccess", csub, ps.nextOrdinal()))
+					b, _ := json.Marshal(stateUpdatedFrame(ps, psid, "completedSuccess", csub, ps.nextOrdinal()))
 					engine.SendChannelEvent(convID, b, sender.send)
 				}
 				if controllerID > 0 {
@@ -287,13 +385,16 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 			// first, so give it a head start).
 			go func(engSid, psid string) {
 				time.Sleep(1800 * time.Millisecond)
-				ps.mu.Lock()
-				live := ps.sessionId == psid && !ps.turnRunning
-				ps.mu.Unlock()
-				if !live {
+				if ps.turnRunningFor(engSid) || engClient == nil {
 					return
 				}
-				q, ok := ps.popQueuedSend()
+				// Serial mode first: a queued NEW task may be waiting; only
+				// drain the same-conversation queue when none is.
+				if ps.queuedGlobalCount() > 0 {
+					dispatchGlobalQueue(engClient, engine, sender.send, ps)
+					return
+				}
+				q, ok := ps.popQueuedSend(psid)
 				if !ok {
 					return
 				}
@@ -301,7 +402,8 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					ps.enqueueSend(q) // engine gone — put it back
 					return
 				}
-				ps.setTurnRunning(true)
+				ps.setTurnRunning(engSid, true)
+				engClient.SubscribeSession(engSid)
 				if zcode.TaskExists(psid) {
 					_ = zcode.SetTaskStatus(psid, "running")
 				}
@@ -311,27 +413,27 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 				indexID := ps.indexListener
 				ps.mu.Unlock()
 				now := time.Now().UnixMilli()
-				turnID := "turn-" + psid
+				turnID := ps.beginTurn(psid)
 				hdr := map[string]any{
-					"rowId":        1,
+					"rowId":        ps.nextRowID(),
 					"turnId":       turnID,
 					"createdAt":    now,
-					"createdAtSeq": 1,
+					"createdAtSeq": now,
 					"kind":         "turnHeader",
 					"origin":       "userInput",
 					"state":        "running",
 					"startedAt":    now,
 				}
 				row := map[string]any{
-					"rowId":        2,
+					"rowId":        ps.nextRowID(),
 					"turnId":       turnID,
 					"createdAt":    now,
-					"createdAtSeq": 2,
+					"createdAtSeq": now,
 					"kind":         "userInput",
 					"text":         q.text,
 					"origin":       "realUser",
 				}
-				rows := append(ps.snapshotRows(), []any{hdr, row}...)
+				rows := append(ps.snapshotRows(), liveTailBoundary(ps.nextRowID(), turnID), hdr, row)
 				ps.rememberRows(rows)
 				if convID > 0 {
 					frame := conversationSnapshotFrame(ps, psid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running")
@@ -341,10 +443,18 @@ func handleEngineEvent(engClient *enginepkg.Client, engine *relay.BridgeEngine, 
 					fmt.Printf("zcode: drained queued send session=%s text=%q\n", psid, q.text)
 				}
 				if indexID > 0 {
-					ib, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+					ib, _ := json.Marshal(sessionsIndexFrame(ps))
 					engine.SendChannelEvent(indexID, ib, sender.send)
 				}
 			}(p.Session, phoneSid)
+			// Also give the serial queue a (later) chance in case the
+			// per-conversation drain above didn't pick anything up.
+			go func() {
+				time.Sleep(4 * time.Second)
+				if !ps.turnRunningFor(p.Session) {
+					dispatchGlobalQueue(engClient, engine, sender.send, ps)
+				}
+			}()
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -43,13 +44,49 @@ type Task struct {
 	Archived      bool   `json:"archived"`
 }
 
-// openTaskDB opens the tasks-index sqlite database.
+// taskSchemaOnce guards the CREATE TABLE so a fresh server install (no
+// desktop app ever ran there) still gets a usable task index; without it
+// every query failed with "no such table: tasks" and sessions were never
+// persisted.
+var taskSchemaOnce sync.Once
+
+// openTaskDB opens the tasks-index sqlite database, creating the tasks table
+// when missing. The schema mirrors the columns our queries and UpsertTask
+// use; CREATE TABLE IF NOT EXISTS is a no-op when the desktop's own table is
+// already there.
 func openTaskDB() (*sql.DB, error) {
 	path := filepath.Join(Home(), "v2", "tasks-index.sqlite")
 	if _, err := os.Stat(path); err != nil {
+		// Create an empty index so first-run installs work headless.
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, err
+		}
+	}
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(3000)")
+	if err != nil {
 		return nil, err
 	}
-	return sql.Open("sqlite", "file:"+path+"?mode=ro")
+	taskSchemaOnce.Do(func() {
+		_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS tasks (
+			workspace_key   TEXT NOT NULL DEFAULT '',
+			workspace_path  TEXT NOT NULL DEFAULT '',
+			task_id         TEXT PRIMARY KEY,
+			title           TEXT NOT NULL DEFAULT '',
+			task_status     TEXT NOT NULL DEFAULT '',
+			mode            TEXT NOT NULL DEFAULT 'build',
+			model           TEXT NOT NULL DEFAULT '',
+			created_at      INTEGER NOT NULL DEFAULT 0,
+			updated_at      INTEGER NOT NULL DEFAULT 0,
+			unread_at       INTEGER NOT NULL DEFAULT 0,
+			last_unread_at  INTEGER NOT NULL DEFAULT 0,
+			deleted         INTEGER NOT NULL DEFAULT 0,
+			archived        INTEGER NOT NULL DEFAULT 0,
+			pinned          INTEGER NOT NULL DEFAULT 0,
+			meta_json       TEXT NOT NULL DEFAULT '{}',
+			searchable_text TEXT NOT NULL DEFAULT ''
+		)`)
+	})
+	return db, nil
 }
 
 // UpsertTask records (or updates) a task in the real task index. The engine's
@@ -479,6 +516,12 @@ func DefaultModel() (provider, model string) {
 // It lives next to the desktop's other state so a running remote picks it up.
 func workspaceStorePath() string {
 	return filepath.Join(Home(), "v2", "zqf-workspaces.json")
+}
+
+// StoredWorkspacesPath exposes the stored-workspace file path so a running
+// remote can watch it and hot-reload after `workspace add`.
+func StoredWorkspacesPath() string {
+	return workspaceStorePath()
 }
 
 // StoredWorkspaces returns the extra workspaces registered via `workspace add`

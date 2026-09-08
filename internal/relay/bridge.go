@@ -351,8 +351,10 @@ func (e *BridgeEngine) PumpServerLine(line []byte, send func(any)) {
 }
 
 // HandlePhonePayload processes one phone data payload. onCall receives
-// decoded channel requests (Promise/EventListen); send replies to the phone.
-func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any), onCall func(*ChannelCall)) {
+// decoded channel requests (Promise/EventListen); onRaw receives assembled
+// channel messages that are NOT calls (initialize acks etc.); send replies
+// to the phone.
+func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any), onCall func(*ChannelCall), onRaw func([]byte)) {
 	var head struct {
 		ZcodeType string `json:"zcode_type"`
 	}
@@ -380,6 +382,10 @@ func (e *BridgeEngine) HandlePhonePayload(payload json.RawMessage, send func(any
 			}
 			return
 		}
+		if onRaw != nil {
+			onRaw(msg)
+			return
+		}
 		e.mu.Lock()
 		sink := e.sink
 		e.mu.Unlock()
@@ -398,4 +404,41 @@ func jsonRawMarshal(v any) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return b
+}
+
+// ChannelCallBytes serializes a decoded call back to wire form so it can be
+// forwarded to another endpoint speaking the same channel protocol (the
+// official host's service port).
+func ChannelCallBytes(c *ChannelCall) []byte {
+	var arg any
+	if c.Arg != nil {
+		arg = c.Arg
+	}
+	return buildMessage([]any{c.Kind, c.ID, c.ChannelName, c.Name}, arg)
+}
+
+// SendRawChannelBytes pushes raw channel-protocol bytes to the phone as
+// rpc-frames (used by the official-host bridge: the host's service-port
+// responses are already valid channel messages for the client).
+func (e *BridgeEngine) SendRawChannelBytes(b []byte, send func(any)) {
+	e.sendChannelBytes(b, send)
+}
+
+// WriteSink feeds raw channel bytes into the attached engine's stdin
+// (built-in mode: uncategorized client messages are proxied to app-server).
+func (e *BridgeEngine) WriteSink(msg []byte) {
+	e.mu.Lock()
+	sink := e.sink
+	e.mu.Unlock()
+	if sink != nil {
+		_, _ = sink.Write(msg)
+	}
+}
+
+// HasIdentity reports whether a phone workspace bridge has been opened
+// (rpc-frames can only be encoded once the bridge identity is known).
+func (e *BridgeEngine) HasIdentity() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.identity.BridgeSessionID != ""
 }

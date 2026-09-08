@@ -7,7 +7,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
@@ -18,7 +21,7 @@ import (
 // subscription ids so we can push conversation/sessions-index frames. The
 // subscriptionId must be stable across subscribe ack / pushed frames / resync.
 type phoneSessions struct {
-	mu sync.Mutex
+	mu debugMutex
 	// sessionId currently open in the phone (minted by createSession ack)
 	sessionId string
 	// workspacePath of the current bridge
@@ -36,8 +39,10 @@ type phoneSessions struct {
 	// collabMode is the phone's current collaboration mode
 	// (confirm/edit/plan/yolo). confirm means Edit/Write need asking.
 	collabMode string
-	// turnRunning mirrors whether the live session has a turn in flight.
-	turnRunning bool
+	// runningSids tracks which engine sessions have a turn in flight.
+	// Multiple phone tasks can run turns concurrently; a send that targets a
+	// *different* session must not be queued behind it.
+	runningSids map[string]bool
 	// pendingQueue holds sendText submissions that arrived while a turn was
 	// still running. The phone renders them as queued bubbles (projection
 	// queue.items); they drain FIFO on turn.terminal.
@@ -73,18 +78,111 @@ type phoneSessions struct {
 	// pendingInteractions list; the phone answers via the resolveInteraction
 	// conversation command.
 	pendingInteractions map[string]*pendingInteraction
+	// compactMarkers remembers the latest completed context-compaction marker
+	// per phone session. The engine transcript doesn't carry the separator,
+	// so transcript syncs re-append it to keep it visible.
+	compactMarkers map[string]map[string]any
+	// answeredCmds remembers recent conversation-command acks by commandId.
+	// The phone transport re-delivers a command when its ack races the client
+	// retry window; a repeat must replay the ack, never execute again.
+	answeredCmds  map[string]map[string]any
+	answeredOrder []string
+	// workspaces is the bridge's workspace list, used to rebuild the phone's
+	// workspace/task landing list when tasks change.
+	workspaces []string
+	// indexSubID is the sessions-index stream's OWN subscription id. Sharing
+	// the conversation subscription id made the client route index frames into
+	// the conversation stream (or drop them), leaving @ 会话 mentions empty.
+	indexSubID string
+	// live tracks the synthetic live-streaming rows (tool cards, 思考中/生成中
+	// counters) per engine session, keyed by engine session id. Guarded by mu;
+	// see streaming.go.
+	live map[string]*liveTurn
+	// convoSeq is the conversation projection's transcript seq ledger. The
+	// client drops a deltas frame unless fromSeq equals its current seq and
+	// toSeq is newer (otherwise it either silently drops the frame or flags a
+	// 帧断档 and re-subscribes, wiping freshly applied rows) — every snapshot
+	// resets to 1 and every deltas frame continues from there. Guarded by mu.
+	convoSeq int
+	// turnSeqs/curTurn track the per-phone-session turn counter and the live
+	// turn's row turnId (multi-turn sessions need unique turn ids or the
+	// client's timeline merges every turn into one segment). Guarded by mu.
+	turnSeqs map[string]int
+	curTurn  map[string]string
+	// globalQueue holds NEW tasks waiting for the previous task's turn to end
+	// (serial execution). Guarded by mu.
+	globalQueue []globalQueuedTask
+}
+
+// convoFrameSeq returns the (fromSeq, toSeq) for one conversation frame.
+// Snapshots carry seq 1 and reset the ledger; deltas continue from the
+// client's current seq and bump it by one.
+func (p *phoneSessions) convoFrameSeq(isSnapshot bool) (int, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if isSnapshot {
+		p.convoSeq = 1
+		return 1, 1
+	}
+	from := p.convoSeq
+	if from < 1 {
+		from = 1
+	}
+	p.convoSeq = from + 1
+	return from, from + 1
+}
+
+// indexSub returns the sessions-index subscription id, minted once.
+func (p *phoneSessions) indexSub() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.indexSubID == "" {
+		p.indexSubID = "idx-" + uuidNew()
+	}
+	return p.indexSubID
+}
+
+// indexWorkspace returns the workspace path the sessions index is scoped to
+// (the workspace the phone currently has open), defaulting to the first
+// configured one.
+func (p *phoneSessions) indexWorkspace() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.workspacePath != "" {
+		return p.workspacePath
+	}
+	if len(p.workspaces) > 0 {
+		return p.workspaces[0]
+	}
+	return ""
+}
+
+// workspacesList returns the configured workspace paths.
+func (p *phoneSessions) workspacesList() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.workspaces
+}
+
+// setWorkspaces replaces the configured workspace paths (hot reload after a
+// `workspace add`; the next workspace-list push carries the new entries).
+func (p *phoneSessions) setWorkspaces(ws []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.workspaces = ws
 }
 
 // pendingInteraction is one engine question awaiting a user answer.
 type pendingInteraction struct {
-	InteractionID string
-	EngineReqID   json.RawMessage
-	SessionID     string
-	ToolCallID    string
-	Prompt        string
-	Questions     []map[string]any // {question, options:[{optionId,label}]}
-	Input         map[string]any   // the engine's original request input (questions verbatim)
-	RowID         int              // conversation row showing the question
+	InteractionID  string
+	EngineReqID    json.RawMessage
+	SessionID      string
+	ToolCallID     string
+	Prompt         string
+	Questions      []map[string]any // {question, options:[{optionId,label}]}
+	Input          map[string]any   // the engine's original request input (questions verbatim)
+	RowID          int              // conversation row showing the question
+	IsPlanApproval bool             // ExitPlanMode-style card (approve/reject)
 }
 
 func (p *phoneSessions) recordListener(kind string, id int) {
@@ -182,6 +280,9 @@ type queuedSend struct {
 	queueItemID     string
 	clientID        string
 	admittedAt      int64
+	// sessionId is the phone-visible task this submission belongs to, so
+	// concurrent tasks drain their own queues instead of crossing wires.
+	sessionId string
 }
 
 // queueItemPayload renders a queued send in the phone's official queue-item
@@ -209,10 +310,20 @@ func (p *phoneSessions) enqueueSend(q queuedSend) {
 	p.mu.Unlock()
 }
 
-// popQueuedSend removes and returns the next queued submission, if any.
-func (p *phoneSessions) popQueuedSend() (queuedSend, bool) {
+// popQueuedSend removes and returns the next queued submission bound to one
+// phone session (empty sid takes the global head, for compatibility).
+func (p *phoneSessions) popQueuedSend(sid string) (queuedSend, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if sid != "" {
+		for i, q := range p.pendingQueue {
+			if q.sessionId == sid {
+				p.pendingQueue = append(p.pendingQueue[:i], p.pendingQueue[i+1:]...)
+				return q, true
+			}
+		}
+		return queuedSend{}, false
+	}
 	if len(p.pendingQueue) == 0 {
 		return queuedSend{}, false
 	}
@@ -232,18 +343,34 @@ func (p *phoneSessions) queueItemsPayload() []any {
 	return out
 }
 
-// setTurnRunning records whether the live session has a turn in flight.
-func (p *phoneSessions) setTurnRunning(v bool) {
-	p.mu.Lock()
-	p.turnRunning = v
-	p.mu.Unlock()
-}
-
-// turnIsRunning reports whether a turn is in flight for the live session.
-func (p *phoneSessions) turnIsRunning() bool {
+// setTurnRunning records whether one engine session has a turn in flight.
+func (p *phoneSessions) setTurnRunning(sid string, v bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.turnRunning
+	if p.runningSids == nil {
+		p.runningSids = map[string]bool{}
+	}
+	if v {
+		p.runningSids[sid] = true
+	} else {
+		delete(p.runningSids, sid)
+	}
+}
+
+// turnRunningFor reports whether a turn is in flight for one engine session.
+func (p *phoneSessions) turnRunningFor(sid string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.runningSids[sid]
+}
+
+// clearAllTurnRunning resets every in-flight turn flag. Called when the
+// engine process exits: its turns will never emit turn.terminal, so the
+// flags must not linger (they would ghost-block queueing logic).
+func (p *phoneSessions) clearAllTurnRunning() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.runningSids = map[string]bool{}
 }
 
 // rememberRows stores the rows of the last conversation snapshot.
@@ -260,6 +387,115 @@ func (p *phoneSessions) snapshotRows() []any {
 	out := make([]any, len(p.lastRows))
 	copy(out, p.lastRows)
 	return out
+}
+
+// appendRemembered extends the remembered conversation rows (send bubbles,
+// live tool cards, streaming text) without discarding earlier rows — recovery
+// snapshots replay these so a mid-turn subscriber sees the turn so far.
+func (p *phoneSessions) appendRemembered(rows []any) {
+	p.mu.Lock()
+	p.lastRows = append(p.lastRows, rows...)
+	p.mu.Unlock()
+}
+
+// rememberUpsert replaces a remembered row in place by rowId (live tool cards
+// flip running→success / gain output after the fact).
+func (p *phoneSessions) rememberUpsert(row map[string]any) {
+	id, _ := row["rowId"].(int)
+	p.mu.Lock()
+	for i, r := range p.lastRows {
+		if m, ok := r.(map[string]any); ok {
+			if mid, _ := m["rowId"].(int); mid == id {
+				p.lastRows[i] = row
+				break
+			}
+		}
+	}
+	p.mu.Unlock()
+}
+
+// beginTurn mints the phone-side row turnId for a new turn
+// ("turn-<shortSid>-<n>", matching the transcript mapper's per-turn
+// convention) and records it as the session's live turn.
+func (p *phoneSessions) beginTurn(phoneSid string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.turnSeqs == nil {
+		p.turnSeqs = map[string]int{}
+	}
+	p.turnSeqs[phoneSid]++
+	id := fmt.Sprintf("turn-%s-%d", shortSessionID(phoneSid), p.turnSeqs[phoneSid])
+	if p.curTurn == nil {
+		p.curTurn = map[string]string{}
+	}
+	p.curTurn[phoneSid] = id
+	return id
+}
+
+// currentTurnID returns the live turn's row turnId for a phone session so
+// live-streamed rows attach to the turn the phone can see.
+func (p *phoneSessions) currentTurnID(phoneSid string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.currentTurnIDLocked(phoneSid)
+}
+
+// currentTurnIDLocked is currentTurnID for callers already holding p.mu.
+// Go mutexes are not reentrant — calling the locking variant while holding
+// p.mu self-deadlocks and wedges every handler behind it.
+func (p *phoneSessions) currentTurnIDLocked(phoneSid string) string {
+	if t, ok := p.curTurn[phoneSid]; ok && t != "" {
+		return t
+	}
+	return "turn-" + phoneSid
+}
+
+// globalQueuedTask is a NEW task waiting for the previous task's turn to end —
+// the serial execution mode (多任务排队,一个跑完才跑下一个).
+type globalQueuedTask struct {
+	engineSid string
+	phoneSid  string
+	text      string
+	queuedAt  int64
+}
+
+// enqueueGlobalTask parks a new task while another turn is running.
+func (p *phoneSessions) enqueueGlobalTask(t globalQueuedTask) {
+	p.mu.Lock()
+	p.globalQueue = append(p.globalQueue, t)
+	p.mu.Unlock()
+}
+
+// popGlobalTask dequeues the next waiting task.
+func (p *phoneSessions) popGlobalTask() (globalQueuedTask, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.globalQueue) == 0 {
+		return globalQueuedTask{}, false
+	}
+	t := p.globalQueue[0]
+	p.globalQueue = p.globalQueue[1:]
+	return t, true
+}
+
+// anyTurnRunning reports whether ANY engine session currently has a turn in
+// flight (the serial queue's busy signal).
+func (p *phoneSessions) anyTurnRunning() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, running := range p.runningSids {
+		if running {
+			return true
+		}
+	}
+	return false
+}
+
+// queuedGlobalCount reports the pending serial-queue depth.
+func (p *phoneSessions) queuedGlobalCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.globalQueue)
 }
 
 // runtimeTask adds a session created by the engine so it shows in the phone.
@@ -313,8 +549,13 @@ func (p *phoneSessions) liveTaskIDs() map[string]bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := map[string]bool{}
-	if p.turnRunning && p.sessionId != "" {
-		out[p.sessionId] = true
+	for esid := range p.runningSids {
+		for phone, e := range p.resumeAlias {
+			if e == esid {
+				out[phone] = true
+			}
+		}
+		out[esid] = true
 	}
 	for id, t := range p.runtimeTasks {
 		if s, _ := t["displayStatus"].(string); s == "running" {
@@ -417,11 +658,17 @@ func (p *phoneSessions) setModelConfig(provider, model, thought string) {
 	}
 }
 
+// rowIDSeqMu guards rowIDSeq separately from phoneSessions.mu: row ids are
+// minted inside live-streaming handlers that already hold ps.mu (sync.Mutex
+// is not reentrant — reusing ps.mu here deadlocked the engine event reader
+// on the first streamed chunk).
+var rowIDSeqMu sync.Mutex
+
 // nextRowID mints strictly-increasing conversation row ids for live rows
-// (queue bubbles, model-change markers, question cards).
+// (queue bubbles, model-change markers, question cards, live tool cards).
 func (p *phoneSessions) nextRowID() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	rowIDSeqMu.Lock()
+	defer rowIDSeqMu.Unlock()
 	if p.rowIDSeq < 100000 {
 		p.rowIDSeq = 100000
 	}
@@ -470,6 +717,47 @@ func (p *phoneSessions) getPendingInteraction(interactionID string) *pendingInte
 	return p.pendingInteractions[interactionID]
 }
 
+// setCompactMarker stores the latest completed context-compaction marker for
+// a phone session so transcript syncs can re-append the separator row.
+func (p *phoneSessions) setCompactMarker(sid string, row map[string]any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.compactMarkers == nil {
+		p.compactMarkers = map[string]map[string]any{}
+	}
+	p.compactMarkers[sid] = row
+}
+
+// compactMarkerFor returns the stored compaction marker for a session, if any.
+func (p *phoneSessions) compactMarkerFor(sid string) map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.compactMarkers[sid]
+}
+
+// replayOrRemember dedupes conversation commands by commandId. It returns
+// (previousAck, true) for a repeat — the caller must re-reply, not execute —
+// and (nil, false) after remembering a fresh command. The remembered map is
+// the live ack object the first execution fills in, so replays carry the
+// original result.
+func (p *phoneSessions) replayOrRemember(cmdID string, ack map[string]any) (map[string]any, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.answeredCmds == nil {
+		p.answeredCmds = map[string]map[string]any{}
+	}
+	if prev, ok := p.answeredCmds[cmdID]; ok {
+		return prev, true
+	}
+	p.answeredCmds[cmdID] = ack
+	p.answeredOrder = append(p.answeredOrder, cmdID)
+	if len(p.answeredOrder) > 256 {
+		delete(p.answeredCmds, p.answeredOrder[0])
+		p.answeredOrder = p.answeredOrder[1:]
+	}
+	return nil, false
+}
+
 // oldestPendingInteractionFor returns the earliest pending question for a
 // session, if any. The engine is blocked while one is open, so a typed
 // composer message counts as the answer.
@@ -486,6 +774,24 @@ func (p *phoneSessions) oldestPendingInteractionFor(sessionID string) *pendingIn
 		}
 	}
 	return best
+}
+
+// pendingInteractionForToolCall finds an already-surfaced interaction for one
+// engine tool call. The engine re-issues plan approvals with a NEW requestId
+// on every retry, so matching by ToolCallID is the only way to supersede the
+// stale request instead of stacking duplicate cards.
+func (p *phoneSessions) pendingInteractionForToolCall(toolCallID string) *pendingInteraction {
+	if toolCallID == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, pi := range p.pendingInteractions {
+		if pi.ToolCallID == toolCallID {
+			return pi
+		}
+	}
+	return nil
 }
 
 // pendingInteractionsPayload renders the pending questions in the official
@@ -508,8 +814,12 @@ func (p *phoneSessions) pendingInteractionsPayload() []any {
 				qo = append(qo, map[string]any{"value": o["optionId"], "label": o["label"]})
 			}
 			entry := map[string]any{"question": q["question"], "options": qo}
+			// header is REQUIRED by the client's question schema (El) — never
+			// omit it, even for synthesized cards.
 			if h, _ := q["header"].(string); h != "" {
 				entry["header"] = h
+			} else {
+				entry["header"] = "确认"
 			}
 			questions = append(questions, entry)
 			// The interaction-level option list mirrors the first question —
@@ -620,4 +930,30 @@ func (p *phoneSessions) modelCfg() map[string]any {
 		"followupMode":  "queue",
 		"mode":          mode,
 	}
+}
+
+// debugMutex wraps sync.Mutex recording the holder's stack, so a wedged
+// phoneSessions lock can be diagnosed from a goroutine dump or /tmp log
+// instead of silently freezing the phone bridge.
+type debugMutex struct {
+	mu     sync.Mutex
+	holder atomic.Value // string: holder stack snapshot
+}
+
+func (d *debugMutex) Lock() {
+	t0 := time.Now()
+	d.mu.Lock()
+	b := make([]byte, 4096)
+	n := runtime.Stack(b, false)
+	d.holder.Store(string(b[:n]))
+	if wait := time.Since(t0); wait > 2*time.Second {
+		if h, ok := d.holder.Load().(string); ok {
+			fmt.Fprintf(os.Stderr, "zcode: phoneSessions.mu waited %v (previous holder below)\n%s", wait, h)
+		}
+	}
+}
+
+func (d *debugMutex) Unlock() {
+	d.holder.Store("")
+	d.mu.Unlock()
 }

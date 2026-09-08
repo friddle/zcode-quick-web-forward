@@ -14,7 +14,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path = self.translate_path(self.path)
         if os.path.isdir(path):
             path = os.path.join(path, "index.html")
-        if not os.path.isfile(path) and self.path.startswith("/remote/v4/assets/"):
+        if not os.path.isfile(path) and self.path.startswith("/remote/v4/"):
             rel = self.path.split("?")[0].lstrip("/")
             os.makedirs(os.path.dirname(os.path.join(DOCROOT, rel)), exist_ok=True)
             try:

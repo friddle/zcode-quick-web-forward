@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"time"
 
 	enginepkg "github.com/friddle/zcode-quick-web-forward/internal/engine"
@@ -137,8 +139,6 @@ func translateChannelMethod(c *relay.ChannelCall, workspaces []string) (method, 
 			body["model"] = in.Model
 		}
 		return "workspace/setDefaultModel", withWorkspace(body)
-	case "zcode-session/readWorkspaceState":
-		return "workspace/readState", withWorkspace(nil)
 	case "zcode-session/setModel":
 		// session/setModel is strict: only sessionId + model (+persist flag).
 		var in struct {
@@ -286,25 +286,57 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 			"locale":         "zh-CN",
 			"dataBaseDir":    homeDir,
 			"defaultHomeDir": homeDir,
+			// newer web clients read info().homedir and .trim() it
+			"homedir": homeDir,
 		})
 	case "system/info":
+		homeDir, _ := os.UserHomeDir()
+		sysUser := ""
+		if u, err := userCurrentName(); err == nil {
+			sysUser = u
+		}
+		userName, displayName := sysUser, ""
+		if ui := loadZcodeUserInfo(); ui != nil {
+			userName = ui.displayUsername()
+			displayName = ui.displayUsername()
+		}
 		reply(map[string]any{
 			"version":       "0.7.0",
 			"appName":       "zcode-quick-web-forward",
-			"platform":      "linux",
-			"arch":          "amd64",
+			"platform":      platformKey(),
+			"arch":          goruntime.GOARCH,
 			"nodeVersion":   "",
 			"runtime":       "web-remote",
-			"home":          "",
-			"userName":      "",
-			"workspacePath": "/home/friddle/zqf-work",
+			"home":          homeDir,
+			"homedir":       homeDir,
+			"userName":      userName,
+			"displayName":   displayName,
+			"workspacePath": workspaceListFirst(workspaces),
 		})
 	case "setting/update":
 		reply(map[string]any{})
 	case "oauth/restoreCachedSessionState":
-		reply(map[string]any{})
+		if ui := loadZcodeUserInfo(); ui != nil {
+			reply(map[string]any{
+				"status":   "authenticated",
+				"provider": "zai",
+				"userInfo": map[string]any{
+					"username":    ui.displayUsername(),
+					"displayName": ui.displayUsername(),
+					"email":       ui.Email,
+					"avatar":      ui.Avatar,
+					"userId":      ui.UserID,
+				},
+			})
+		} else {
+			reply(map[string]any{"status": "not-authenticated", "userInfo": nil})
+		}
 	case "oauth/getActiveProvider":
-		reply(nil)
+		if loadZcodeUserInfo() != nil {
+			reply("zai")
+		} else {
+			reply(nil)
+		}
 	case "git/refresh":
 		reply([]any{})
 	case "coding-plan-subscription/getBillingDiscount", "coding-plan-subscription/getManualClaimPlanPreviews":
@@ -452,7 +484,68 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 	case "client-scenes/list":
 		reply([]any{})
 	case "subagents/list":
-		reply([]any{})
+		// The / mention menu lists subagent types; reply shape must be
+		// {agents:[...], capability}. The client filters entries to the glm
+		// scope (aFe): enabled + a path containing /.zcode/ passes.
+		home := zcode.Home()
+		reply(map[string]any{
+			"agents": []any{
+				map[string]any{"id": "general-purpose", "name": "general-purpose", "description": "通用子任务执行智能体", "enabled": true, "scope": "workspace", "source": "built-in", "path": filepath.Join(home, ".zcode", "agents", "general-purpose")},
+				map[string]any{"id": "zcode-agent", "name": "zcode-agent", "description": "ZCode 主智能体", "enabled": true, "scope": "workspace", "source": "built-in", "path": filepath.Join(home, ".zcode", "agents", "zcode-agent")},
+			},
+			"capability": nil,
+		})
+	case "file/listWorkspaceFiles":
+		// The @ mention's file tab: an ARRAY of {type,path,relativePath,name}
+		// (the client maps it directly — a non-array crashes with e.map).
+		var q struct {
+			RootPath string `json:"rootPath"`
+		}
+		if raw, ok := c.Arg.(json.RawMessage); ok {
+			_ = json.Unmarshal(raw, &q)
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			_ = json.Unmarshal(b, &q)
+		}
+		root := firstNonEmpty(q.RootPath, ps.workspacePath)
+		reply(listWorkspaceFileEntries(root))
+	case "plugin-management/getPluginReferenceCatalog":
+		// @ tools: {plugins:[{pluginId,name,enabled,conflictingPluginIds,
+		// skillQualifiedNames,mcpServerNames,marketplace}...], authority}
+		reply(map[string]any{"plugins": pluginCatalogEntries(), "authority": nil})
+	case "zcode-agent/getSkillReferenceCatalog", "skills/list", "skill-management/getSkillReferenceCatalog":
+		// $ / skill mentions: {skills:[...], authority}
+		reply(map[string]any{"skills": skillCatalogEntries(), "authority": nil})
+	case "zcode-session/readWorkspaceState":
+		// Forward to the engine but merge in slashCommands — the composer's
+		// / menu hydrates from this reply (configOptions + slashCommands) and
+		// the engine's workspace/readState carries neither.
+		var in struct {
+			WorkspacePath     string `json:"workspacePath"`
+			WorkspaceIdentity string `json:"workspaceIdentity"`
+		}
+		if raw, ok := c.Arg.(json.RawMessage); ok {
+			_ = json.Unmarshal(raw, &in)
+		} else if b, err := json.Marshal(c.Arg); err == nil {
+			_ = json.Unmarshal(b, &in)
+		}
+		wp := firstNonEmpty(in.WorkspacePath, ps.workspacePath)
+		if wp == "" && len(workspaces) > 0 {
+			wp = workspaces[0]
+		}
+		body := map[string]any{"workspace": map[string]any{
+			"workspacePath": wp, "workspaceKey": wp,
+		}}
+		if in.WorkspaceIdentity != "" {
+			body["workspace"].(map[string]any)["workspaceIdentity"] = in.WorkspaceIdentity
+		}
+		cmds := builtinSlashCommands()
+		if res, err := engClient.Call("workspace/readState", body, 5*time.Second); err == nil {
+			res["slashCommands"] = cmds
+			reply(res)
+			return true
+		}
+		reply(map[string]any{"slashCommands": cmds})
+		return true
 	case "zcode-agent/getAgentRuntimeLifecycle":
 		reply(map[string]any{"status": "running"})
 	case "zcode-agent/helloConversationV4":
@@ -495,8 +588,15 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 			ps.setSession(subReq.SessionID, "") // keep workspacePath
 		}
 		sid, _ := ps.get()
+		fmt.Printf("zcode: [subscribe] %s requested=%q resolved=%q\n", c.Name, subReq.SessionID, sid)
+		// The sessions-index stream carries its OWN subscription id: sharing
+		// the conversation one made the client route both streams together and
+		// drop the index snapshots (@ 会话 mention list stayed empty).
+		indexSubscribe := c.Name == "zcode-agent/subscribeSessionsIndexV4" || c.Name == "zcode-agent/resyncSessionsIndexV4"
 		subID := ps.convSub()
-		if subID == "" {
+		if indexSubscribe {
+			subID = ps.indexSub()
+		} else if subID == "" {
 			if sid != "" {
 				subID = sid + ":sub"
 			} else {
@@ -544,18 +644,21 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					indexID := ps.indexListener
 					ps.mu.Unlock()
 					now := time.Now().UnixMilli()
-					turnID := "turn-" + sid
+					turnID := ps.beginTurn(sid)
 					if cmdID == "" {
 						cmdID = "cmd-" + shortSessionID(sid)
 					}
 					// Immediate send feedback, mirroring the desktop: a running
 					// turn header (the "已工作" indicator) plus the user's
 					// message row, and the projection flipped to running.
+					// Row ids are real unique ids and the rows EXTEND the
+					// remembered set — a mid-turn subscriber must see prior
+					// turns plus this bubble in the recovery snapshot.
 					hdr := map[string]any{
-						"rowId":           1,
+						"rowId":           ps.nextRowID(),
 						"turnId":          turnID,
 						"createdAt":       now,
-						"createdAtSeq":    1,
+						"createdAtSeq":    now,
 						"kind":            "turnHeader",
 						"origin":          "userInput",
 						"executionKind":   "agent",
@@ -564,10 +667,10 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 						"sourceCommandId": cmdID,
 					}
 					row := map[string]any{
-						"rowId":               2,
+						"rowId":               ps.nextRowID(),
 						"turnId":              turnID,
 						"createdAt":           now,
-						"createdAtSeq":        2,
+						"createdAtSeq":        now,
 						"kind":                "userInput",
 						"text":                txt,
 						"origin":              "realUser",
@@ -577,17 +680,22 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 					if clientID != "" {
 						row["clientId"] = clientID
 					}
-					b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), []any{hdr, row}, ps.collabMode, "running"))
-					ps.rememberRows([]any{hdr, row})
+					// The turnTailBoundary marker must lead the turn's rows:
+					// without it the client folds hdr+userInput into the
+					// collapsed history and the screen stays blank until the
+					// first live delta arrives.
+					rows := append(ps.snapshotRows(), liveTailBoundary(ps.nextRowID(), turnID), hdr, row)
+					b, _ := json.Marshal(conversationSnapshotFrame(ps, sid, ws, convSub, "recovery", ps.nextOrdinal(), rows, ps.collabMode, "running"))
+					ps.rememberRows(rows)
 					engine.SendChannelEvent(convID, b, send)
 					// The desktop's running-state control patch: stoppable,
 					// primaryTurn active work, follow-ups route to the queue.
-					cb, _ := json.Marshal(stateUpdatedFrame(sid, "running", convSub, ps.nextOrdinal()))
+					cb, _ := json.Marshal(stateUpdatedFrame(ps, sid, "running", convSub, ps.nextOrdinal()))
 					engine.SendChannelEvent(convID, cb, send)
 					fmt.Printf("zcode: pushed running-turn snapshot session=%s text=%q\n", sid, txt)
 					// Flip the sidebar entry to running as well.
 					if indexID > 0 {
-						ib, _ := json.Marshal(sessionsIndexFrame(convSub, ps))
+						ib, _ := json.Marshal(sessionsIndexFrame(ps))
 						engine.SendChannelEvent(indexID, ib, send)
 						fmt.Println("zcode: pushed sessions-index snapshot")
 					}
@@ -667,4 +775,15 @@ func answerDesktopChannel(engine *relay.BridgeEngine, c *relay.ChannelCall, send
 	}
 	fmt.Printf("zcode: answered %s.%s from real state\n", c.ChannelName, c.Name)
 	return true
+}
+
+// workspaceListFirst returns the primary workspace path for system/info.
+func workspaceListFirst(workspaces []string) string {
+	if len(workspaces) > 0 {
+		return workspaces[0]
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	return "."
 }

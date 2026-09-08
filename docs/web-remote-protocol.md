@@ -88,3 +88,26 @@ admittedAt`；快照里 `queue.autoDrain:true`。
   persistAsWorkspaceLastUsed}`；思考级别走独立的 `session/setThoughtLevel`。
 - 引擎**不**流式吐正文：只有 `v4/telemetry` 的 `stream.chunk`（带 chunkLength 计数），
   转录在 turn.terminal 后由 `session/read` 一次性取回。
+
+## 实时流式（v4/telemetry → conversation deltas，streaming.go）
+
+- 引擎遥测事件种类：`stream.chunk`（channel=text|thought，**只有 chunkLength 无正文**）、
+  `tool.lifecycle`（scheduled/started/progress/completed/failed + toolCallId/toolName/
+  durationMs/errorCode）、`model.request.status`、`usage.delta`、`permission.lifecycle`、
+  `turn.started`/`turn.terminal`、`subagent.lifecycle`、`compaction.terminal`；
+  另有 `computer-use/operation-event`（tool 生命周期镜像）。
+- 网桥映射：tool.lifecycle → 实时 toolCall 行（running→success/error 同 rowId upsert）；
+  stream.chunk → 「思考中…/生成中… N 字」计数行（700ms 节流）。正文仍在 terminal 后整体同步。
+- **seq 账本（客户端 v4-store 硬门控）**：deltas 帧要求 `frame.fromSeq == 客户端当前 seq`
+  且 `toSeq` 更新；`toSeq<=seq` 静默丢弃，`fromSeq!=seq` 判为断档 → 自动重订阅恢复，
+  **刚应用的行会被清掉**。快照把 seq 重置为 1；桥端 `convoFrameSeq` 账本维护连续递增。
+  （历史 bug：fromSeq/toSeq 写死 1/2 → 每第二条 delta 触发恢复循环，实时行永远不显示。）
+- **turnTailBoundary**：时间线只把「最后一个 `timelineMarker(lane=turnTailBoundary)` 之后」
+  的行放进展开的实时尾部区，其余进折叠 history。每个 turn 的第一条实时行前要推一行
+  不可见的边界行（`marker:{type:"checkpointRestored"}` 走渲染 default 分支 = 不显示）。
+- toolCall 行 status 枚举（wire 值）：`inputStreaming/pendingApproval/running/success/
+  error/cancelled`；reasoning/assistantText 行 `state: streaming|complete|interrupted`。
+- delta op 全集：`row.appended / row.upserted / row.removed / row.delta{path:text|
+  inputText|output.text|summaryText, append} / state.updated`。
+- 手机侧行的 turnId 必须用 `turn-<phoneSid>`（与发送路径 turnHeader 一致）；
+  引擎侧 `turn_xxx` 挂不到尾部区。

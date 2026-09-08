@@ -254,3 +254,7 @@ func parseChannelCall(b []byte) *ChannelCall {
 	}
 	return c
 }
+
+// InitializeMessage is the exported client handshake ([200]) — the official
+// host's channel server expects it before serving requests on a service port.
+func InitializeMessage() []byte { return initializeMessage() }

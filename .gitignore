@@ -1,13 +1,6 @@
-# compiled / build artifacts
-/zcode-quick-web-forward
-/zcode-quick-web-forward-*
-*.exe
-*.part
-
-# Go
-*.test
-*.out
-
-# local
-.DS_Store
+*.png
 .playwright-mcp/
+zqwf-new
+/tmp/
+zcode-quick-web-forward
+official-host/host-deploy/

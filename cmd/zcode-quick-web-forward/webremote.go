@@ -76,15 +76,62 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			fmt.Println("*** web-remote: 手机已配对接入 ***")
 			go func() {
 				time.Sleep(800 * time.Millisecond)
-				sender.send(workspaceListPush(workspaces, ps))
+				sender.send(workspaceListPush(ps.workspacesList(), ps))
 				fmt.Println("zcode: workspace list pushed to phone")
 			}()
 		},
 		OnData: func(payload json.RawMessage, reply func(any)) {
 			sender.set(reply)
-			handleRemoteData(payload, reply, engine, restartEngine, sender.send, workspaces, ps, engClient, termSvc)
+			// Division of labor in official-host mode: the built-in handlers
+			// serve EVERYTHING they implement — including engine traffic on
+			// our own engine child — because the host's channel server
+			// crashes (resolveWorkspaceKey uncaughtException) on
+			// sessions-index subscriptions and its task path needs the
+			// desktop's workspace registry. Calls the built-in doesn't
+			// implement (file, terminal transfers, uploads, automations,
+			// cua…) forward to the official host natively, which is the
+			// whole point of running it alongside.
+			onCall := func(c *relay.ChannelCall) {
+				if officialHostActive() {
+					if c.Kind == 102 || c.Kind == 103 {
+						// NEVER forward these: the host's channel server
+						// throws an uncaught resolveWorkspaceKey exception
+						// on sessions-index subscriptions (no desktop
+						// workspace registry) and the whole host dies.
+						handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
+						return
+					}
+					if !answerDesktopChannel(engine, c, reply, ps.workspacesList(), ps, engClient, termSvc) {
+						fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
+						forwardCallToOfficialHost(c)
+					}
+					return
+				}
+				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
+			}
+			onRaw := func(raw []byte) {
+				if officialHostActive() {
+					fmt.Printf("zcode: official-host phone -> svc raw %d bytes\n", len(raw))
+					if forwardRawToOfficialHost(raw) {
+						return
+					}
+				}
+				engine.WriteSink(raw)
+			}
+			handleRemoteData(payload, reply, engine, restartEngine, sender.send, ps.workspacesList(), ps, engClient, termSvc, onCall, onRaw)
 		},
 	})
+}
+
+// pushWorkspaceList sends the phone a fresh workspace/task landing list.
+// Without it the phone's project "tabs" only refresh on manual reload —
+// new tasks (and their status changes) would never show up on their own.
+func pushWorkspaceList(send func(any), ps *phoneSessions) {
+	if send == nil || ps == nil {
+		return
+	}
+	send(workspaceListPush(ps.workspacesList(), ps))
+	fmt.Println("zcode: workspace list pushed (auto)")
 }
 
 func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
@@ -111,7 +158,7 @@ func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
 	}
 }
 
-func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service) {
+func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.BridgeEngine, restartEngine func(), replyFrames func(any), workspaces []string, ps *phoneSessions, engClient *enginepkg.Client, termSvc *terminal.Service, onCall func(*relay.ChannelCall), onRaw func([]byte)) {
 	var p struct {
 		ZcodeType string `json:"zcode_type"`
 		RequestID string `json:"requestId"`
@@ -120,10 +167,20 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		return
 	}
 	if p.ZcodeType == "rpc-frame" || p.ZcodeType == "rpc-frame-ack" {
-		engine.HandlePhonePayload(payload, reply, handleChannelCall(engine, reply, workspaces, ps, engClient, termSvc))
+		if onCall == nil {
+			onCall = handleChannelCall(engine, reply, workspaces, ps, engClient, termSvc)
+		}
+		engine.HandlePhonePayload(payload, reply, onCall, onRaw)
 		return
 	}
 	if p.RequestID == "" {
+		// The phone streams its own view of the connection here —
+		// mobile-diagnostic carries state transitions, degradation and close
+		// reasons. Log instead of silently dropping; it's the only window
+		// into WHY the frontend retries bootstrap/bridge-open.
+		if p.ZcodeType == "mobile-diagnostic" {
+			fmt.Printf("zcode: mobile-diagnostic %s\n", string(payload))
+		}
 		return
 	}
 	wsList := workspaceListPayload(workspaces)
@@ -133,6 +190,7 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 	}
 	switch p.ZcodeType {
 	case "bootstrap-request":
+		fmt.Println("zcode: bootstrap-request received — answering with workspace list")
 		reply(map[string]any{
 			"zcode_type": "bootstrap-response", "requestId": p.RequestID, "success": true,
 			"result": map[string]any{
@@ -163,10 +221,22 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 			return
 		}
 		engine.SetIdentity(v.BridgeSessionID, v.BridgeGeneration, v.RecoveryID)
+		fmt.Printf("zcode: workspace-bridge-open session=%s ws=%s task=%s\n", v.BridgeSessionID, v.WorkspaceKey, v.TaskID)
+		// The host sent its channel initialize before the phone's bridge
+		// existed — flush it now, or the phone's channel stack never
+		// initializes and it can't issue a single call (sync spinner forever).
+		officialFlushOut()
 		ps.mu.Lock()
+		prevWS := ps.workspacePath
 		ps.workspacePath = v.WorkspaceKey
 		ps.mu.Unlock()
-		if restartEngine != nil {
+		// A bridge-open must NOT kill the engine while a turn is in flight —
+		// every task view the phone opens fires one, and the kill silently
+		// murders the running turn (no turn.terminal, ghost states forever).
+		// It must also not restart on EVERY open: the phone re-opens the bridge
+		// on each reload, and engine-restart → resync → reload → bridge-open is
+		// a frontend restart loop. Only a real workspace switch justifies one.
+		if restartEngine != nil && !ps.anyTurnRunning() && prevWS != "" && prevWS != v.WorkspaceKey {
 			restartEngine()
 		}
 		bridge := map[string]any{
@@ -211,17 +281,30 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 }
 
 func workspaceListPayload(workspaces []string) []any {
-	wsList := make([]any, 0, len(workspaces))
-	for _, w := range workspaces {
-		if strings.HasPrefix(w, "remote:") {
-			continue
+	seen := map[string]bool{}
+	wsList := make([]any, 0, len(workspaces)+4)
+	add := func(w string) {
+		if w == "" || seen[w] || strings.HasPrefix(w, "remote:") {
+			return
 		}
+		seen[w] = true
 		wsList = append(wsList, map[string]any{
 			"workspacePath":   w,
 			"label":           filepath.Base(w),
 			"kind":            "local",
 			"connectionState": "connected",
 		})
+	}
+	for _, w := range workspaces {
+		add(w)
+	}
+	// Projects discovered from the task index: a task created under a
+	// workspace that isn't in the configured list still gets its own card on
+	// the phone's landing page instead of silently missing.
+	if tasks, err := zcode.ListTasks("", ""); err == nil {
+		for _, t := range tasks {
+			add(t.WorkspacePath)
+		}
 	}
 	return wsList
 }
@@ -325,11 +408,11 @@ func displayStatus(s string) string {
 	switch strings.ToLower(s) {
 	case "running", "in-progress", "active":
 		return "running"
-	case "completed", "completedSuccess", "completedInterrupted":
+	case "completed", "success", "completedSuccess", "completedInterrupted":
 		return "completed"
-	case "error":
+	case "error", "failed":
 		return "error"
-	case "idle", "cancelled", "failed", "interrupted", "paused", "":
+	case "idle", "cancelled", "interrupted", "paused", "":
 		return "idle"
 	default:
 		return "idle"
