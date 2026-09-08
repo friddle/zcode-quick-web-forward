@@ -88,14 +88,20 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			// officialHostBridge.onPortBytes. Built-in handlers stay as the
 			// fallback when the official host is off.
 			onCall := func(c *relay.ChannelCall) {
-				if officialHostActive() && forwardCallToOfficialHost(c) {
-					return
+				if officialHostActive() {
+					fmt.Printf("zcode: official-host phone -> svc call id=%d %s.%s\n", c.ID, c.ChannelName, c.Name)
+					if forwardCallToOfficialHost(c) {
+						return
+					}
 				}
 				handleChannelCall(engine, reply, ps.workspacesList(), ps, engClient, termSvc)(c)
 			}
 			onRaw := func(raw []byte) {
-				if officialHostActive() && forwardRawToOfficialHost(raw) {
-					return
+				if officialHostActive() {
+					fmt.Printf("zcode: official-host phone -> svc raw %d bytes\n", len(raw))
+					if forwardRawToOfficialHost(raw) {
+						return
+					}
 				}
 				engine.WriteSink(raw)
 			}
@@ -194,6 +200,10 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 			return
 		}
 		engine.SetIdentity(v.BridgeSessionID, v.BridgeGeneration, v.RecoveryID)
+		// The host sent its channel initialize before the phone's bridge
+		// existed — flush it now, or the phone's channel stack never
+		// initializes and it can't issue a single call (sync spinner forever).
+		officialFlushOut()
 		ps.mu.Lock()
 		ps.workspacePath = v.WorkspaceKey
 		ps.mu.Unlock()

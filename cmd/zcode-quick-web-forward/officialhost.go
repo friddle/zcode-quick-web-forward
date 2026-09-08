@@ -9,6 +9,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -88,6 +89,18 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	}
 	h.OnParentPort = func(msg map[string]any) {
 		t, _ := msg["type"].(string)
+		if t == "log" {
+			// The host pipes its internal log lines as parentPort messages —
+			// print the payload or engine-spawn/service failures stay invisible.
+			if raw, err := json.Marshal(msg); err == nil && len(raw) > 0 {
+				line := string(raw)
+				if len(line) > 400 {
+					line = line[:400] + "…"
+				}
+				fmt.Println("zcode: official-host | " + line)
+			}
+			return
+		}
 		fmt.Printf("zcode: official-host parentPort << %s\n", t)
 	}
 	h.OnRawPortData = b.onPortBytes
