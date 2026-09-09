@@ -77,6 +77,8 @@ type officialRecovery struct {
 	lastID       int               // id of the most recently minted synthetic call
 	pendingRows  map[int]string    // synthetic rowsRange call id -> sessionId
 	lastRowsJSON map[string]string // sessionId -> last emitted rows JSON (dedup)
+	termListens  []*relay.ChannelCall // cached terminal.onDynamic* listens (forwarded after create)
+	pendingCreate map[int]bool       // terminal.create call ids awaiting their id
 	snaps        map[string]json.RawMessage
 	snapsOrder   []string
 }
@@ -97,6 +99,34 @@ func (r *officialRecovery) rememberRows(sid string, data json.RawMessage) {
 	}
 	r.lastRowsJSON[sid] = string(data)
 	r.mu.Unlock()
+}
+
+// cacheTerminalListen parks a terminal.onDynamic* listen until a
+// terminal.create reply provides the terminal id.
+func (r *officialRecovery) cacheTerminalListen(c *relay.ChannelCall) {
+	r.mu.Lock()
+	if len(r.termListens) > 8 {
+		r.termListens = r.termListens[1:]
+	}
+	r.termListens = append(r.termListens, c)
+	r.mu.Unlock()
+}
+
+// flushTerminalListens forwards cached terminal listens bound to a freshly
+// created terminal id.
+func (r *officialRecovery) flushTerminalListens(terminalID string) {
+	r.mu.Lock()
+	pending := r.termListens
+	r.termListens = nil
+	r.mu.Unlock()
+	for _, c := range pending {
+		m := argMap(c.Arg)
+		m["id"] = terminalID
+		c.Arg = m
+		out := relay.ChannelCallBytes(c)
+		fmt.Printf("zcode: recovery: flushing terminal listen %s with id %s\n", c.Name, terminalID)
+		forwardRawToOfficialHost(out)
+	}
 }
 
 // mintID allocates a synthetic promise-call id (high range, never clashes
@@ -333,6 +363,18 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		r.pendingSub[c.ID] = sid
 		r.mu.Unlock()
 		fmt.Println("zcode: recovery: tracking", c.Name, "call id", c.ID, "sid", sid)
+	case c.Kind == relay.KindPromise && c.ChannelName == "terminal" && c.Name == "create":
+		officialState.mu.Lock()
+		b := officialState.active
+		officialState.mu.Unlock()
+		if b != nil && b.rec != nil {
+			b.rec.mu.Lock()
+			if b.rec.pendingCreate == nil {
+				b.rec.pendingCreate = map[int]bool{}
+			}
+			b.rec.pendingCreate[c.ID] = true
+			b.rec.mu.Unlock()
+		}
 	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "sendConversationCommandV4":
 		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
 		sid, _ := env["sessionId"].(string)
@@ -419,6 +461,10 @@ func inspectOfficialResponse(raw []byte) {
 	}
 	r := b.rec
 	r.mu.Lock()
+	isCreate := r.pendingCreate[id]
+	if isCreate {
+		delete(r.pendingCreate, id)
+	}
 	sid, isSub := r.pendingSub[id]
 	if isSub {
 		delete(r.pendingSub, id)
@@ -428,6 +474,15 @@ func inspectOfficialResponse(raw []byte) {
 		delete(r.pendingRead, id)
 	}
 	r.mu.Unlock()
+	if isCreate && len(data) > 0 {
+		var res struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(data, &res) == nil && res.ID != "" {
+			fmt.Println("zcode: recovery: terminal created", res.ID)
+			r.flushTerminalListens(res.ID)
+		}
+	}
 	switch {
 	case isSub && len(data) > 0:
 		var res struct {
@@ -808,6 +863,21 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 				fmt.Printf("zcode: recovery: injected ws into listen %s.%s (id %d)\n", c.ChannelName, c.Name, c.ID)
 			}
 		}
+	}
+	// The page registers terminal.onDynamic* listens BEFORE terminal.create
+	// (args without an id) — the host's getTerminal throws on the missing id
+	// and the throw is an uncaughtException that kills the whole host. Cache
+	// those listens and forward them once a create reply supplies the id.
+	if c.Kind == relay.KindEventListen && c.ChannelName == "terminal" &&
+		strings.HasPrefix(c.Name, "onDynamic") {
+		officialState.mu.Lock()
+		b := officialState.active
+		officialState.mu.Unlock()
+		if b != nil && b.rec != nil {
+			b.rec.cacheTerminalListen(c)
+			fmt.Println("zcode: recovery: cached terminal listen", c.Name, "(waiting for create id)")
+		}
+		return true
 	}
 	{
 		b, _ := json.Marshal(c.Arg)
