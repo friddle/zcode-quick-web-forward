@@ -414,7 +414,11 @@ func ChannelCallBytes(c *ChannelCall) []byte {
 	if c.Arg != nil {
 		arg = c.Arg
 	}
-	return buildMessage([]any{c.Kind, c.ID, c.ChannelName, c.Name}, arg)
+	// The wire layout wraps the call argument in a data ARRAY ([arg]) — the
+	// host's rpc layer destructures data[0] as the handler argument. Writing
+	// the bare arg made every argument-consuming handler (listTasks,
+	// initializeConversationV4, ...) receive undefined.
+	return buildMessage([]any{c.Kind, c.ID, c.ChannelName, c.Name}, []any{arg})
 }
 
 // SendRawChannelBytes pushes raw channel-protocol bytes to the phone as
