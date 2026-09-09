@@ -23,15 +23,30 @@ func doRestart(args []string) {
 		"zcode-cli", "zcode-node-repl-m",
 	}
 	deadline := time.Now().Add(10 * time.Second)
+	self := os.Getpid()
+	ppid := os.Getppid()
 	for {
 		out, _ := exec.Command("pgrep", "-f", strings.Join(victims, "|")).Output()
-		if len(strings.TrimSpace(string(out))) == 0 {
+		live := []string{}
+		for _, pid := range strings.Fields(string(out)) {
+			// never kill ourselves or our parent shell — pgrep -f matches
+			// this very command line ("... zcode-quick-web-forward restart")
+			if pid == fmt.Sprint(self) || pid == fmt.Sprint(ppid) {
+				continue
+			}
+			if cl, err := os.ReadFile("/proc/" + pid + "/cmdline"); err == nil &&
+				strings.Contains(string(cl), "forward restart") {
+				continue
+			}
+			live = append(live, pid)
+		}
+		if len(live) == 0 {
 			break
 		}
 		_ = exec.Command("pkill", "-9", "-f", strings.Join(victims, "|")).Run()
 		time.Sleep(500 * time.Millisecond)
 		if time.Now().After(deadline) {
-			fmt.Println("zcode: WARNING: some processes resisted the kill")
+			fmt.Println("zcode: WARNING: some processes resisted the kill:", strings.Join(live, ","))
 			break
 		}
 	}
