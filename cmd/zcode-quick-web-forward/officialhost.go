@@ -76,8 +76,27 @@ type officialRecovery struct {
 	wireOrdinal  int               // logicalFrameOrdinal of synthesized wire frames
 	lastID       int               // id of the most recently minted synthetic call
 	pendingRows  map[int]string    // synthetic rowsRange call id -> sessionId
+	lastRowsJSON map[string]string // sessionId -> last emitted rows JSON (dedup)
 	snaps        map[string]json.RawMessage
 	snapsOrder   []string
+}
+
+// sameAsLast reports whether the rows payload is byte-identical to the last
+// emitted snapshot for the session (duplicate application breaks the store).
+func (r *officialRecovery) sameAsLast(sid string, data json.RawMessage) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastRowsJSON != nil && r.lastRowsJSON[sid] == string(data)
+}
+
+// rememberRows stores the last emitted rows payload per session.
+func (r *officialRecovery) rememberRows(sid string, data json.RawMessage) {
+	r.mu.Lock()
+	if r.lastRowsJSON == nil {
+		r.lastRowsJSON = map[string]string{}
+	}
+	r.lastRowsJSON[sid] = string(data)
+	r.mu.Unlock()
 }
 
 // mintID allocates a synthetic promise-call id (high range, never clashes
@@ -428,6 +447,11 @@ func inspectOfficialResponse(raw []byte) {
 		_ = json.Unmarshal(data, &rowsRes)
 		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
 		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
+		if r.sameAsLast(rowsid, data) {
+			fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
+			return
+		}
+		r.rememberRows(rowsid, data)
 		snap := buildProjectionSnapshot(rowsid, rowsRes)
 		if epoch := r.epochFor(rowsid); epoch != "" {
 			snap["logEpoch"] = epoch
@@ -462,8 +486,8 @@ func firstJSON(b json.RawMessage) string {
 // delivers it as the onDynamicConversationFrame event the page listens on.
 func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any) {
 	r := b.rec
-	listens := r.listeners()
-	if len(listens) == 0 {
+	listen := r.listener()
+	if listen == 0 {
 		return
 	}
 	sub := r.subFor(sid)
@@ -513,12 +537,10 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	if err != nil {
 		return
 	}
-	for _, listen := range listens {
-		out := relay.EventFireBytes(listen, pb)
-		fmt.Printf("zcode: recovery: synthesized snapshot frame %d bytes for %s (listen %d)\n", len(out), sid, listen)
-		if b.engine != nil && b.engine.HasIdentity() {
-			b.engine.SendRawChannelBytes(out, senderSend())
-		}
+	out := relay.EventFireBytes(listen, pb)
+	fmt.Printf("zcode: recovery: synthesized snapshot frame %d bytes for %s (listen %d)\n", len(out), sid, listen)
+	if b.engine != nil && b.engine.HasIdentity() {
+		b.engine.SendRawChannelBytes(out, senderSend())
 	}
 }
 
