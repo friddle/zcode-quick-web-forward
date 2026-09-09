@@ -107,12 +107,11 @@ func (r *officialRecovery) rememberRows(sid string, data json.RawMessage) {
 func (r *officialRecovery) cacheTerminalListen(c *relay.ChannelCall) {
 	r.mu.Lock()
 	if r.lastTermID != "" {
-		// a terminal already exists — bind and forward immediately
+		// a terminal already exists — bind and forward immediately.
+		// The host's onDynamicData(a) expects the BARE terminal id string.
 		id := r.lastTermID
 		r.mu.Unlock()
-		m := argMap(c.Arg)
-		m["id"] = id
-		c.Arg = m
+		c.Arg = id
 		fmt.Printf("zcode: recovery: terminal listen %s bound to existing id %s\n", c.Name, id)
 		forwardRawToOfficialHost(relay.ChannelCallBytes(c))
 		return
@@ -132,9 +131,7 @@ func (r *officialRecovery) flushTerminalListens(terminalID string) {
 	r.termListens = nil
 	r.mu.Unlock()
 	for _, c := range pending {
-		m := argMap(c.Arg)
-		m["id"] = terminalID
-		c.Arg = m
+		c.Arg = terminalID // host expects the bare id string
 		out := relay.ChannelCallBytes(c)
 		fmt.Printf("zcode: recovery: flushing terminal listen %s with id %s\n", c.Name, terminalID)
 		forwardRawToOfficialHost(out)
