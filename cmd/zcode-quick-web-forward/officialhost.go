@@ -115,10 +115,12 @@ func (r *officialRecovery) snapFor(sid string) json.RawMessage {
 	return r.snaps[sid]
 }
 
-// mergeRowsIntoSnapshot injects the conversation projection rows the client
-// renders (state.rows{window,totalCount,firstRowId}) into a readSession
-// snapshot, plus the empty pending-commands/queue collections it reconciles.
-func mergeRowsIntoSnapshot(snap map[string]any, rowsRes map[string]any) {
+// buildProjectionSnapshot composes the conversation projection snapshot the
+// client validates (protocolVersion 1: control/availability/inputRouting/
+// meta/config/usage/queue/pendingCommands/backgroundWorks/rows/...). The
+// official rows come from conversationRowsRangeV4; everything static is
+// filled with the client-schema-required defaults.
+func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any {
 	rows := rowsRes
 	if inner, ok := rowsRes["rows"].([]any); ok {
 		rows = map[string]any{"window": inner}
@@ -132,17 +134,42 @@ func mergeRowsIntoSnapshot(snap map[string]any, rowsRes map[string]any) {
 			firstRowID = m["rowId"]
 		}
 	}
-	rows["totalCount"] = len(window)
-	rows["firstRowId"] = firstRowID
-	snap["rows"] = rows
-	if _, ok := snap["pendingCommands"]; !ok {
-		snap["pendingCommands"] = []any{}
-	}
-	if _, ok := snap["queue"]; !ok {
-		snap["queue"] = map[string]any{"items": []any{}}
-	}
-	if _, ok := snap["optimisticCommands"]; !ok {
-		snap["optimisticCommands"] = []any{}
+	return map[string]any{
+		"protocolVersion": 1,
+		"sessionId":       sid,
+		"seq":             0,
+		"revision":        0,
+		"control": map[string]any{
+			"phase": "completedSuccess", "sessionEnded": false, "canStop": false,
+			"stopState": "idle", "stopTargetKind": "unknown",
+			"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
+		},
+		"availability": map[string]any{
+			"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
+			"switchModelConfig": map[string]any{"allowed": true}, "setFollowupMode": map[string]any{"allowed": true},
+			"queueEdit": map[string]any{"allowed": true}, "sendQueuedNow": map[string]any{"allowed": true},
+			"pauseGoal": map[string]any{"allowed": true}, "resumeGoal": map[string]any{"allowed": true},
+		},
+		"inputRouting":    map[string]any{"mode": "startNow"},
+		"meta":            map[string]any{"title": "", "titleSource": "default"},
+		"config":          map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": "build"},
+		"modelTransition": nil,
+		"usage": map[string]any{
+			"contextWindow": map[string]any{"usedTokens": 0, "maxTokens": 1000000, "autoCompactThresholdTokens": nil},
+			"cumulative":    map[string]any{"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0},
+		},
+		"queue":               map[string]any{"items": []any{}, "autoDrain": true},
+		"pendingInteractions": []any{},
+		"pendingCommands":     []any{},
+		"backgroundWorks":     []any{},
+		"goal":                nil,
+		"plan":                nil,
+		"workspaceHookAdmission": nil,
+		"rows": map[string]any{
+			"window":     window,
+			"totalCount": len(window),
+			"firstRowId": firstRowID,
+		},
 	}
 }
 
@@ -358,18 +385,17 @@ func inspectOfficialResponse(raw []byte) {
 	}
 	r.mu.Unlock()
 	if isRows && len(data) > 0 {
-		snapRaw := r.snapFor(rowsid)
-		if snapRaw != nil {
-			var snap map[string]any
-			if err := json.Unmarshal(snapRaw, &snap); err != nil || snap == nil {
-				return
-			}
-			var rowsRes map[string]any
-			_ = json.Unmarshal(data, &rowsRes)
-			fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
-			mergeRowsIntoSnapshot(snap, rowsRes)
-			emitRecoverySnapshot(b, rowsid, snap)
+		var rowsRes map[string]any
+		_ = json.Unmarshal(data, &rowsRes)
+		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
+		snap := buildProjectionSnapshot(rowsid, rowsRes)
+		if epoch := r.epochFor(rowsid); epoch != "" {
+			snap["logEpoch"] = epoch
 		}
+		if st, ok := snap["rows"].(map[string]any); ok {
+			fmt.Printf("zcode: recovery: rows window %d\n", len(st["window"].([]any)))
+		}
+		emitRecoverySnapshot(b, rowsid, snap)
 	}
 }
 
