@@ -1,12 +1,23 @@
-*.png
-.playwright-mcp/
-zqwf-new
-/tmp/
-zcode-quick-web-forward
-official-host/host-deploy/
+# build artifacts
+/zcode-quick-web-forward
 zqf
-zcode-tasks.db
-r.log
-r.log.pid
-live-ok.txt
+zqwf-new
+*.exe
 zcode-quick-web-forward.git/
+
+# runtime state & logs
+*.png
+*.log
+*.log.pid
+live-ok.txt
+zcode-tasks.db
+.playwright-mcp/
+/tmp/
+
+# official host bundle (extracted from the desktop app, not source)
+official-host/host-deploy/
+
+# local env / scratch
+.env
+*.local
+node_modules/
