@@ -74,14 +74,37 @@ func doProviderAdd(argv []string) {
 	out := fs.Int64("output", 8192, "max output tokens")
 	models := multiFlag{}
 	fs.Var(&models, "model", "model id (repeatable, required)")
-	if err := fs.Parse(argv); err != nil {
-		os.Exit(1)
+	// Go's flag stops at the first positional arg; drop the name from argv
+	// first (the first non-flag token that is not a flag's VALUE) so
+	// `provider add <name> --flags` parses in any order.
+	rest := make([]string, 0, len(argv))
+	name := ""
+	expectValue := false
+	for _, a := range argv {
+		if expectValue { // this token is the previous flag's value
+			rest = append(rest, a)
+			expectValue = false
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			rest = append(rest, a)
+			expectValue = true
+			continue
+		}
+		if name == "" {
+			name = a // positional = provider name
+		} else {
+			rest = append(rest, a)
+		}
 	}
-	if fs.NArg() < 1 {
+	if name == "" {
 		printProviderUsage()
 		os.Exit(1)
 	}
-	spec.name = strings.ToLower(strings.TrimSpace(fs.Arg(0)))
+	if err := fs.Parse(rest); err != nil {
+		os.Exit(1)
+	}
+	spec.name = strings.ToLower(strings.TrimSpace(name))
 	spec.context, spec.output = *ctx, *out
 	spec.models = models
 	if spec.name == "" || spec.baseURL == "" || spec.apiKey == "" || len(spec.models) == 0 {
