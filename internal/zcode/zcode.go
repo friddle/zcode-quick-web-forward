@@ -67,24 +67,56 @@ func openTaskDB() (*sql.DB, error) {
 		return nil, err
 	}
 	taskSchemaOnce.Do(func() {
-		_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS tasks (
-			workspace_key   TEXT NOT NULL DEFAULT '',
-			workspace_path  TEXT NOT NULL DEFAULT '',
-			task_id         TEXT PRIMARY KEY,
-			title           TEXT NOT NULL DEFAULT '',
-			task_status     TEXT NOT NULL DEFAULT '',
-			mode            TEXT NOT NULL DEFAULT 'build',
-			model           TEXT NOT NULL DEFAULT '',
-			created_at      INTEGER NOT NULL DEFAULT 0,
-			updated_at      INTEGER NOT NULL DEFAULT 0,
-			unread_at       INTEGER NOT NULL DEFAULT 0,
-			last_unread_at  INTEGER NOT NULL DEFAULT 0,
-			deleted         INTEGER NOT NULL DEFAULT 0,
-			archived        INTEGER NOT NULL DEFAULT 0,
-			pinned          INTEGER NOT NULL DEFAULT 0,
-			meta_json       TEXT NOT NULL DEFAULT '{}',
-			searchable_text TEXT NOT NULL DEFAULT ''
+		// The OFFICIAL desktop schema (out/host index.js). The host's
+		// task-index syncer reads these exact columns — a hand-rolled table
+		// without workspace_identity/provider/... made its baseline backfill
+		// fail and left workspace descriptors undefined, which crashed the
+		// whole host (resolveWorkspaceKey(undefined)) minutes after pairing.
+		mustExec := func(q string) {
+			if _, err := db.Exec(q); err != nil {
+				fmt.Printf("zcode: task schema: %v (query: %.80s)\n", err, q)
+			}
+		}
+		var hasCol string
+		_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='workspace_identity'`).Scan(&hasCol)
+		if hasCol == "0" {
+			// legacy table from an older build: migrate it to the official shape
+			mustExec(`ALTER TABLE tasks RENAME TO tasks_legacy`)
+		}
+		mustExec(`CREATE TABLE IF NOT EXISTS tasks (
+			workspace_key TEXT NOT NULL,
+			workspace_path TEXT NOT NULL,
+			workspace_identity TEXT,
+			task_id TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			task_status TEXT,
+			provider TEXT,
+			mode TEXT NOT NULL DEFAULT 'build',
+			model TEXT,
+			migration_source TEXT,
+			forked_from_task_id TEXT,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			unread_at INTEGER,
+			last_unread_at INTEGER NOT NULL DEFAULT 0,
+			pinned INTEGER NOT NULL DEFAULT 0,
+			archived INTEGER NOT NULL DEFAULT 0,
+			deleted INTEGER NOT NULL DEFAULT 0,
+			title_overridden INTEGER NOT NULL DEFAULT 0,
+			meta_json TEXT NOT NULL DEFAULT '{}',
+			PRIMARY KEY (workspace_key, task_id)
 		)`)
+		mustExec(`CREATE INDEX IF NOT EXISTS idx_tasks_workspace_archived_updated ON tasks (workspace_key, archived, updated_at DESC) WHERE deleted = 0`)
+		mustExec(`CREATE INDEX IF NOT EXISTS idx_tasks_workspace_pinned_updated ON tasks (workspace_key, pinned, updated_at DESC) WHERE deleted = 0`)
+		var rows int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&rows)
+		if rows == 0 {
+			// carry the legacy rows over (best effort; column sets differ)
+			_, _ = db.Exec(`INSERT OR IGNORE INTO tasks
+				(workspace_key, workspace_path, task_id, title, task_status, mode, model, created_at, updated_at, unread_at, last_unread_at, pinned, archived, deleted, meta_json)
+				SELECT workspace_path, workspace_path, task_id, title, task_status, mode, model, created_at, updated_at, unread_at, last_unread_at, pinned, archived, deleted, meta_json FROM tasks_legacy`)
+			_, _ = db.Exec(`DROP TABLE tasks_legacy`)
+		}
 	})
 	return db, nil
 }
