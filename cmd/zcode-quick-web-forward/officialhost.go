@@ -79,6 +79,7 @@ type officialRecovery struct {
 	lastRowsJSON map[string]string // sessionId -> last emitted rows JSON (dedup)
 	termListens  []*relay.ChannelCall // cached terminal.onDynamic* listens (forwarded after create)
 	pendingCreate map[int]bool       // terminal.create call ids awaiting their id
+	lastTermID   string             // most recently created terminal id
 	snaps        map[string]json.RawMessage
 	snapsOrder   []string
 }
@@ -105,6 +106,17 @@ func (r *officialRecovery) rememberRows(sid string, data json.RawMessage) {
 // terminal.create reply provides the terminal id.
 func (r *officialRecovery) cacheTerminalListen(c *relay.ChannelCall) {
 	r.mu.Lock()
+	if r.lastTermID != "" {
+		// a terminal already exists — bind and forward immediately
+		id := r.lastTermID
+		r.mu.Unlock()
+		m := argMap(c.Arg)
+		m["id"] = id
+		c.Arg = m
+		fmt.Printf("zcode: recovery: terminal listen %s bound to existing id %s\n", c.Name, id)
+		forwardRawToOfficialHost(relay.ChannelCallBytes(c))
+		return
+	}
 	if len(r.termListens) > 8 {
 		r.termListens = r.termListens[1:]
 	}
@@ -479,6 +491,9 @@ func inspectOfficialResponse(raw []byte) {
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(data, &res) == nil && res.ID != "" {
+			r.mu.Lock()
+			r.lastTermID = res.ID
+			r.mu.Unlock()
 			fmt.Println("zcode: recovery: terminal created", res.ID)
 			r.flushTerminalListens(res.ID)
 		}
