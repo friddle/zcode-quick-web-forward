@@ -135,6 +135,7 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 				ob.pendingIn = nil
 				ob.mu.Unlock()
 				ob.ready.Store(true)
+				fmt.Println("zcode: official-host READY — svc pipe open")
 				for _, raw := range pending {
 					ob.mu.Lock()
 					port := ob.svcPort
