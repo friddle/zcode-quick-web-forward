@@ -276,14 +276,20 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 			case json.RawMessage:
 				m = map[string]any{}
 				if len(a) > 0 {
-					_ = json.Unmarshal(a, &m)
+					_ = json.Unmarshal(a, &m) // "null" leaves m nil
+				}
+				if m == nil {
+					m = map[string]any{}
 				}
 			case nil:
 				m = map[string]any{}
 			default:
+				m = map[string]any{}
 				if b, err := json.Marshal(a); err == nil {
-					m = map[string]any{}
 					_ = json.Unmarshal(b, &m)
+				}
+				if m == nil {
+					m = map[string]any{}
 				}
 			}
 			if m != nil {
