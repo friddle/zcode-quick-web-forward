@@ -299,3 +299,12 @@ func ParseChannelResponse(b []byte) (kind, id int, data json.RawMessage, ok bool
 func EventFireBytes(listenID int, payload []byte) []byte {
 	return buildMessage([]any{chEventFire, listenID}, jsonToChannel(payload))
 }
+
+// ListenBytes serializes an EventListen whose args are a single raw value
+// (e.g. the terminal id string): head=[102,id,channel,event] + value.
+// The host's listen adapter forwards the decoded data value VERBATIM to the
+// handler — array-wrapping it makes terminal.onDynamicData receive ["0"]
+// instead of "0" and fail the registry lookup.
+func ListenBytes(id int, channel, event string, arg any) []byte {
+	return buildMessage([]any{chEventListen, id, channel, event}, arg)
+}

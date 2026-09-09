@@ -111,9 +111,8 @@ func (r *officialRecovery) cacheTerminalListen(c *relay.ChannelCall) {
 		// The host's onDynamicData(a) expects the BARE terminal id string.
 		id := r.lastTermID
 		r.mu.Unlock()
-		c.Arg = id
-		fmt.Printf("zcode: recovery: terminal listen %s bound to existing id %s\n", c.Name, id)
-		forwardRawToOfficialHost(relay.ChannelCallBytes(c))
+		fmt.Printf("zcode: recovery: terminal listen %s bound to existing id %v\n", c.Name, id)
+		forwardRawToOfficialHost(relay.ListenBytes(c.ID, c.ChannelName, c.Name, id))
 		return
 	}
 	if len(r.termListens) > 8 {
@@ -131,9 +130,8 @@ func (r *officialRecovery) flushTerminalListens(terminalID string) {
 	r.termListens = nil
 	r.mu.Unlock()
 	for _, c := range pending {
-		c.Arg = terminalID // host expects the bare id string
-		out := relay.ChannelCallBytes(c)
-		fmt.Printf("zcode: recovery: flushing terminal listen %s with id %s\n", c.Name, terminalID)
+		out := relay.ListenBytes(c.ID, c.ChannelName, c.Name, terminalID)
+		fmt.Printf("zcode: recovery: flushing terminal listen %s with id %v\n", c.Name, terminalID)
 		forwardRawToOfficialHost(out)
 	}
 }
