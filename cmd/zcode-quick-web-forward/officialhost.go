@@ -438,6 +438,11 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 		"subscriptionId":      sub,
 		"frame":               inner,
 	}
+	// discriminator probe: an intentionally invalid envelope should produce an
+	// assembly fault on the page if frames reach the validator at all
+	if os.Getenv("ZQF_BAD_FRAME") == "1" {
+		frame["wireVersion"] = 9
+	}
 	pb, err := json.Marshal(frame)
 	if err != nil {
 		return
@@ -673,56 +678,34 @@ func officialHostActive() bool {
 func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 	// recovery synthesizer bookkeeping must see every call (even broadcast)
 	trackOfficialRecoveryCall(c)
-	// The phone page sends its channel calls WITHOUT the workspace context —
-	// on the desktop the renderer's channel client attaches it automatically.
-	// Without it the host's workspace resolvers throw (resolveWorkspaceKey /
-	// reading 'workspacePath'), which crashed the host outright for the
-	// dynamic-frame listeners and fails every task/session call otherwise.
-	// broadcast.onMessage is a true no-arg listen — leave it alone.
-	if c.ChannelName != "broadcast" {
+	// The phone page registers its onDynamic* EventListens with args
+	// [undefined] — no workspace context. The host then routes the listener
+	// to an empty workspace target and NO conversation/workspace frames are
+	// ever delivered to it (desktop renderers attach the workspace
+	// automatically). Fill in the workspace for workspace-scoped listens.
+	if c.Kind == relay.KindEventListen && c.ChannelName != "broadcast" &&
+		strings.HasPrefix(c.Name, "onDynamic") {
+		m := argMap(c.Arg)
+		if m["workspacePath"] == nil || m["workspacePath"] == "" {
+			officialState.mu.Lock()
+			ws := officialState.workspace
+			officialState.mu.Unlock()
+			if ws != "" {
+				m["workspacePath"] = ws
+				if m["workspaceKey"] == nil || m["workspaceKey"] == "" {
+					m["workspaceKey"] = ws
+				}
+				c.Arg = m
+				fmt.Printf("zcode: recovery: injected ws into listen %s.%s (id %d)\n", c.ChannelName, c.Name, c.ID)
+			}
+		}
+	}
+	{
 		b, _ := json.Marshal(c.Arg)
 		out := relay.ChannelCallBytes(c)
 		fmt.Printf("zcode: inject ws into %s.%s -> %s | frame %d bytes: %x\n", c.ChannelName, c.Name, string(b), len(out), out[:min(48, len(out))])
 		return forwardRawToOfficialHost(out)
-		officialState.mu.Lock()
-		ws := officialState.workspace
-		officialState.mu.Unlock()
-		if ws != "" {
-			var m map[string]any
-			switch a := c.Arg.(type) {
-			case map[string]any:
-				m = a
-			case json.RawMessage:
-				m = map[string]any{}
-				if len(a) > 0 {
-					_ = json.Unmarshal(a, &m) // "null" leaves m nil
-				}
-				if m == nil {
-					m = map[string]any{}
-				}
-			case nil:
-				m = map[string]any{}
-			default:
-				m = map[string]any{}
-				if b, err := json.Marshal(a); err == nil {
-					_ = json.Unmarshal(b, &m)
-				}
-				if m == nil {
-					m = map[string]any{}
-				}
-			}
-			if m != nil {
-				if _, ok := m["workspacePath"]; !ok {
-					m["workspacePath"] = ws
-				}
-				if _, ok := m["workspaceKey"]; !ok {
-					m["workspaceKey"] = ws
-				}
-				c.Arg = m
-			}
-		}
 	}
-	return forwardRawToOfficialHost(relay.ChannelCallBytes(c))
 }
 
 // forwardRawToOfficialHost pipes raw channel bytes (calls, initialize acks,
