@@ -70,7 +70,98 @@ type officialRecovery struct {
 	pendingSub   map[int]string    // subscribe/resync call id -> sessionId
 	pendingRead  map[int]string    // synthetic readSession call id -> sessionId
 	subBySession map[string]string // sessionId -> subscriptionId (from acks)
+	epochBySess  map[string]string // sessionId -> logEpoch (from subscribe acks)
 	nextID       int               // synthetic promise-call id counter
+	wireOrdinal  int               // logicalFrameOrdinal of synthesized wire frames
+	lastID       int               // id of the most recently minted synthetic call
+	pendingRows  map[int]string    // synthetic rowsRange call id -> sessionId
+	snaps        map[string]json.RawMessage
+	snapsOrder   []string
+}
+
+// mintID allocates a synthetic promise-call id (high range, never clashes
+// with the page's own call ids).
+func (r *officialRecovery) mintID() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.nextID < 100000 {
+		r.nextID = 100000
+	}
+	r.nextID++
+	r.lastID = r.nextID
+	return r.lastID
+}
+
+// stashSnap remembers a readSession result for the rows-merge step.
+func (r *officialRecovery) stashSnap(sid string, raw json.RawMessage) {
+	r.mu.Lock()
+	if r.snaps == nil {
+		r.snaps = map[string]json.RawMessage{}
+		r.snapsOrder = []string{}
+	}
+	r.snaps[sid] = raw
+	r.snapsOrder = append(r.snapsOrder, sid)
+	if len(r.snapsOrder) > 8 {
+		delete(r.snaps, r.snapsOrder[0])
+		r.snapsOrder = r.snapsOrder[1:]
+	}
+	r.mu.Unlock()
+}
+
+// snapFor returns the stashed readSession snapshot of a session.
+func (r *officialRecovery) snapFor(sid string) json.RawMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.snaps[sid]
+}
+
+// mergeRowsIntoSnapshot injects the conversation projection rows the client
+// renders (state.rows{window,totalCount,firstRowId}) into a readSession
+// snapshot, plus the empty pending-commands/queue collections it reconciles.
+func mergeRowsIntoSnapshot(snap map[string]any, rowsRes map[string]any) {
+	rows := rowsRes
+	if inner, ok := rowsRes["rows"].([]any); ok {
+		rows = map[string]any{"window": inner}
+	} else if inner, ok := rowsRes["rows"].(map[string]any); ok {
+		rows = inner
+	}
+	window, _ := rows["window"].([]any)
+	firstRowID := any(nil)
+	if len(window) > 0 {
+		if m, ok := window[0].(map[string]any); ok {
+			firstRowID = m["rowId"]
+		}
+	}
+	rows["totalCount"] = len(window)
+	rows["firstRowId"] = firstRowID
+	snap["rows"] = rows
+	if _, ok := snap["pendingCommands"]; !ok {
+		snap["pendingCommands"] = []any{}
+	}
+	if _, ok := snap["queue"]; !ok {
+		snap["queue"] = map[string]any{"items": []any{}}
+	}
+	if _, ok := snap["optimisticCommands"]; !ok {
+		snap["optimisticCommands"] = []any{}
+	}
+}
+
+func (r *officialRecovery) epochFor(sid string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.epochBySess[sid]
+}
+
+func (r *officialRecovery) setEpoch(sid, epoch string) {
+	if epoch == "" {
+		return
+	}
+	r.mu.Lock()
+	if r.epochBySess == nil {
+		r.epochBySess = map[string]string{}
+	}
+	r.epochBySess[sid] = epoch
+	r.mu.Unlock()
 }
 
 func (r *officialRecovery) listener() int {
@@ -182,22 +273,38 @@ func requestRecoverySnapshot(b *officialHostBridge, sid string) {
 	if ws == "" {
 		return
 	}
-	r.mu.Lock()
-	r.nextID++
-	if r.nextID < 100000 {
-		r.nextID = 100000
-	}
-	id := r.nextID
-	if r.pendingRead == nil {
-		r.pendingRead = map[int]string{}
-	}
-	r.pendingRead[id] = sid
-	r.mu.Unlock()
 	raw := relay.ChannelCallBytes(&relay.ChannelCall{
-		Kind: relay.KindPromise, ID: id,
+		Kind: relay.KindPromise, ID: r.mintID(),
 		ChannelName: "zcode-session", Name: "readSession",
 		Arg: map[string]any{"workspacePath": ws, "sessionId": sid, "messageLimit": 50},
 	})
+	r.mu.Lock()
+	if r.pendingRead == nil {
+		r.pendingRead = map[int]string{}
+	}
+	r.pendingRead[r.lastID] = sid
+	r.mu.Unlock()
+	forwardRawToOfficialHost(raw)
+}
+
+// requestConversationRows fetches the official transcript rows for a session
+// (the same call the desktop renderer makes after applying a base snapshot).
+func requestConversationRows(b *officialHostBridge, sid string) {
+	r := b.rec
+	officialState.mu.Lock()
+	ws := officialState.workspace
+	officialState.mu.Unlock()
+	raw := relay.ChannelCallBytes(&relay.ChannelCall{
+		Kind: relay.KindPromise, ID: r.mintID(),
+		ChannelName: "zcode-agent", Name: "conversationRowsRangeV4",
+		Arg: map[string]any{"workspacePath": ws, "sessionId": sid, "limit": 200},
+	})
+	r.mu.Lock()
+	if r.pendingRows == nil {
+		r.pendingRows = map[int]string{}
+	}
+	r.pendingRows[r.lastID] = sid
+	r.mu.Unlock()
 	forwardRawToOfficialHost(raw)
 }
 
@@ -230,22 +337,64 @@ func inspectOfficialResponse(raw []byte) {
 		var res struct {
 			Ack struct {
 				SubscriptionID string `json:"subscriptionId"`
+				LogEpoch       string `json:"logEpoch"`
 			} `json:"ack"`
 		}
 		if json.Unmarshal(data, &res) == nil && res.Ack.SubscriptionID != "" {
 			r.setSub(sid, res.Ack.SubscriptionID)
-			fmt.Println("zcode: recovery: subscription", res.Ack.SubscriptionID, "sid", sid)
+			r.setEpoch(sid, res.Ack.LogEpoch)
+			fmt.Println("zcode: recovery: subscription", res.Ack.SubscriptionID, "epoch", res.Ack.LogEpoch, "sid", sid)
 			requestRecoverySnapshot(b, sid)
 		}
 	case isRead && len(data) > 0:
-		emitRecoverySnapshot(b, rsid, data)
+		// stash the session snapshot, then fetch the official transcript rows
+		r.stashSnap(rsid, data)
+		requestConversationRows(b, rsid)
 	}
+	r.mu.Lock()
+	rowsid, isRows := r.pendingRows[id]
+	if isRows {
+		delete(r.pendingRows, id)
+	}
+	r.mu.Unlock()
+	if isRows && len(data) > 0 {
+		snapRaw := r.snapFor(rowsid)
+		if snapRaw != nil {
+			var snap map[string]any
+			if err := json.Unmarshal(snapRaw, &snap); err != nil || snap == nil {
+				return
+			}
+			var rowsRes map[string]any
+			_ = json.Unmarshal(data, &rowsRes)
+			fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
+			mergeRowsIntoSnapshot(snap, rowsRes)
+			emitRecoverySnapshot(b, rowsid, snap)
+		}
+	}
+}
+
+// keysOf returns the top-level keys of a decoded JSON object (diagnostics).
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// firstJSON truncates raw JSON for a log line.
+func firstJSON(b json.RawMessage) string {
+	s := string(b)
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }
 
 // emitRecoverySnapshot wraps a readSession result into the conversation topic
 // frame shape (topic/subscriptionId/seq/payload{kind:snapshot,snapshot}) and
 // delivers it as the onDynamicConversationFrame event the page listens on.
-func emitRecoverySnapshot(b *officialHostBridge, sid string, result json.RawMessage) {
+func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any) {
 	r := b.rec
 	listen := r.listener()
 	if listen == 0 {
@@ -256,20 +405,38 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, result json.RawMess
 		sub = "sub-synth-" + uuidNew()
 		r.setSub(sid, sub)
 	}
-	var snap map[string]any
-	if err := json.Unmarshal(result, &snap); err != nil {
-		fmt.Println("zcode: recovery: readSession parse failed:", err)
-		return
-	}
 	// protocol echo is not part of the client's snapshot schema (strict)
 	delete(snap, "protocol")
-	frame := map[string]any{
+	// The client's frame schema demands fromSeq==0 for snapshots, and its
+	// strict variant requires snapshot.logEpoch == frame.logEpoch.
+	epoch := r.epochFor(sid)
+	if epoch != "" {
+		snap["logEpoch"] = epoch
+	}
+	inner := map[string]any{
 		"topic":          "conversation/" + sid,
 		"subscriptionId": sub,
-		"fromSeq":        1,
-		"toSeq":          1,
+		"logEpoch":       epoch,
+		"fromSeq":        0,
+		"toSeq":          0,
 		"sentAt":         time.Now().UnixMilli(),
 		"payload":        map[string]any{"kind": "snapshot", "snapshot": snap},
+	}
+	r.mu.Lock()
+	r.wireOrdinal++
+	ordinal := r.wireOrdinal
+	r.mu.Unlock()
+	// The phone transport validates a wireVersion-3 envelope (complete or
+	// fragment assembly) before the logical frame reaches the store.
+	frame := map[string]any{
+		"wireVersion":         3,
+		"kind":                "complete",
+		"deliveryKind":        "continuous",
+		"logicalFrameId":      uuidNew(),
+		"logicalFrameOrdinal": ordinal,
+		"topic":               "conversation/" + sid,
+		"subscriptionId":      sub,
+		"frame":               inner,
 	}
 	pb, err := json.Marshal(frame)
 	if err != nil {
