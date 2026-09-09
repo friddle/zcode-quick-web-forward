@@ -258,6 +258,18 @@ func officialHostActive() bool {
 // forwardCallToOfficialHost pipes one decoded phone channel call to the
 // host's service port.
 func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
+	// The phone page subscribes to zcode-agent dynamic-frame listeners with
+	// NO argument; the host's resolveWorkspaceKey(undefined) then throws and
+	// the uncaughtException kills the whole host. The desktop UI always sends
+	// the workspace context — inject it for argument-less calls.
+	if c.Arg == nil {
+		officialState.mu.Lock()
+		ws := officialState.workspace
+		officialState.mu.Unlock()
+		if ws != "" {
+			c.Arg = map[string]any{"workspacePath": ws}
+		}
+	}
 	return forwardRawToOfficialHost(relay.ChannelCallBytes(c))
 }
 
