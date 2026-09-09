@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/friddle/zcode-quick-web-forward/internal/browser"
 )
 
 // runLoginCLI drives the interactive entry: region, login method, then remote.
@@ -40,6 +42,7 @@ func runLoginCLI(args []string) {
 		bigmodelLogin()
 	default:
 		fmt.Println("zcode: 登录方式: 登录链接 (官方 login --no-browser)")
+		ensureClientChrome()
 		fmt.Println("zcode: 会打印登录链接 -> 请在浏览器打开 -> 授权回调。")
 		args2 := []string{"login", "--no-browser"}
 		fmt.Printf("zcode: $ %s %s %s\n", node, scriptPath(rt), strings.Join(args2, " "))
@@ -49,6 +52,28 @@ func runLoginCLI(args []string) {
 	}
 	fmt.Println("zcode: 登录完成。启动 app-server 并生成 web-remote 链接 ...")
 	doRemoteOpts(o)
+}
+
+// ensureClientChrome makes sure the docker engine and the chrome-driverless
+// image exist before the client (zai gateway) login flow. The plan gateway
+// rejects model requests without the Aliyun captcha header, and that header
+// can only be produced by a real browser (chrome-driverless). Missing pieces
+// are offered an install — the same flow as `install chrome`; a failed
+// install only warns: login can proceed and chrome can be added later.
+func ensureClientChrome() {
+	if dockerAlive() && imagePresent(browser.DefaultDockerImage) {
+		fmt.Println("zcode: docker + chrome-driverless 已就绪。")
+		return
+	}
+	fmt.Print("zcode: 客户端模式需要 docker + chrome-driverless 镜像 (网关验证码由它产生)。现在安装? [Y/n]: ")
+	line, _ := stdinReader.ReadString('\n')
+	if t := strings.TrimSpace(line); t == "n" || t == "no" || t == "N" {
+		fmt.Println("zcode: 跳过 — 网关会拒绝无验证码的模型请求, 之后可执行 zcode-quick-web-forward install chrome 补装。")
+		return
+	}
+	if err := installChrome(installOpts{}); err != nil {
+		fmt.Fprintf(os.Stderr, "zcode: chrome 安装失败 (%v) — 稍后可执行 zcode-quick-web-forward install chrome 重试\n", err)
+	}
 }
 
 // ---- BigModel login (domestic) ----

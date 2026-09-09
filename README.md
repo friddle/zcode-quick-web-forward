@@ -105,6 +105,33 @@ google.com, then baidu.com (env override: `ZCODE_REGION`):
 The web-remote / mobile pairing relay defaults to `https://zcode.z.ai` for
 both regions (env override: `ZCODE_BASE_URL`).
 
+### Model modes: ZCode client (套餐) vs API Key
+
+The login method you pick decides how the engine reaches GLM — and what it
+costs:
+
+| | 1) 登录链接 (ZCode 客户端模式) | 2) API Key (直连模式) |
+|---|---|---|
+| 登录 | Z.AI OAuth（手机号/短信，链接在任意浏览器打开） | BigModel API key（[open.bigmodel.cn/apikeys](https://open.bigmodel.cn/apikeys)） |
+| 计费 | **编程套餐**：含 usage×2、各类优惠活动 | 标准 API 按量计费 |
+| 依赖 | docker + chrome-driverless 镜像（网关验证码由真实浏览器产生，`install chrome` 一键装） | 无 |
+| 网络 | 走 zcode-plan 网关 | 直连 `open.bigmodel.cn/api/anthropic` |
+
+> **API Key 模式的重要限制**：智谱编程套餐的 **usage×2 / 限时加量 / 各种优惠**
+> 只在套餐网关侧生效。直连 key 模式绕过了网关（也因此无需浏览器验证码），
+> 所以这些优惠**全部不可用**，按 BigModel 标准 token 单价扣费。
+
+第三方/自建 provider（SiliconFlow、DeepSeek、本地网关等）同样走 key 模式：
+
+```bash
+zcode-quick-web-forward provider add siliconflow \
+    --base-url https://api.siliconflow.cn/v1 --api-key sk-xxx \
+    --model deepseek-ai/DeepSeek-V3.1
+zcode-quick-web-forward provider list   # 查看已配置的 provider
+```
+
+`provider add` 后重启 daemon，在手机 **管理模型** 里选择对应模型即可。
+
 ### Flags
 
 | flag | description |
