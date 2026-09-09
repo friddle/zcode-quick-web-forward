@@ -791,7 +791,8 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 	// to an empty workspace target and NO conversation/workspace frames are
 	// ever delivered to it (desktop renderers attach the workspace
 	// automatically). Fill in the workspace for workspace-scoped listens.
-	if c.Kind == relay.KindEventListen && c.ChannelName != "broadcast" &&
+	if c.Kind == relay.KindEventListen &&
+		(c.ChannelName == "zcode-agent" || c.ChannelName == "zcode-task") &&
 		strings.HasPrefix(c.Name, "onDynamic") {
 		m := argMap(c.Arg)
 		if m["workspacePath"] == nil || m["workspacePath"] == "" {
