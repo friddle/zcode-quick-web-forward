@@ -107,7 +107,10 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	if lerr != nil {
 		nodeAbs = nodeBin
 	}
-	env := officialhost.Env(nodeAbs, []string{script, "app-server"}, filepath.Dir(script),
+	// --stdio is REQUIRED: the desktop spawns `app-server --stdio`; without
+	// the flag the engine runs in a mode where the v4 conversation gateway
+	// never publishes frames (subscribe acks but no snapshot/stream ever).
+	env := officialhost.Env(nodeAbs, []string{script, "app-server", "--stdio"}, filepath.Dir(script),
 		filepath.Join(home, ".zcode"), "zcode-quick-web-forward", nil)
 	h, err := officialhost.StartEnv(nodeBin, dir, env)
 	if err != nil {
@@ -265,6 +268,10 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 	// dynamic-frame listeners and fails every task/session call otherwise.
 	// broadcast.onMessage is a true no-arg listen — leave it alone.
 	if c.ChannelName != "broadcast" {
+		b, _ := json.Marshal(c.Arg)
+		out := relay.ChannelCallBytes(c)
+		fmt.Printf("zcode: inject ws into %s.%s -> %s | frame %d bytes: %x\n", c.ChannelName, c.Name, string(b), len(out), out[:min(48, len(out))])
+		return forwardRawToOfficialHost(out)
 		officialState.mu.Lock()
 		ws := officialState.workspace
 		officialState.mu.Unlock()
