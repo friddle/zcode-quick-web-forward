@@ -180,6 +180,16 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 			return
 		}
 		fmt.Printf("zcode: official-host parentPort << %s\n", t)
+		// full payload for non-log parentPort traffic — these carry the
+		// realtime/session-route plumbing we may need to answer
+		raw, err := json.Marshal(msg)
+		if err == nil {
+			line := string(raw)
+			if len(line) > 1200 {
+				line = line[:1200] + "…"
+			}
+			fmt.Printf("zcode: official-host parentPort FULL %s\n", line)
+		}
 	}
 	h.OnRawPortData = b.onPortBytes
 
