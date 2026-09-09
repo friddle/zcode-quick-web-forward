@@ -69,6 +69,7 @@ type officialRecovery struct {
 	listenID     int               // EventListen id for onDynamicConversationFrame
 	pendingSub   map[int]string    // subscribe/resync call id -> sessionId
 	pendingRead  map[int]string    // synthetic readSession call id -> sessionId
+	priorListenIDs []int
 	subBySession map[string]string // sessionId -> subscriptionId (from acks)
 	epochBySess  map[string]string // sessionId -> logEpoch (from subscribe acks)
 	nextID       int               // synthetic promise-call id counter
@@ -197,6 +198,38 @@ func (r *officialRecovery) listener() int {
 	return r.listenID
 }
 
+// listeners returns the most recent EventListen ids (the page re-registers
+// its onDynamicConversationFrame listener on every reconnect/resubscribe;
+// emitting to a superseded id is silently dropped, to a current one lands).
+func (r *officialRecovery) listeners() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []int{}
+	if r.listenID != 0 {
+		out = append(out, r.listenID)
+	}
+	for _, id := range r.priorListenIDs {
+		if id != 0 && id != r.listenID {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func (r *officialRecovery) recordListen(id int) {
+	r.mu.Lock()
+	if id != 0 && id != r.listenID {
+		if r.listenID != 0 {
+			r.priorListenIDs = append([]int{r.listenID}, r.priorListenIDs...)
+			if len(r.priorListenIDs) > 3 {
+				r.priorListenIDs = r.priorListenIDs[:3]
+			}
+		}
+		r.listenID = id
+	}
+	r.mu.Unlock()
+}
+
 func (r *officialRecovery) subFor(sid string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -248,9 +281,7 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 	r := b.rec
 	switch {
 	case c.Kind == relay.KindEventListen && c.ChannelName == "zcode-agent" && c.Name == "onDynamicConversationFrame":
-		r.mu.Lock()
-		r.listenID = c.ID
-		r.mu.Unlock()
+		r.recordListen(c.ID)
 		fmt.Println("zcode: recovery: onDynamicConversationFrame listen id", c.ID)
 	case c.Kind == relay.KindPromise && (c.Name == "subscribeConversationV4" || c.Name == "resyncConversationV4"):
 		sid, _ := argMap(c.Arg)["sessionId"].(string)
@@ -291,7 +322,7 @@ func scheduleRecoverySnapshots(b *officialHostBridge, sid string) {
 // over the service port. The reply is matched in inspectOfficialResponse.
 func requestRecoverySnapshot(b *officialHostBridge, sid string) {
 	r := b.rec
-	if r.listener() == 0 {
+	if len(r.listeners()) == 0 {
 		return // page has not registered its listener yet
 	}
 	officialState.mu.Lock()
@@ -372,6 +403,14 @@ func inspectOfficialResponse(raw []byte) {
 			r.setEpoch(sid, res.Ack.LogEpoch)
 			fmt.Println("zcode: recovery: subscription", res.Ack.SubscriptionID, "epoch", res.Ack.LogEpoch, "sid", sid)
 			requestRecoverySnapshot(b, sid)
+			go func(sid string) {
+				for _, d := range []time.Duration{3 * time.Second, 8 * time.Second} {
+					time.Sleep(d)
+					if b.h.Alive() {
+						requestRecoverySnapshot(b, sid)
+					}
+				}
+			}(sid)
 		}
 	case isRead && len(data) > 0:
 		// stash the session snapshot, then fetch the official transcript rows
@@ -388,6 +427,7 @@ func inspectOfficialResponse(raw []byte) {
 		var rowsRes map[string]any
 		_ = json.Unmarshal(data, &rowsRes)
 		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
+		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
 		snap := buildProjectionSnapshot(rowsid, rowsRes)
 		if epoch := r.epochFor(rowsid); epoch != "" {
 			snap["logEpoch"] = epoch
@@ -422,8 +462,8 @@ func firstJSON(b json.RawMessage) string {
 // delivers it as the onDynamicConversationFrame event the page listens on.
 func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any) {
 	r := b.rec
-	listen := r.listener()
-	if listen == 0 {
+	listens := r.listeners()
+	if len(listens) == 0 {
 		return
 	}
 	sub := r.subFor(sid)
@@ -473,10 +513,12 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	if err != nil {
 		return
 	}
-	out := relay.EventFireBytes(listen, pb)
-	fmt.Printf("zcode: recovery: synthesized snapshot frame %d bytes for %s\n", len(out), sid)
-	if b.engine != nil && b.engine.HasIdentity() {
-		b.engine.SendRawChannelBytes(out, senderSend())
+	for _, listen := range listens {
+		out := relay.EventFireBytes(listen, pb)
+		fmt.Printf("zcode: recovery: synthesized snapshot frame %d bytes for %s (listen %d)\n", len(out), sid, listen)
+		if b.engine != nil && b.engine.HasIdentity() {
+			b.engine.SendRawChannelBytes(out, senderSend())
+		}
 	}
 }
 
