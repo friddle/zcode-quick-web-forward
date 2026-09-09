@@ -115,6 +115,12 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 		return false
 	}
 	b := &officialHostBridge{h: h, engine: engine, sender: sender}
+	// register EARLY: the host's "local services ready" log (which flips the
+	// pipe's ready gate) can fire while this function is still inside
+	// WaitReady/attach — the callback resolves the bridge via officialState.
+	officialState.mu.Lock()
+	officialState.active = b
+	officialState.mu.Unlock()
 	h.OnLog = func(line string) {
 		for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
 			if l != "" {
@@ -202,7 +208,6 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	h.PortOpen("svc")
 
 	officialState.mu.Lock()
-	officialState.active = b
 	officialState.nodeBin = nodeBin
 	officialState.script = script
 	officialState.workspace = workspace
