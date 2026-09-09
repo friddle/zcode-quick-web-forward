@@ -77,6 +77,8 @@ type officialRecovery struct {
 	lastID       int               // id of the most recently minted synthetic call
 	pendingRows  map[int]string    // synthetic rowsRange call id -> sessionId
 	lastRowsJSON map[string]string // sessionId -> last emitted rows JSON (dedup)
+	resyncPend   map[string]bool   // sessionId -> resyncConversationV4 awaiting its recovery frame
+	snapSeqBy    map[string]int    // sessionId -> last snapshot seq (must advance per emission)
 	termListens  []*relay.ChannelCall // cached terminal.onDynamic* listens (forwarded after create)
 	pendingCreate map[int]bool       // terminal.create call ids awaiting their id
 	lastTermID   string             // most recently created terminal id
@@ -368,6 +370,19 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			r.pendingSub = map[int]string{}
 		}
 		r.pendingSub[c.ID] = sid
+		// A (re)subscribe opens a NEW subscription — the page needs a snapshot
+		// for it even if the rows are identical to the last emission, so drop
+		// the per-session dedup key.
+		delete(r.lastRowsJSON, sid)
+		if c.Name == "resyncConversationV4" {
+			// The phone answers a resync only with a deliveryKind "recovery"
+			// frame; anything else (or silence) trips
+			// fault.subscription.recoveryFrameTimedOut and wedges the composer.
+			if r.resyncPend == nil {
+				r.resyncPend = map[string]bool{}
+			}
+			r.resyncPend[sid] = true
+		}
 		r.mu.Unlock()
 		fmt.Println("zcode: recovery: tracking", c.Name, "call id", c.ID, "sid", sid)
 	case c.Kind == relay.KindPromise && c.ChannelName == "terminal" && c.Name == "create":
@@ -531,7 +546,7 @@ func inspectOfficialResponse(raw []byte) {
 		_ = json.Unmarshal(data, &rowsRes)
 		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
 		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
-		if r.sameAsLast(rowsid, data) {
+		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) {
 			fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
 			return
 		}
@@ -565,6 +580,39 @@ func firstJSON(b json.RawMessage) string {
 	return s
 }
 
+// resyncWaiting reports whether a resyncConversationV4 for sid is still owed
+// its recovery-delivery frame (a duplicate-rows skip must not swallow it).
+func (r *officialRecovery) resyncWaiting(sid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.resyncPend[sid]
+}
+
+// takeDeliveryKind consumes a pending resync for sid: the next snapshot frame
+// must be delivered as "recovery" (what resyncConversationV4 waits for), any
+// other emission is "initial".
+func (r *officialRecovery) takeDeliveryKind(sid string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resyncPend[sid] {
+		delete(r.resyncPend, sid)
+		return "recovery"
+	}
+	return "initial"
+}
+
+// nextSnapSeq returns a strictly increasing snapshot seq per session — the
+// client re-bases its delta ledger on each snapshot's seq.
+func (r *officialRecovery) nextSnapSeq(sid string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.snapSeqBy == nil {
+		r.snapSeqBy = map[string]int{}
+	}
+	r.snapSeqBy[sid]++
+	return r.snapSeqBy[sid]
+}
+
 // emitRecoverySnapshot wraps a readSession result into the conversation topic
 // frame shape (topic/subscriptionId/seq/payload{kind:snapshot,snapshot}) and
 // delivers it as the onDynamicConversationFrame event the page listens on.
@@ -587,6 +635,8 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	if epoch != "" {
 		snap["logEpoch"] = epoch
 	}
+	snap["seq"] = r.nextSnapSeq(sid)
+	kind := r.takeDeliveryKind(sid)
 	inner := map[string]any{
 		"topic":          "conversation/" + sid,
 		"subscriptionId": sub,
@@ -604,7 +654,7 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	frame := map[string]any{
 		"wireVersion":         3,
 		"kind":                "complete",
-		"deliveryKind":        "initial",
+		"deliveryKind":        kind,
 		"logicalFrameId":      uuidNew(),
 		"logicalFrameOrdinal": ordinal,
 		"topic":               "conversation/" + sid,
@@ -621,7 +671,7 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 		return
 	}
 	out := relay.EventFireBytes(listen, pb)
-	fmt.Printf("zcode: recovery: synthesized snapshot frame %d bytes for %s (listen %d)\n", len(out), sid, listen)
+	fmt.Printf("zcode: recovery: synthesized %s snapshot frame %d bytes for %s (listen %d)\n", kind, len(out), sid, listen)
 	if b.engine != nil && b.engine.HasIdentity() {
 		b.engine.SendRawChannelBytes(out, senderSend())
 	}
