@@ -121,43 +121,53 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	officialState.mu.Lock()
 	officialState.active = b
 	officialState.mu.Unlock()
+	// markServicesReady flips the pipe gate when the host finishes booting.
+	// Host logs arrive via OnParentPort (JSON type:"log"); OnLog only sees
+	// raw stderr, but we check both to be safe.
+	markServicesReady := func(line string) {
+		if officialState.active == nil ||
+			!strings.Contains(line, "local services ready, all channels registered") {
+			return
+		}
+		ob := officialState.active
+		if ob.ready.Swap(true) {
+			return
+		}
+		fmt.Println("zcode: official-host READY — svc pipe open")
+		ob.mu.Lock()
+		pending := ob.pendingIn
+		ob.pendingIn = nil
+		ob.mu.Unlock()
+		for _, raw := range pending {
+			ob.mu.Lock()
+			port := ob.svcPort
+			if port == "" {
+				port = "svc"
+			}
+			ob.mu.Unlock()
+			ob.h.RawPortData(port, raw)
+		}
+		if len(pending) > 0 {
+			fmt.Printf("zcode: official-host flushed %d buffered phone frames (services ready)\n", len(pending))
+		}
+	}
 	h.OnLog = func(line string) {
 		for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
 			if l != "" {
 				fmt.Println("zcode: official-host | " + l)
-			}
-			// The host's own boot gate: workspace initialization finished and
-			// every channel is registered. Only then is the svc pipe safe.
-			if strings.Contains(l, "local services ready, all channels registered") && officialState.active != nil {
-				ob := officialState.active
-				ob.mu.Lock()
-				pending := ob.pendingIn
-				ob.pendingIn = nil
-				ob.mu.Unlock()
-				ob.ready.Store(true)
-				fmt.Println("zcode: official-host READY — svc pipe open")
-				for _, raw := range pending {
-					ob.mu.Lock()
-					port := ob.svcPort
-					if port == "" {
-						port = "svc"
-					}
-					ob.mu.Unlock()
-					ob.h.RawPortData(port, raw)
-				}
-				if len(pending) > 0 {
-					fmt.Printf("zcode: official-host flushed %d buffered phone frames (services ready)\n", len(pending))
-				}
+				markServicesReady(l)
 			}
 		}
 	}
 	h.OnParentPort = func(msg map[string]any) {
 		t, _ := msg["type"].(string)
 		if t == "log" {
-			// The host pipes its internal log lines as parentPort messages —
-			// print the payload or engine-spawn/service failures stay invisible.
-			if raw, err := json.Marshal(msg); err == nil && len(raw) > 0 {
+			// host internal logs ride parentPort JSON — print them or
+			// engine-spawn/service failures stay invisible
+			raw, err := json.Marshal(msg)
+			if err == nil {
 				line := string(raw)
+				markServicesReady(line)
 				maybeAnswerRuntimeHeadersRequest(line)
 				if len(line) > 4000 {
 					line = line[:4000] + "…"
