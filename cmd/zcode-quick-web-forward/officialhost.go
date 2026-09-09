@@ -455,9 +455,20 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 }
 
 // scheduleRecoverySnapshots re-emits the conversation snapshot after a send.
+// Dense early refreshes make the reply stream in; a long tail (20s cadence,
+// 12 minutes) covers long-running turns — without it the phone freezes on a
+// stale "正在执行" tool card when the live delta stream stalls, and the turn
+// completion only shows up after a manual reload.
 func scheduleRecoverySnapshots(b *officialHostBridge, sid string) {
 	for _, d := range []time.Duration{4 * time.Second, 10 * time.Second, 20 * time.Second, 35 * time.Second} {
 		time.Sleep(d)
+		if !b.h.Alive() {
+			return
+		}
+		requestRecoverySnapshot(b, sid)
+	}
+	for i := 0; i < 33; i++ {
+		time.Sleep(20 * time.Second)
 		if !b.h.Alive() {
 			return
 		}
