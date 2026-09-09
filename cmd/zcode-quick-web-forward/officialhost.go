@@ -182,6 +182,20 @@ func (r *officialRecovery) snapFor(sid string) json.RawMessage {
 // official rows come from conversationRowsRangeV4; everything static is
 // filled with the client-schema-required defaults.
 func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any {
+	fullRows, _ := rowsRes["rows"].([]any)
+	// The latest turnHeader row carries the live turn state — without it the
+	// composer never shows the 停止 button mid-turn (canStop hardcoded false
+	// froze the UI into send-only mode).
+	phase, canStop := "completedSuccess", false
+	for _, r := range fullRows {
+		if m, ok := r.(map[string]any); ok && m["kind"] == "turnHeader" {
+			if m["state"] == "running" {
+				phase, canStop = "running", true
+			} else {
+				phase, canStop = "completedSuccess", false
+			}
+		}
+	}
 	rows := rowsRes
 	if inner, ok := rowsRes["rows"].([]any); ok {
 		rows = map[string]any{"window": inner}
@@ -211,7 +225,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any 
 		"seq":             1,
 		"revision":        0,
 		"control": map[string]any{
-			"phase": "completedSuccess", "sessionEnded": false, "canStop": false,
+			"phase": phase, "sessionEnded": false, "canStop": canStop,
 			"stopState": "idle", "stopTargetKind": "unknown",
 			"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
 		},
