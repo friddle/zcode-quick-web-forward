@@ -110,7 +110,11 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	// --stdio is REQUIRED: the desktop spawns `app-server --stdio`; without
 	// the flag the engine runs in a mode where the v4 conversation gateway
 	// never publishes frames (subscribe acks but no snapshot/stream ever).
-	env := officialhost.Env(nodeAbs, []string{script, "app-server", "--stdio"}, filepath.Dir(script),
+	// Engine CWD must be the WORKSPACE (the desktop runs zcode-cli with the
+	// opened workspace as cwd): the engine scopes its session store by its
+	// project directory, and a runtime-dir cwd makes every hydrate fail with
+	// "Session not found" — conversation snapshots come back empty.
+	env := officialhost.Env(nodeAbs, []string{script, "app-server", "--stdio"}, workspace,
 		filepath.Join(home, ".zcode"), "zcode-quick-web-forward", nil)
 	h, err := officialhost.StartEnv(nodeBin, dir, env)
 	if err != nil {
