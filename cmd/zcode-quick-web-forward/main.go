@@ -37,6 +37,9 @@ func main() {
 		case "workspace":
 			doWorkspace(os.Args[2:])
 			return
+		case "provider":
+			doProvider(os.Args[2:])
+			return
 		case "update":
 			doUpdate(os.Args[2:])
 			return
