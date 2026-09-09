@@ -258,16 +258,43 @@ func officialHostActive() bool {
 // forwardCallToOfficialHost pipes one decoded phone channel call to the
 // host's service port.
 func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
-	// The phone page subscribes to zcode-agent dynamic-frame listeners with
-	// NO argument; the host's resolveWorkspaceKey(undefined) then throws and
-	// the uncaughtException kills the whole host. The desktop UI always sends
-	// the workspace context — inject it for argument-less calls.
-	if c.Arg == nil {
+	// The phone page sends its channel calls WITHOUT the workspace context —
+	// on the desktop the renderer's channel client attaches it automatically.
+	// Without it the host's workspace resolvers throw (resolveWorkspaceKey /
+	// reading 'workspacePath'), which crashed the host outright for the
+	// dynamic-frame listeners and fails every task/session call otherwise.
+	// broadcast.onMessage is a true no-arg listen — leave it alone.
+	if c.ChannelName != "broadcast" {
 		officialState.mu.Lock()
 		ws := officialState.workspace
 		officialState.mu.Unlock()
 		if ws != "" {
-			c.Arg = map[string]any{"workspacePath": ws}
+			var m map[string]any
+			switch a := c.Arg.(type) {
+			case map[string]any:
+				m = a
+			case json.RawMessage:
+				m = map[string]any{}
+				if len(a) > 0 {
+					_ = json.Unmarshal(a, &m)
+				}
+			case nil:
+				m = map[string]any{}
+			default:
+				if b, err := json.Marshal(a); err == nil {
+					m = map[string]any{}
+					_ = json.Unmarshal(b, &m)
+				}
+			}
+			if m != nil {
+				if _, ok := m["workspacePath"]; !ok {
+					m["workspacePath"] = ws
+				}
+				if _, ok := m["workspaceKey"]; !ok {
+					m["workspaceKey"] = ws
+				}
+				c.Arg = m
+			}
 		}
 	}
 	return forwardRawToOfficialHost(relay.ChannelCallBytes(c))
