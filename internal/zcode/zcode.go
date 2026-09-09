@@ -146,6 +146,36 @@ func UpsertTask(workspaceKey, workspacePath, taskID, title, status string) error
 	return err
 }
 
+// MutateTask applies a list mutation (archive/unarchive/pin/unpin/delete) to
+// a task directly in the index. The official host resolves mutations against
+// its own in-memory task sources and FAILs with "无法解析唯一 source" for
+// tasks it did not create in this run — the daemon-side fallback keeps the
+// phone's archive/pin buttons working for those older tasks (both sides read
+// this same sqlite).
+func MutateTask(taskID, op string) error {
+	col := map[string]string{
+		"archive": "archived = 1", "unarchive": "archived = 0",
+		"pin": "pinned = 1", "unpin": "pinned = 0",
+		"delete": "deleted = 1",
+	}[op]
+	if col == "" {
+		return fmt.Errorf("unknown task mutation %q", op)
+	}
+	db, err := openTaskDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	res, err := db.Exec("UPDATE tasks SET "+col+", updated_at=? WHERE task_id = ?", time.Now().UnixMilli(), taskID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	return nil
+}
+
 // TaskExists reports whether a task id is already in the index under any
 // workspace (used to decide whether the phone-side task is real/restorable).
 func TaskExists(taskID string) bool {

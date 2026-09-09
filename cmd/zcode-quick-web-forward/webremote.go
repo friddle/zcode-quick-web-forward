@@ -86,6 +86,18 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			onCall := func(c *relay.ChannelCall) {
 				fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
 				forwardCallToOfficialHost(c)
+				// Task mutations land in the shared task-index sqlite via the
+				// host, but the phone's sidebar list only refreshes on a
+				// workspace-list-updated push — without this, archive/pin/
+				// delete look like no-ops until a manual reload.
+				if c.ChannelName == "zcode-task" {
+					switch c.Name {
+					case "archiveTask", "unarchiveTask", "pinTask", "unpinTask", "deleteTask":
+						for _, d := range []time.Duration{300 * time.Millisecond, 1200 * time.Millisecond} {
+							time.AfterFunc(d, func() { pushWorkspaceList(sender.send, ps) })
+						}
+					}
+				}
 			}
 			onRaw := func(raw []byte) {
 				forwardRawToOfficialHost(raw)

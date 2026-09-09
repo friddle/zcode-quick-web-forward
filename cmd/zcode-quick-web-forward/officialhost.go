@@ -24,6 +24,7 @@ import (
 
 	"github.com/friddle/zcode-quick-web-forward/internal/officialhost"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
+	"github.com/friddle/zcode-quick-web-forward/internal/zcode"
 )
 
 type officialHostBridge struct {
@@ -79,6 +80,7 @@ type officialRecovery struct {
 	lastRowsJSON map[string]string // sessionId -> last emitted rows JSON (dedup)
 	resyncPend   map[string]bool   // sessionId -> resyncConversationV4 awaiting its recovery frame
 	snapSeqBy    map[string]int    // sessionId -> last snapshot seq (must advance per emission)
+	pendingTask  map[int]string    // call id -> "op|taskId" for zcode-task list mutations
 	termListens  []*relay.ChannelCall // cached terminal.onDynamic* listens (forwarded after create)
 	pendingCreate map[int]bool       // terminal.create call ids awaiting their id
 	lastTermID   string             // most recently created terminal id
@@ -397,6 +399,20 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			b.rec.pendingCreate[c.ID] = true
 			b.rec.mu.Unlock()
 		}
+	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-task" &&
+		(c.Name == "archiveTask" || c.Name == "unarchiveTask" || c.Name == "pinTask" ||
+			c.Name == "unpinTask" || c.Name == "deleteTask"):
+		taskID, _ := argMap(c.Arg)["taskId"].(string)
+		if taskID == "" {
+			return
+		}
+		op := c.Name[:len(c.Name)-len("Task")] // archive/unarchive/pin/unpin/delete
+		r.mu.Lock()
+		if r.pendingTask == nil {
+			r.pendingTask = map[int]string{}
+		}
+		r.pendingTask[c.ID] = op + "|" + taskID
+		r.mu.Unlock()
 	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "sendConversationCommandV4":
 		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
 		sid, _ := env["sessionId"].(string)
@@ -478,10 +494,29 @@ func inspectOfficialResponse(raw []byte) {
 		return
 	}
 	kind, id, data, ok := relay.ParseChannelResponse(raw)
-	if !ok || kind != relay.KindPromiseOK {
+	if !ok || (kind != relay.KindPromiseOK && kind != relay.KindPromiseErr) {
 		return
 	}
 	r := b.rec
+	r.mu.Lock()
+	taskMut, isTask := r.pendingTask[id]
+	if isTask {
+		delete(r.pendingTask, id)
+	}
+	r.mu.Unlock()
+	if isTask && kind == relay.KindPromiseErr {
+		// The official host only resolves list mutations against tasks it
+		// created this run ("无法解析唯一 source"); older tasks it still
+		// serves from the shared index. Apply the mutation here so the
+		// phone's archive/pin/delete buttons work for those too.
+		op, taskID, _ := strings.Cut(taskMut, "|")
+		if err := zcode.MutateTask(taskID, op); err != nil {
+			fmt.Printf("zcode: recovery: task mutation fallback %s %s failed: %v\n", op, taskID, err)
+		} else {
+			fmt.Printf("zcode: recovery: task mutation fallback applied %s %s\n", op, taskID)
+		}
+		return
+	}
 	r.mu.Lock()
 	isCreate := r.pendingCreate[id]
 	if isCreate {
