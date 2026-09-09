@@ -300,6 +300,11 @@ func EventFireBytes(listenID int, payload []byte) []byte {
 	return buildMessage([]any{chEventFire, listenID}, jsonToChannel(payload))
 }
 
+// PromiseSuccessBytes serializes a [201,id,result] reply whose result is the
+// given JSON (object or array) — used when the pipe answers a call itself
+// instead of forwarding it to the host.
+func PromiseSuccessBytes(id int, result []byte) []byte { return promiseSuccess(id, result) }
+
 // ListenBytes serializes an EventListen whose args are a single raw value
 // (e.g. the terminal id string): head=[102,id,channel,event] + value.
 // The host's listen adapter forwards the decoded data value VERBATIM to the

@@ -259,6 +259,19 @@ func (r *officialRecovery) epochFor(sid string) string {
 	return r.epochBySess[sid]
 }
 
+// sessionForSub resolves a subscriptionId (from a resyncConversationV4 call)
+// back to its session via the recorded subscribe acks.
+func (r *officialRecovery) sessionForSub(sub string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for sid, s := range r.subBySession {
+		if s == sub {
+			return sid
+		}
+	}
+	return ""
+}
+
 func (r *officialRecovery) setEpoch(sid, epoch string) {
 	if epoch == "" {
 		return
@@ -365,7 +378,14 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 	case c.Kind == relay.KindPromise && (c.Name == "subscribeConversationV4" || c.Name == "resyncConversationV4"):
 		sid, _ := argMap(c.Arg)["sessionId"].(string)
 		if sid == "" {
-			return
+			// resyncConversationV4 identifies the session only by
+			// subscriptionId — map it back through the subscribe acks.
+			if sub, _ := argMap(c.Arg)["subscriptionId"].(string); sub != "" {
+				sid = r.sessionForSub(sub)
+			}
+			if sid == "" {
+				return
+			}
 		}
 		r.mu.Lock()
 		if r.pendingSub == nil {
@@ -384,6 +404,15 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 				r.resyncPend = map[string]bool{}
 			}
 			r.resyncPend[sid] = true
+			// A standalone resync (no fresh subscribe ack, outside the
+			// post-send refresh window) has no other trigger — fetch and emit
+			// the recovery frame NOW or the phone resync-loops.
+			go func(sid string) {
+				time.Sleep(120 * time.Millisecond)
+				if b.h.Alive() {
+					requestRecoverySnapshot(b, sid)
+				}
+			}(sid)
 		}
 		r.mu.Unlock()
 		fmt.Println("zcode: recovery: tracking", c.Name, "call id", c.ID, "sid", sid)
@@ -973,6 +1002,24 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 			fmt.Println("zcode: recovery: cached terminal listen", c.Name, "(waiting for create id)")
 		}
 		return true
+	}
+	// The host's listArchivedTasks resolves against its in-memory task
+	// sources only — tasks archived via the daemon fallback (or created by an
+	// earlier host run) are invisible to it, so the phone's 归档 view shows
+	// "暂无归档任务". Answer from the shared index instead.
+	if c.Kind == relay.KindPromise && c.ChannelName == "zcode-task" && c.Name == "listArchivedTasks" {
+		items := taskListPayload("archived", nil)
+		out, err := json.Marshal(items)
+		if err == nil {
+			fmt.Println("zcode: recovery: served listArchivedTasks from daemon index:", len(items))
+			officialState.mu.Lock()
+			b := officialState.active
+			officialState.mu.Unlock()
+			if b != nil && b.engine != nil && b.engine.HasIdentity() {
+				b.engine.SendRawChannelBytes(relay.PromiseSuccessBytes(c.ID, out), senderSend())
+			}
+			return true
+		}
 	}
 	{
 		b, _ := json.Marshal(c.Arg)

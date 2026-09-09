@@ -132,11 +132,15 @@ func workspaceListPush(workspaces []string, ps *phoneSessions) map[string]any {
 	if len(workspaces) > 0 {
 		active = workspaces[0]
 	}
+	// NOTE: archived tasks must NOT be appended here — the phone's main list
+	// does not filter by the archived flag and would resurface them. The
+	// 归档 view is served by intercepting zcode-task.listArchivedTasks.
+	tasks := taskListPayload("", ps)
 	return map[string]any{
 		"zcode_type": "workspace-list-updated",
 		"result": map[string]any{
 			"workspaces":         wsList,
-			"tasks":              taskListPayload("", ps),
+			"tasks":              tasks,
 			"activeWorkspaceKey": active,
 		},
 	}
