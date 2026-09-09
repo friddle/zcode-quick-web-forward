@@ -148,32 +148,50 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any 
 		rows = inner
 	}
 	window, _ := rows["window"].([]any)
+	// Cap the recovery window: long transcripts fragment into many rpc-frames
+	// and the client fails reassembly (endless recover loop). The visible
+	// tail is what matters.
+	const maxSnapshotRows = 24
+	if len(window) > maxSnapshotRows {
+		window = window[len(window)-maxSnapshotRows:]
+	}
 	firstRowID := any(nil)
 	if len(window) > 0 {
 		if m, ok := window[0].(map[string]any); ok {
 			firstRowID = m["rowId"]
 		}
 	}
+	// This recipe mirrors with_self_implement's conversationSnapshotFrame —
+	// field-for-field the shape this exact phone page renders.
 	return map[string]any{
 		"protocolVersion": 1,
 		"sessionId":       sid,
-		"seq":             0,
+		"logEpoch":        "0",
+		"seq":             1,
 		"revision":        0,
 		"control": map[string]any{
 			"phase": "completedSuccess", "sessionEnded": false, "canStop": false,
 			"stopState": "idle", "stopTargetKind": "unknown",
 			"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
 		},
+		"slashCommands": []any{
+			map[string]any{"name": "compact", "description": "压缩当前会话上下文", "inputHint": "[instructions]", "source": "builtin"},
+			map[string]any{"name": "plan", "description": "切换到 Plan 模式并可选下发任务", "inputHint": "[task]", "source": "builtin"},
+			map[string]any{"name": "goal", "description": "查看或设置当前会话目标", "inputHint": "[pause|resume|clear|replace <objective>|<objective>]", "source": "builtin"},
+			map[string]any{"name": "init", "description": "创建或更新工作区 AGENTS.md", "inputHint": "[notes]", "source": "builtin"},
+		},
 		"availability": map[string]any{
 			"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
 			"switchModelConfig": map[string]any{"allowed": true}, "setFollowupMode": map[string]any{"allowed": true},
-			"queueEdit": map[string]any{"allowed": true}, "sendQueuedNow": map[string]any{"allowed": true},
-			"pauseGoal": map[string]any{"allowed": true}, "resumeGoal": map[string]any{"allowed": true},
+			"queueEdit":     map[string]any{"allowed": true},
+			"sendQueuedNow": map[string]any{"allowed": false, "reasonCode": "sendQueuedNowRequiresRunning"},
+			"pauseGoal":     map[string]any{"allowed": false, "reasonCode": "noGoalToPause"},
+			"resumeGoal":    map[string]any{"allowed": false, "reasonCode": "noGoalToResume"},
 		},
-		"inputRouting":    map[string]any{"mode": "startNow"},
-		"meta":            map[string]any{"title": "", "titleSource": "default"},
-		"config":          map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": "build"},
-		"modelTransition": nil,
+		"inputRouting":        map[string]any{"mode": "startNow"},
+		"meta":                map[string]any{"title": "", "titleSource": "default"},
+		"config":              map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": "build"},
+		"modelTransition":     nil,
 		"usage": map[string]any{
 			"contextWindow": map[string]any{"usedTokens": 0, "maxTokens": 1000000, "autoCompactThresholdTokens": nil},
 			"cumulative":    map[string]any{"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0},
@@ -182,6 +200,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any 
 		"pendingInteractions": []any{},
 		"pendingCommands":     []any{},
 		"backgroundWorks":     []any{},
+		"subagents":           map[string]any{"revision": 0, "childSessionIds": []any{}, "running": []any{}, "endedTotal": 0},
 		"goal":                nil,
 		"plan":                nil,
 		"workspaceHookAdmission": nil,
@@ -506,9 +525,8 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	inner := map[string]any{
 		"topic":          "conversation/" + sid,
 		"subscriptionId": sub,
-		"logEpoch":       epoch,
-		"fromSeq":        0,
-		"toSeq":          0,
+		"fromSeq":        1,
+		"toSeq":          1,
 		"sentAt":         time.Now().UnixMilli(),
 		"payload":        map[string]any{"kind": "snapshot", "snapshot": snap},
 	}
@@ -521,7 +539,7 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	frame := map[string]any{
 		"wireVersion":         3,
 		"kind":                "complete",
-		"deliveryKind":        "continuous",
+		"deliveryKind":        "initial",
 		"logicalFrameId":      uuidNew(),
 		"logicalFrameOrdinal": ordinal,
 		"topic":               "conversation/" + sid,
