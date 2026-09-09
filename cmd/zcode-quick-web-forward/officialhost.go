@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/officialhost"
@@ -42,6 +44,13 @@ type officialHostBridge struct {
 	// pipe on the second pairing (page reload = stuck at Paired. Loading…).
 	svcPort   string
 	attachSeq int
+	// ready flips when the host logs "local services ready, all channels
+	// registered" — its workspace initialization (initializeWorkspace) is
+	// async and channel messages that arrive earlier hit an empty registry,
+	// where resolveWorkspaceKey(undefined) is an uncaughtException that kills
+	// the host. Phone frames are buffered until then.
+	ready     atomic.Bool
+	pendingIn [][]byte
 }
 
 type officialHostState struct {
@@ -110,6 +119,28 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 		for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
 			if l != "" {
 				fmt.Println("zcode: official-host | " + l)
+			}
+			// The host's own boot gate: workspace initialization finished and
+			// every channel is registered. Only then is the svc pipe safe.
+			if strings.Contains(l, "local services ready, all channels registered") && officialState.active != nil {
+				ob := officialState.active
+				ob.mu.Lock()
+				pending := ob.pendingIn
+				ob.pendingIn = nil
+				ob.mu.Unlock()
+				ob.ready.Store(true)
+				for _, raw := range pending {
+					ob.mu.Lock()
+					port := ob.svcPort
+					if port == "" {
+						port = "svc"
+					}
+					ob.mu.Unlock()
+					ob.h.RawPortData(port, raw)
+				}
+				if len(pending) > 0 {
+					fmt.Printf("zcode: official-host flushed %d buffered phone frames (services ready)\n", len(pending))
+				}
 			}
 		}
 	}
@@ -223,6 +254,14 @@ func forwardRawToOfficialHost(raw []byte) bool {
 	if b == nil || !b.h.Alive() {
 		return false
 	}
+	if !b.ready.Load() {
+		// host still initializing its workspaces — hold the frame
+		b.mu.Lock()
+		b.pendingIn = append(b.pendingIn, raw)
+		b.mu.Unlock()
+		fmt.Printf("zcode: official-host buffering phone frame %d bytes (services not ready)\n", len(raw))
+		return true
+	}
 	b.mu.Lock()
 	port := b.svcPort
 	if port == "" {
@@ -250,6 +289,15 @@ func forwardRawToOfficialHost(raw []byte) bool {
 // ---------------------------------------------------------------------------
 
 var runtimeHeadersAnswered sync.Map
+
+// captchaParamFile is where the captcha runner drops a fresh Aliyun verify
+// param (single-use, F008). Overridable for tests.
+func captchaParamFile() string {
+	if p := os.Getenv("ZQF_CAPTCHA_PARAM_FILE"); p != "" {
+		return p
+	}
+	return "/tmp/zqwf-captcha-param.txt"
+}
 
 func maybeAnswerRuntimeHeadersRequest(logLine string) {
 	const marker = `收到 ZCode provider runtime headers 请求`
@@ -280,12 +328,24 @@ func maybeAnswerRuntimeHeadersRequest(logLine string) {
 	// object itself) — the desktop renderer passes them flat, not nested under
 	// a "workspace" key.
 	//
-	// headersApplied=true with empty headers makes the host build the session's
-	// runtime model from ITS provider registry (which holds the refreshed
-	// coding-plan API key) — the engine then calls the gateway with valid auth.
-	// headersApplied=false made the engine call with no credentials and die.
-	args := fmt.Sprintf(`{"workspacePath":%q,"sessionId":%q,"requestId":%q,"response":{"headersApplied":true,"runtimeProviderHeaders":{}}}`,
-		ws, sessionID, requestID)
+	// The plan gateway (provider_code 3007) REQUIRES the Aliyun captcha header
+	// on every model request (F008: each verify param is single-use). The
+	// captcha runner (chrome-driverless on 9333 + /tmp/zqwf-run-captcha.py)
+	// produces one verify param into ZQF_CAPTCHA_PARAM_FILE; we attach it here
+	// and consume the file, so a stale param can never be double-submitted.
+	// Without a fresh param we still answer (fast visible failure instead of
+	// an infinite "Working…").
+	headers := "{}"
+	if p := captchaParamFile(); p != "" {
+		if b, err := os.ReadFile(p); err == nil && len(bytes.TrimSpace(b)) > 0 {
+			param := strings.TrimSpace(string(b))
+			headers = fmt.Sprintf(`{"X-Aliyun-Captcha-Verify-Param":%q}`, param)
+			_ = os.Remove(p) // F008: single-use — never resubmit
+			fmt.Printf("zcode: attaching captcha verify param (%d chars) from %s\n", len(param), p)
+		}
+	}
+	args := fmt.Sprintf(`{"workspacePath":%q,"sessionId":%q,"requestId":%q,"response":{"headersApplied":true,"runtimeProviderHeaders":%s}}`,
+		ws, sessionID, requestID, headers)
 	frame := buildChannelCall("zcode-agent", "respondProviderRuntimeHeaders", args, 0x4000)
 	if forwardRawToOfficialHost(frame) {
 		fmt.Printf("zcode: answered provider runtime headers request %s (headersApplied=false)\n", requestID)
