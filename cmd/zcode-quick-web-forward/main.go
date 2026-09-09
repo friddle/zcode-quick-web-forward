@@ -40,6 +40,9 @@ func main() {
 		case "provider":
 			doProvider(os.Args[2:])
 			return
+		case "restart":
+			doRestart(os.Args[2:])
+			return
 		case "update":
 			doUpdate(os.Args[2:])
 			return
