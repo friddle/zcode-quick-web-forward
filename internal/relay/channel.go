@@ -31,6 +31,16 @@ const (
 	chEventDispose  = 103
 )
 
+// Exported kind aliases for the official-host bridge.
+const (
+	KindPromise      = chPromise
+	KindEventListen  = chEventListen
+	KindEventDispose = chEventDispose
+	KindPromiseOK    = chPromiseSuccess
+	KindPromiseErr   = chPromiseError
+	KindEventFire    = chEventFire
+)
+
 // chWriter builds a serialized value.
 type chWriter struct{ b []byte }
 
@@ -258,3 +268,34 @@ func parseChannelCall(b []byte) *ChannelCall {
 // InitializeMessage is the exported client handshake ([200]) — the official
 // host's channel server expects it before serving requests on a service port.
 func InitializeMessage() []byte { return initializeMessage() }
+
+// ParseChannelResponse decodes a host→client message whose head is
+// [kind,id] (promise success/error, event fire). data is the raw JSON of the
+// trailing value when it is a JSON string/object, nil otherwise.
+func ParseChannelResponse(b []byte) (kind, id int, data json.RawMessage, ok bool) {
+	r := &chReader{b: b}
+	arr, ok2 := r.value().([]any)
+	if !ok2 || len(arr) < 2 {
+		return 0, 0, nil, false
+	}
+	kind, _ = arr[0].(int)
+	id, _ = arr[1].(int)
+	switch kind {
+	case chPromiseSuccess, chPromiseError, chPromiseErrObj, chEventFire:
+		if v := r.value(); v != nil {
+			if rm, isRaw := v.(json.RawMessage); isRaw {
+				return kind, id, rm, true
+			}
+			if jb, err := json.Marshal(v); err == nil {
+				return kind, id, jb, true
+			}
+		}
+	}
+	return kind, id, nil, true
+}
+
+// EventFireBytes serializes an event delivery to one listener:
+// head=[204,id] + the event payload as a JSON value.
+func EventFireBytes(listenID int, payload []byte) []byte {
+	return buildMessage([]any{chEventFire, listenID}, jsonToChannel(payload))
+}

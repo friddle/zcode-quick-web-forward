@@ -51,6 +51,235 @@ type officialHostBridge struct {
 	// the host. Phone frames are buffered until then.
 	ready     atomic.Bool
 	pendingIn [][]byte
+	// rec is the conversation-recovery synthesizer (see officialRecovery).
+	rec *officialRecovery
+}
+
+// officialRecovery synthesizes the conversation topic frames (snapshot/deltas)
+// the phone page's v4 store needs to render a conversation. The official host
+// accepts our subscribeConversationV4 (rpc ack ok, mode=snapshot) but never
+// pushes the topic frames — on the desktop those flow through the main
+// process's relay bridge, which our headless pipe does not implement. We
+// recover by calling zcode-session.readSession ourselves after each
+// subscribe/resync (and after every sendText, so replies render) and wrapping
+// the result into the frame shape the client expects, delivered as an event
+// to the page's onDynamicConversationFrame listener.
+type officialRecovery struct {
+	mu           sync.Mutex
+	listenID     int               // EventListen id for onDynamicConversationFrame
+	pendingSub   map[int]string    // subscribe/resync call id -> sessionId
+	pendingRead  map[int]string    // synthetic readSession call id -> sessionId
+	subBySession map[string]string // sessionId -> subscriptionId (from acks)
+	nextID       int               // synthetic promise-call id counter
+}
+
+func (r *officialRecovery) listener() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.listenID
+}
+
+func (r *officialRecovery) subFor(sid string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.subBySession[sid]
+}
+
+func (r *officialRecovery) setSub(sid, sub string) {
+	r.mu.Lock()
+	if r.subBySession == nil {
+		r.subBySession = map[string]string{}
+	}
+	r.subBySession[sid] = sub
+	r.mu.Unlock()
+}
+
+// argMap normalizes a ChannelCall argument into a map.
+func argMap(arg any) map[string]any {
+	switch a := arg.(type) {
+	case map[string]any:
+		return a
+	case json.RawMessage:
+		m := map[string]any{}
+		if len(a) > 0 {
+			_ = json.Unmarshal(a, &m)
+		}
+		return m
+	case nil:
+		return map[string]any{}
+	default:
+		if b, err := json.Marshal(a); err == nil {
+			m := map[string]any{}
+			_ = json.Unmarshal(b, &m)
+			return m
+		}
+		return map[string]any{}
+	}
+}
+
+// trackOfficialRecoveryCall watches the phone's channel calls for the
+// conversation listen registration, subscribe/resync calls and sendText —
+// the triggers of the synthesized snapshot stream.
+func trackOfficialRecoveryCall(c *relay.ChannelCall) {
+	officialState.mu.Lock()
+	b := officialState.active
+	officialState.mu.Unlock()
+	if b == nil || b.rec == nil {
+		return
+	}
+	r := b.rec
+	switch {
+	case c.Kind == relay.KindEventListen && c.ChannelName == "zcode-agent" && c.Name == "onDynamicConversationFrame":
+		r.mu.Lock()
+		r.listenID = c.ID
+		r.mu.Unlock()
+		fmt.Println("zcode: recovery: onDynamicConversationFrame listen id", c.ID)
+	case c.Kind == relay.KindPromise && (c.Name == "subscribeConversationV4" || c.Name == "resyncConversationV4"):
+		sid, _ := argMap(c.Arg)["sessionId"].(string)
+		if sid == "" {
+			return
+		}
+		r.mu.Lock()
+		if r.pendingSub == nil {
+			r.pendingSub = map[int]string{}
+		}
+		r.pendingSub[c.ID] = sid
+		r.mu.Unlock()
+		fmt.Println("zcode: recovery: tracking", c.Name, "call id", c.ID, "sid", sid)
+	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "sendConversationCommandV4":
+		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
+		sid, _ := env["sessionId"].(string)
+		typ, _ := env["type"].(string)
+		if sid != "" && typ == "sendText" {
+			// the turn streams for a while — refresh the snapshot a few times
+			// so the assistant reply renders as it lands
+			go scheduleRecoverySnapshots(b, sid)
+		}
+	}
+}
+
+// scheduleRecoverySnapshots re-emits the conversation snapshot after a send.
+func scheduleRecoverySnapshots(b *officialHostBridge, sid string) {
+	for _, d := range []time.Duration{4 * time.Second, 10 * time.Second, 20 * time.Second, 35 * time.Second} {
+		time.Sleep(d)
+		if !b.h.Alive() {
+			return
+		}
+		requestRecoverySnapshot(b, sid)
+	}
+}
+
+// requestRecoverySnapshot issues a synthetic zcode-session.readSession call
+// over the service port. The reply is matched in inspectOfficialResponse.
+func requestRecoverySnapshot(b *officialHostBridge, sid string) {
+	r := b.rec
+	if r.listener() == 0 {
+		return // page has not registered its listener yet
+	}
+	officialState.mu.Lock()
+	ws := officialState.workspace
+	officialState.mu.Unlock()
+	if ws == "" {
+		return
+	}
+	r.mu.Lock()
+	r.nextID++
+	if r.nextID < 100000 {
+		r.nextID = 100000
+	}
+	id := r.nextID
+	if r.pendingRead == nil {
+		r.pendingRead = map[int]string{}
+	}
+	r.pendingRead[id] = sid
+	r.mu.Unlock()
+	raw := relay.ChannelCallBytes(&relay.ChannelCall{
+		Kind: relay.KindPromise, ID: id,
+		ChannelName: "zcode-session", Name: "readSession",
+		Arg: map[string]any{"workspacePath": ws, "sessionId": sid, "messageLimit": 50},
+	})
+	forwardRawToOfficialHost(raw)
+}
+
+// inspectOfficialResponse watches host replies for the synthetic readSession
+// results and the subscribe acks, and drives the synthesized snapshot stream.
+func inspectOfficialResponse(raw []byte) {
+	officialState.mu.Lock()
+	b := officialState.active
+	officialState.mu.Unlock()
+	if b == nil || b.rec == nil {
+		return
+	}
+	kind, id, data, ok := relay.ParseChannelResponse(raw)
+	if !ok || kind != relay.KindPromiseOK {
+		return
+	}
+	r := b.rec
+	r.mu.Lock()
+	sid, isSub := r.pendingSub[id]
+	if isSub {
+		delete(r.pendingSub, id)
+	}
+	rsid, isRead := r.pendingRead[id]
+	if isRead {
+		delete(r.pendingRead, id)
+	}
+	r.mu.Unlock()
+	switch {
+	case isSub && len(data) > 0:
+		var res struct {
+			Ack struct {
+				SubscriptionID string `json:"subscriptionId"`
+			} `json:"ack"`
+		}
+		if json.Unmarshal(data, &res) == nil && res.Ack.SubscriptionID != "" {
+			r.setSub(sid, res.Ack.SubscriptionID)
+			fmt.Println("zcode: recovery: subscription", res.Ack.SubscriptionID, "sid", sid)
+			requestRecoverySnapshot(b, sid)
+		}
+	case isRead && len(data) > 0:
+		emitRecoverySnapshot(b, rsid, data)
+	}
+}
+
+// emitRecoverySnapshot wraps a readSession result into the conversation topic
+// frame shape (topic/subscriptionId/seq/payload{kind:snapshot,snapshot}) and
+// delivers it as the onDynamicConversationFrame event the page listens on.
+func emitRecoverySnapshot(b *officialHostBridge, sid string, result json.RawMessage) {
+	r := b.rec
+	listen := r.listener()
+	if listen == 0 {
+		return
+	}
+	sub := r.subFor(sid)
+	if sub == "" {
+		sub = "sub-synth-" + uuidNew()
+		r.setSub(sid, sub)
+	}
+	var snap map[string]any
+	if err := json.Unmarshal(result, &snap); err != nil {
+		fmt.Println("zcode: recovery: readSession parse failed:", err)
+		return
+	}
+	// protocol echo is not part of the client's snapshot schema (strict)
+	delete(snap, "protocol")
+	frame := map[string]any{
+		"topic":          "conversation/" + sid,
+		"subscriptionId": sub,
+		"fromSeq":        1,
+		"toSeq":          1,
+		"sentAt":         time.Now().UnixMilli(),
+		"payload":        map[string]any{"kind": "snapshot", "snapshot": snap},
+	}
+	pb, err := json.Marshal(frame)
+	if err != nil {
+		return
+	}
+	out := relay.EventFireBytes(listen, pb)
+	fmt.Printf("zcode: recovery: synthesized snapshot frame %d bytes for %s\n", len(out), sid)
+	if b.engine != nil && b.engine.HasIdentity() {
+		b.engine.SendRawChannelBytes(out, senderSend())
+	}
 }
 
 type officialHostState struct {
@@ -121,7 +350,7 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 		fmt.Printf("zcode: official host start failed: %v — using built-in handlers\n", err)
 		return false
 	}
-	b := &officialHostBridge{h: h, engine: engine, sender: sender}
+	b := &officialHostBridge{h: h, engine: engine, sender: sender, rec: &officialRecovery{}}
 	// register EARLY: the host's "local services ready" log (which flips the
 	// pipe's ready gate) can fire while this function is still inside
 	// WaitReady/attach — the callback resolves the bridge via officialState.
@@ -275,6 +504,8 @@ func officialHostActive() bool {
 // forwardCallToOfficialHost pipes one decoded phone channel call to the
 // host's service port.
 func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
+	// recovery synthesizer bookkeeping must see every call (even broadcast)
+	trackOfficialRecoveryCall(c)
 	// The phone page sends its channel calls WITHOUT the workspace context —
 	// on the desktop the renderer's channel client attaches it automatically.
 	// Without it the host's workspace resolvers throw (resolveWorkspaceKey /
@@ -515,6 +746,7 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		return // stale port from a previous bridge generation
 	}
 	fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
+	inspectOfficialResponse(raw)
 	if !hostForwardEnabled() {
 		return // pipe disabled — log only, don't leak host bytes to the phone
 	}
