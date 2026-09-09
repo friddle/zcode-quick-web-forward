@@ -81,6 +81,10 @@ type officialRecovery struct {
 	resyncPend   map[string]bool   // sessionId -> resyncConversationV4 awaiting its recovery frame
 	snapSeqBy    map[string]int    // sessionId -> last snapshot seq (must advance per emission)
 	pendingTask  map[int]string    // call id -> "op|taskId" for zcode-task list mutations
+	queuedSends  map[string][]map[string]any // sessionId -> pending queue items (mid-turn sends)
+	turnRunning  map[string]bool   // sessionId -> last observed turnHeader.state == running
+	admSeq       int               // admissionSeq counter for synthesized queue items
+	lastQEmitted map[string]int    // sessionId -> queue size at last emitted snapshot
 	termListens  []*relay.ChannelCall // cached terminal.onDynamic* listens (forwarded after create)
 	pendingCreate map[int]bool       // terminal.create call ids awaiting their id
 	lastTermID   string             // most recently created terminal id
@@ -181,7 +185,7 @@ func (r *officialRecovery) snapFor(sid string) json.RawMessage {
 // meta/config/usage/queue/pendingCommands/backgroundWorks/rows/...). The
 // official rows come from conversationRowsRangeV4; everything static is
 // filled with the client-schema-required defaults.
-func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any {
+func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any) map[string]any {
 	fullRows, _ := rowsRes["rows"].([]any)
 	// The latest turnHeader row carries the live turn state — without it the
 	// composer never shows the 停止 button mid-turn (canStop hardcoded false
@@ -196,6 +200,8 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any 
 			}
 		}
 	}
+	// Drop queue items whose message has started executing (its userInput row
+	// is now part of the transcript).
 	rows := rowsRes
 	if inner, ok := rowsRes["rows"].([]any); ok {
 		rows = map[string]any{"window": inner}
@@ -251,7 +257,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any) map[string]any 
 			"contextWindow": map[string]any{"usedTokens": 0, "maxTokens": 1000000, "autoCompactThresholdTokens": nil},
 			"cumulative":    map[string]any{"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0},
 		},
-		"queue":               map[string]any{"items": []any{}, "autoDrain": true},
+		"queue":               map[string]any{"items": queued, "autoDrain": true},
 		"pendingInteractions": []any{},
 		"pendingCommands":     []any{},
 		"backgroundWorks":     []any{},
@@ -464,6 +470,32 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			// the turn streams for a while — refresh the snapshot a few times
 			// so the assistant reply renders as it lands
 			go scheduleRecoverySnapshots(b, sid)
+			// While a turn is already running this send is QUEUED, not
+			// executed. The host's queue decision never resolves quickly (its
+			// RPC pends ~30s), so surface the queued state ourselves: echo the
+			// item in queue.items until the message shows up in the rows.
+			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" && r.turnRunning[sid] {
+				cmdID, _ := env["commandId"].(string)
+				clientID, _ := env["clientId"].(string)
+				r.mu.Lock()
+				r.admSeq++
+				item := map[string]any{
+					"sourceCommandId": cmdID,
+					"queueItemId":     "q-" + cmdID,
+					"clientId":        clientID,
+					"kind":            "sendText",
+					"text":            text,
+					"attachments":     []any{},
+					"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
+					"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
+					"steer":           map[string]any{"state": "notRequested"},
+					"dispatch":        map[string]any{"state": "queued"},
+					"admittedAt":      time.Now().UnixMilli(),
+				}
+				r.queuedSends[sid] = append(r.queuedSends[sid], item)
+				r.mu.Unlock()
+				fmt.Printf("zcode: recovery: queued mid-turn send for %s (%d queued)\n", sid, len(r.queuedSends[sid]))
+			}
 		}
 	}
 }
@@ -635,12 +667,20 @@ func inspectOfficialResponse(raw []byte) {
 		_ = json.Unmarshal(data, &rowsRes)
 		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
 		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
-		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) {
+		r.observeTurnState(rowsid, rowsRes)
+		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && r.queuedCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 {
 			fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
 			return
 		}
 		r.rememberRows(rowsid, data)
-		snap := buildProjectionSnapshot(rowsid, rowsRes)
+		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
+		snap := buildProjectionSnapshot(rowsid, rowsRes, queued)
+		r.mu.Lock()
+		if r.lastQEmitted == nil {
+			r.lastQEmitted = map[string]int{}
+		}
+		r.lastQEmitted[rowsid] = len(r.queuedSends[rowsid])
+		r.mu.Unlock()
 		if epoch := r.epochFor(rowsid); epoch != "" {
 			snap["logEpoch"] = epoch
 		}
@@ -700,6 +740,85 @@ func (r *officialRecovery) nextSnapSeq(sid string) int {
 	}
 	r.snapSeqBy[sid]++
 	return r.snapSeqBy[sid]
+}
+
+// observeTurnState records the latest turnHeader state from a rows fetch.
+// Called BEFORE the duplicate-skip so turnRunning stays fresh even when no
+// frame is emitted.
+func (r *officialRecovery) observeTurnState(sid string, rowsRes map[string]any) {
+	running := false
+	for _, row := range fullRowsOf(rowsRes) {
+		if m, ok := row.(map[string]any); ok && m["kind"] == "turnHeader" {
+			running = m["state"] == "running"
+		}
+	}
+	r.mu.Lock()
+	if r.turnRunning == nil {
+		r.turnRunning = map[string]bool{}
+	}
+	r.turnRunning[sid] = running
+	r.mu.Unlock()
+}
+
+// queuedCount reports how many synthesized queue items are pending for sid.
+func (r *officialRecovery) queuedCount(sid string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.queuedSends[sid])
+}
+
+// fullRowsOf extracts the uncapped rows list from a conversationRowsRangeV4
+// result.
+func fullRowsOf(rowsRes map[string]any) []any {
+	rows, _ := rowsRes["rows"].([]any)
+	return rows
+}
+
+// takeQueuedItems returns the pending mid-turn queue items for sid, dropping
+// any whose text has begun executing (a matching userInput row appeared).
+// It also records the observed turn-running state for later sends.
+func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	running := false
+	for _, row := range rows {
+		if m, ok := row.(map[string]any); ok && m["kind"] == "turnHeader" {
+			running = m["state"] == "running"
+		}
+	}
+	if r.turnRunning == nil {
+		r.turnRunning = map[string]bool{}
+	}
+	r.turnRunning[sid] = running
+	var kept []any
+	for _, it := range r.queuedSends[sid] {
+		kept = append(kept, it)
+	}
+	for _, item := range r.queuedSends[sid] {
+		text, _ := item["text"].(string)
+		started := false
+		for _, row := range rows {
+			if m, ok := row.(map[string]any); ok && m["kind"] == "userInput" {
+				if t, _ := m["text"].(string); t == text {
+					started = true
+					break
+				}
+			}
+		}
+		if !started {
+			kept = append(kept, item)
+		}
+	}
+	if len(kept) == 0 {
+		delete(r.queuedSends, sid)
+		return []any{}
+	}
+	stored := make([]map[string]any, len(kept))
+	for i, it := range kept {
+		stored[i] = it.(map[string]any)
+	}
+	r.queuedSends[sid] = stored
+	return kept
 }
 
 // emitRecoverySnapshot wraps a readSession result into the conversation topic
