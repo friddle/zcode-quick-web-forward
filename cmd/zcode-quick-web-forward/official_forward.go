@@ -370,3 +370,57 @@ func forwardRawToOfficialHost(raw []byte) bool {
 // The trigger is the host's own log line (it prints requestId + sessionId);
 // requestId format: "<sessionId>:provider-runtime-headers:<millis>".
 // ---------------------------------------------------------------------------
+
+// switchSessionModel sends a switchModelConfig conversation command for one
+// session, moving it off a rate-limited provider. The engine applies model
+// switches per-session (host requires a sessionId), so a fresh subscribe is
+// the natural trigger.
+func switchSessionModel(b *officialHostBridge, sid, provider, model, thought string) {
+	r := b.rec
+	officialState.mu.Lock()
+	ws := officialState.workspace
+	officialState.mu.Unlock()
+	if ws == "" || sid == "" || provider == "" || model == "" {
+		return
+	}
+	if thought == "" {
+		thought = "max"
+	}
+	r.mu.Lock()
+	cid := r.clientBySession[sid]
+	r.mu.Unlock()
+	if cid == "" {
+		cid = "client-" + uuidNew()
+	}
+	raw := relay.ChannelCallBytes(&relay.ChannelCall{
+		Kind: relay.KindPromise, ID: r.mintID(),
+		ChannelName: "zcode-agent", Name: "sendConversationCommandV4",
+		Arg: map[string]any{
+			"workspacePath": ws,
+			"envelope": map[string]any{
+				"commandId":    uuidNew(),
+				"clientId":     cid,
+				"sessionId":    sid,
+				"baseRevision": 0,
+				"type":         "switchModelConfig",
+				"payload": map[string]any{
+					"provider": provider,
+					"model":    model,
+					"thought":  thought,
+				},
+				"issuedAt": time.Now().UnixMilli(),
+			},
+		},
+	})
+	forwardRawToOfficialHost(raw)
+	fmt.Printf("zcode: switchModelConfig %s/%s thought=%s for %s\n", provider, model, thought, sid)
+}
+
+// Switch-model override, sourced from three env vars (no quotes/JSON so
+// systemd's Environment= parsing can't mangle them):
+//   ZQF_SWITCH_PROVIDER=siliconflow
+//   ZQF_SWITCH_MODEL_NAME=deepseek-ai/DeepSeek-V3.1
+//   ZQF_SWITCH_THOUGHT=max
+var switchModelProvider = os.Getenv("ZQF_SWITCH_PROVIDER")
+var switchModelName = os.Getenv("ZQF_SWITCH_MODEL_NAME")
+var switchModelThought = os.Getenv("ZQF_SWITCH_THOUGHT")

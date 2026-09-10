@@ -116,6 +116,40 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
 		sid, _ := env["sessionId"].(string)
 		typ, _ := env["type"].(string)
+		if cid, _ := env["clientId"].(string); cid != "" && sid != "" {
+			// Remember the phone page's clientId per session — synthesized
+			// commands (switchModelConfig) must reuse it or the host rejects
+			// them with fault.command.clientMismatch.
+			r.mu.Lock()
+			if r.clientBySession == nil {
+				r.clientBySession = map[string]string{}
+			}
+			r.clientBySession[sid] = cid
+			r.mu.Unlock()
+			// Model override (ZQF_SWITCH_PROVIDER): trigger here, where the
+			// clientId is already known — a subscribe-time trigger fires before
+			// the page has sent any command, so it falls back to a random
+			// clientId and the host rejects it as clientMismatch.
+			if switchModelProvider != "" {
+				r.mu.Lock()
+				if r.modelSwitched == nil {
+					r.modelSwitched = map[string]bool{}
+				}
+				need := !r.modelSwitched[sid]
+				if need {
+					r.modelSwitched[sid] = true
+				}
+				r.mu.Unlock()
+				if need {
+					go func(sid string) {
+						time.Sleep(200 * time.Millisecond)
+						if b.h.Alive() {
+							switchSessionModel(b, sid, switchModelProvider, switchModelName, switchModelThought)
+						}
+					}(sid)
+				}
+			}
+		}
 		if sid != "" && typ == "switchCollaborationMode" {
 			// The page's mode selector state lives in our snapshot's
 			// config.mode (previously hardcoded "build") — without tracking
