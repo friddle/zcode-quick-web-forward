@@ -95,6 +95,8 @@ type officialRecovery struct {
 	lastKick         int64                   // unix ts of last pendingApproval-triggered refresh (rate limit)
 	refresherStarted bool                    // turn-running periodic refresher goroutine started
 	modeBySess       map[string]string       // sessionId -> collaboration mode (build/edit/plan/yolo)
+	sendAt           map[string]int64        // sessionId -> unix ms of last sendText (dedupe bypass window)
+	optimisticRun    map[string]int64        // sessionId -> unix ms deadline forcing phase=running
 	pendingRaw       map[int]*pendingRawCall // call id -> encoded promise call (handshake retry)
 	retrying         map[int]bool            // call ids with a handshake-retry loop in flight
 }
@@ -553,6 +555,32 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			}
 		}
 		if sid != "" && typ == "sendText" {
+			// Instant feedback: the page clears the composer on our early ack
+			// and then shows NOTHING until the next snapshot — the first one
+			// was 4s away and could be deduped away entirely (rows hadn't
+			// changed yet), leaving the user staring at a dead screen. Fetch
+			// immediately with tight follow-ups, bypass the rows-unchanged
+			// dedupe briefly, and optimistically report running.
+			now := time.Now().UnixMilli()
+			r.mu.Lock()
+			if r.sendAt == nil {
+				r.sendAt = map[string]int64{}
+			}
+			if r.optimisticRun == nil {
+				r.optimisticRun = map[string]int64{}
+			}
+			r.sendAt[sid] = now
+			r.optimisticRun[sid] = now + 30000
+			r.mu.Unlock()
+			go func(sid string) {
+				for _, d := range []time.Duration{0, 1200 * time.Millisecond, 2500 * time.Millisecond} {
+					time.Sleep(d)
+					if !b.h.Alive() {
+						return
+					}
+					requestRecoverySnapshot(b, sid)
+				}
+			}(sid)
 			// the turn streams for a while — refresh the snapshot a few times
 			// so the assistant reply renders as it lands
 			go scheduleRecoverySnapshots(b, sid)
@@ -572,7 +600,10 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			// executed. The host's queue decision never resolves quickly (its
 			// RPC pends ~30s), so surface the queued state ourselves: echo the
 			// item in queue.items until the message shows up in the rows.
-			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" && r.turnRunning[sid] {
+			// Synthesize regardless of the observed turn state — the user
+			// must see their message immediately, not after the first rows
+			// refresh happens to report running.
+			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" {
 				cmdID, _ := env["commandId"].(string)
 				clientID, _ := env["clientId"].(string)
 				r.mu.Lock()
@@ -582,23 +613,35 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 					// queued message was lost).
 					r.queuedSends = map[string][]map[string]any{}
 				}
-				r.admSeq++
-				item := map[string]any{
-					"sourceCommandId": cmdID,
-					"queueItemId":     "q-" + cmdID,
-					"clientId":        clientID,
-					"kind":            "sendText",
-					"text":            text,
-					"attachments":     []any{},
-					"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
-					"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
-					"steer":           map[string]any{"state": "notRequested"},
-					"dispatch":        map[string]any{"state": "queued"},
-					"admittedAt":      time.Now().UnixMilli(),
+				// The phone transport re-delivers commands (new call id,
+				// SAME commandId) — one synthesized queue item per delivery
+				// rendered the message N times.
+				dup := false
+				for _, it := range r.queuedSends[sid] {
+					if it["sourceCommandId"] == cmdID {
+						dup = true
+						break
+					}
 				}
-				r.queuedSends[sid] = append(r.queuedSends[sid], item)
+				if !dup {
+					r.admSeq++
+					item := map[string]any{
+						"sourceCommandId": cmdID,
+						"queueItemId":     "q-" + cmdID,
+						"clientId":        clientID,
+						"kind":            "sendText",
+						"text":            text,
+						"attachments":     []any{},
+						"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
+						"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
+						"steer":           map[string]any{"state": "notRequested"},
+						"dispatch":        map[string]any{"state": "queued"},
+						"admittedAt":      time.Now().UnixMilli(),
+					}
+					r.queuedSends[sid] = append(r.queuedSends[sid], item)
+					fmt.Printf("zcode: recovery: queued mid-turn send for %s (%d queued)\n", sid, len(r.queuedSends[sid]))
+				}
 				r.mu.Unlock()
-				fmt.Printf("zcode: recovery: queued mid-turn send for %s (%d queued)\n", sid, len(r.queuedSends[sid]))
 			}
 		}
 	}
@@ -910,7 +953,7 @@ func inspectOfficialResponse(raw []byte) {
 				break
 			}
 		}
-		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && r.queuedCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 && !blocked {
+		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && !r.sendFresh(rowsid) && r.queuedCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 && !blocked {
 			fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
 			return
 		}
@@ -918,6 +961,15 @@ func inspectOfficialResponse(raw []byte) {
 		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
 		mode := r.modeFor(rowsid)
 		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode)
+		if r.optimisticRunning(rowsid) {
+			// Send just happened and the engine's turnHeader hasn't caught
+			// up — report running so the composer flips to 停止生成 instead
+			// of showing a dead idle state.
+			if ctl, ok := snap["control"].(map[string]any); ok && ctl["phase"] != "running" {
+				ctl["phase"] = "running"
+				ctl["canStop"] = true
+			}
+		}
 		r.mu.Lock()
 		if r.lastQEmitted == nil {
 			r.lastQEmitted = map[string]int{}
@@ -1048,6 +1100,23 @@ func (r *officialRecovery) modeFor(sid string) string {
 		return m
 	}
 	return "build"
+}
+
+// sendFresh reports whether a sendText for sid happened recently enough that
+// the rows-unchanged dedupe must not suppress the snapshot (the user needs
+// to see their message / the queued state right away).
+func (r *officialRecovery) sendFresh(sid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Now().UnixMilli()-r.sendAt[sid] < 8000
+}
+
+// optimisticRunning reports whether we should force phase=running for sid
+// (briefly after a send, before the engine's turnHeader catches up).
+func (r *officialRecovery) optimisticRunning(sid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Now().UnixMilli() < r.optimisticRun[sid]
 }
 
 // queuedCount reports how many synthesized queue items are pending for sid.
