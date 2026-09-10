@@ -90,6 +90,10 @@ type officialRecovery struct {
 	lastTermID   string             // most recently created terminal id
 	snaps        map[string]json.RawMessage
 	snapsOrder   []string
+	pendingResolve   map[int][2]string // sendConversationCommandV4 call id -> {sessionId, interactionId}
+	deadInteractions map[string]bool   // interactionIds the engine reported as no-pending (stale rows)
+	lastKick         int64             // unix ts of last pendingApproval-triggered refresh (rate limit)
+	refresherStarted bool              // turn-running periodic refresher goroutine started
 }
 
 // sameAsLast reports whether the rows payload is byte-identical to the last
@@ -185,7 +189,7 @@ func (r *officialRecovery) snapFor(sid string) json.RawMessage {
 // meta/config/usage/queue/pendingCommands/backgroundWorks/rows/...). The
 // official rows come from conversationRowsRangeV4; everything static is
 // filled with the client-schema-required defaults.
-func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any) map[string]any {
+func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool) map[string]any {
 	fullRows, _ := rowsRes["rows"].([]any)
 	// The latest turnHeader row carries the live turn state — without it the
 	// composer never shows the 停止 button mid-turn (canStop hardcoded false
@@ -207,6 +211,52 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any) m
 		rows = map[string]any{"window": inner}
 	} else if inner, ok := rowsRes["rows"].(map[string]any); ok {
 		rows = inner
+	}
+	// Surface engine approval requests: a toolCall row with status
+	// pendingApproval means the turn is blocked on permission. The phone
+	// renders its approval card from pendingInteractions; without this the
+	// request is invisible and the turn hangs forever.
+	interactions := []any{}
+	for _, r := range fullRows {
+		m, ok := r.(map[string]any)
+		if !ok || m["status"] != "pendingApproval" {
+			continue
+		}
+		interactionID, _ := m["approvalInteractionId"].(string)
+		if interactionID == "" {
+			continue
+		}
+		if dead[interactionID] {
+			// Engine already resolved (or never had) this interaction — a
+			// pre-restart residue. Demote to running so the tool card stops
+			// rendering the dead 待审批 state.
+			m["status"] = "running"
+			continue
+		}
+		input, _ := m["input"].(map[string]any)
+		command, _ := input["command"].(string)
+		desc, _ := input["description"].(string)
+		summary := desc
+		if summary == "" {
+			summary = command
+		}
+		interactions = append(interactions, map[string]any{
+			"interactionId": interactionID,
+			"kind":          "permission",
+			"anchorRowId":   m["rowId"],
+			"createdAt":     m["createdAt"],
+			"payload": map[string]any{
+				"kind":       "permission",
+				"toolCallId": m["entityId"],
+				"toolName":   m["toolName"],
+				"summary":    summary,
+				"detail":     []any{},
+				"options": []any{
+					map[string]any{"optionId": "allow_once", "label": "Allow once", "kind": "allowOnce"},
+					map[string]any{"optionId": "deny", "label": "Deny", "kind": "deny"},
+				},
+			},
+		})
 	}
 	window, _ := rows["window"].([]any)
 	// Cap the recovery window: long transcripts fragment into many rpc-frames
@@ -258,7 +308,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any) m
 			"cumulative":    map[string]any{"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0},
 		},
 		"queue":               map[string]any{"items": queued, "autoDrain": true},
-		"pendingInteractions": []any{},
+		"pendingInteractions": interactions,
 		"pendingCommands":     []any{},
 		"backgroundWorks":     []any{},
 		"subagents":           map[string]any{"revision": 0, "childSessionIds": []any{}, "running": []any{}, "endedTotal": 0},
@@ -466,6 +516,23 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
 		sid, _ := env["sessionId"].(string)
 		typ, _ := env["type"].(string)
+		if sid != "" && typ == "resolveInteraction" {
+			// Watch the ack: the engine answers an interaction it no longer
+			// has pending with a no-op. Rows responses keep the historical
+			// pendingApproval status forever after host/engine restarts, so
+			// the snapshot would otherwise re-synthesize a dead permission
+			// card the user keeps clicking to no effect.
+			pl, _ := env["payload"].(map[string]any)
+			iid, _ := pl["interactionId"].(string)
+			if iid != "" {
+				r.mu.Lock()
+				if r.pendingResolve == nil {
+					r.pendingResolve = map[int][2]string{}
+				}
+				r.pendingResolve[c.ID] = [2]string{sid, iid}
+				r.mu.Unlock()
+			}
+		}
 		if sid != "" && typ == "sendText" {
 			// the turn streams for a while — refresh the snapshot a few times
 			// so the assistant reply renders as it lands
@@ -580,10 +647,39 @@ func inspectOfficialResponse(raw []byte) {
 		return
 	}
 	kind, id, data, ok := relay.ParseChannelResponse(raw)
-	if !ok || (kind != relay.KindPromiseOK && kind != relay.KindPromiseErr) {
+	if !ok {
 		return
 	}
 	r := b.rec
+	if kind == relay.KindEventFire {
+		// A live conversation frame that carries a fresh pendingApproval row
+		// means the engine is now blocked on a permission. The page renders
+		// approval cards only from our snapshot's pendingInteractions list —
+		// without a prompt refresh the card (and the engine) waits until the
+		// next scheduled snapshot, or forever if that window has passed.
+		if len(data) > 0 && bytes.Contains(data, []byte(`"status":"pendingApproval"`)) {
+			r.mu.Lock()
+			sids := make([]string, 0, len(r.subBySession))
+			for sid := range r.subBySession {
+				sids = append(sids, sid)
+			}
+			now := time.Now().Unix()
+			due := now-r.lastKick >= 3
+			if due {
+				r.lastKick = now
+			}
+			r.mu.Unlock()
+			if due {
+				for _, sid := range sids {
+					go requestRecoverySnapshot(b, sid)
+				}
+			}
+		}
+		return
+	}
+	if kind != relay.KindPromiseOK && kind != relay.KindPromiseErr {
+		return
+	}
 	r.mu.Lock()
 	taskMut, isTask := r.pendingTask[id]
 	if isTask {
@@ -616,7 +712,41 @@ func inspectOfficialResponse(raw []byte) {
 	if isRead {
 		delete(r.pendingRead, id)
 	}
+	resolve, isResolve := r.pendingResolve[id]
+	if isResolve {
+		delete(r.pendingResolve, id)
+	}
 	r.mu.Unlock()
+	if isResolve && kind == relay.KindPromiseOK && len(data) > 0 {
+		var res struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(data, &res) == nil {
+			sid, iid := resolve[0], resolve[1]
+			fmt.Printf("zcode: recovery: resolveInteraction %s ack status %s\n", iid, res.Status)
+			if res.Status == "noop" || res.Status == "rejected" {
+				// The engine has no such pending interaction — the row's
+				// pendingApproval status is stale (pre-restart residue).
+				// Blacklist it: stop synthesizing the card, unblock the
+				// snapshot flow, and push a clean snapshot immediately.
+				r.mu.Lock()
+				if r.deadInteractions == nil {
+					r.deadInteractions = map[string]bool{}
+				}
+				r.deadInteractions[iid] = true
+				delete(r.lastRowsJSON, sid)
+				r.mu.Unlock()
+				go requestRecoverySnapshot(b, sid)
+			} else if res.Status == "accepted" || res.Status == "duplicate" {
+				// Refresh promptly so the answered card clears without
+				// waiting for the next scheduled snapshot.
+				go func(sid string) {
+					time.Sleep(600 * time.Millisecond)
+					requestRecoverySnapshot(b, sid)
+				}(sid)
+			}
+		}
+	}
 	if isCreate && len(data) > 0 {
 		var res struct {
 			ID string `json:"id"`
@@ -667,14 +797,33 @@ func inspectOfficialResponse(raw []byte) {
 		_ = json.Unmarshal(data, &rowsRes)
 		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
 		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
-		r.observeTurnState(rowsid, rowsRes)
-		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && r.queuedCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 {
+		r.observeTurnState(b, rowsid, rowsRes)
+		// Never suppress a snapshot that carries a pending approval — the
+		// page can't answer what it never sees. Interactions the engine
+		// already reported as resolved don't count (stale rows).
+		r.mu.Lock()
+		dead := make(map[string]bool, len(r.deadInteractions))
+		for k, v := range r.deadInteractions {
+			dead[k] = v
+		}
+		r.mu.Unlock()
+		blocked := false
+		for _, row := range fullRowsOf(rowsRes) {
+			if m, ok := row.(map[string]any); ok && m["status"] == "pendingApproval" {
+				if iid, _ := m["approvalInteractionId"].(string); iid != "" && dead[iid] {
+					continue
+				}
+				blocked = true
+				break
+			}
+		}
+		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && r.queuedCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 && !blocked {
 			fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
 			return
 		}
 		r.rememberRows(rowsid, data)
 		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
-		snap := buildProjectionSnapshot(rowsid, rowsRes, queued)
+		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead)
 		r.mu.Lock()
 		if r.lastQEmitted == nil {
 			r.lastQEmitted = map[string]int{}
@@ -745,7 +894,7 @@ func (r *officialRecovery) nextSnapSeq(sid string) int {
 // observeTurnState records the latest turnHeader state from a rows fetch.
 // Called BEFORE the duplicate-skip so turnRunning stays fresh even when no
 // frame is emitted.
-func (r *officialRecovery) observeTurnState(sid string, rowsRes map[string]any) {
+func (r *officialRecovery) observeTurnState(b *officialHostBridge, sid string, rowsRes map[string]any) {
 	running := false
 	for _, row := range fullRowsOf(rowsRes) {
 		if m, ok := row.(map[string]any); ok && m["kind"] == "turnHeader" {
@@ -758,6 +907,42 @@ func (r *officialRecovery) observeTurnState(sid string, rowsRes map[string]any) 
 	}
 	r.turnRunning[sid] = running
 	r.mu.Unlock()
+	if running {
+		r.ensureTurnRefresher(b)
+	}
+}
+
+// ensureTurnRefresher starts a per-host goroutine that keeps refreshing the
+// snapshot every 20s while any session's turn is running. The post-send
+// schedule covers only ~12 minutes; longer turns (and permission requests
+// that arrive after it ends) would otherwise leave the page on stale state.
+func (r *officialRecovery) ensureTurnRefresher(b *officialHostBridge) {
+	r.mu.Lock()
+	if r.refresherStarted {
+		r.mu.Unlock()
+		return
+	}
+	r.refresherStarted = true
+	r.mu.Unlock()
+	go func() {
+		for {
+			time.Sleep(20 * time.Second)
+			if !b.h.Alive() {
+				return
+			}
+			r.mu.Lock()
+			sids := make([]string, 0, len(r.turnRunning))
+			for sid, run := range r.turnRunning {
+				if run {
+					sids = append(sids, sid)
+				}
+			}
+			r.mu.Unlock()
+			for _, sid := range sids {
+				requestRecoverySnapshot(b, sid)
+			}
+		}
+	}()
 }
 
 // queuedCount reports how many synthesized queue items are pending for sid.
