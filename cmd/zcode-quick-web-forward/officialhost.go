@@ -66,35 +66,37 @@ type officialHostBridge struct {
 // the result into the frame shape the client expects, delivered as an event
 // to the page's onDynamicConversationFrame listener.
 type officialRecovery struct {
-	mu           sync.Mutex
-	listenID     int               // EventListen id for onDynamicConversationFrame
-	pendingSub   map[int]string    // subscribe/resync call id -> sessionId
-	pendingRead  map[int]string    // synthetic readSession call id -> sessionId
-	priorListenIDs []int
-	subBySession map[string]string // sessionId -> subscriptionId (from acks)
-	epochBySess  map[string]string // sessionId -> logEpoch (from subscribe acks)
-	nextID       int               // synthetic promise-call id counter
-	wireOrdinal  int               // logicalFrameOrdinal of synthesized wire frames
-	lastID       int               // id of the most recently minted synthetic call
-	pendingRows  map[int]string    // synthetic rowsRange call id -> sessionId
-	lastRowsJSON map[string]string // sessionId -> last emitted rows JSON (dedup)
-	resyncPend   map[string]bool   // sessionId -> resyncConversationV4 awaiting its recovery frame
-	snapSeqBy    map[string]int    // sessionId -> last snapshot seq (must advance per emission)
-	pendingTask  map[int]string    // call id -> "op|taskId" for zcode-task list mutations
-	queuedSends  map[string][]map[string]any // sessionId -> pending queue items (mid-turn sends)
-	turnRunning  map[string]bool   // sessionId -> last observed turnHeader.state == running
-	admSeq       int               // admissionSeq counter for synthesized queue items
-	lastQEmitted map[string]int    // sessionId -> queue size at last emitted snapshot
-	termListens  []*relay.ChannelCall // cached terminal.onDynamic* listens (forwarded after create)
-	pendingCreate map[int]bool       // terminal.create call ids awaiting their id
-	lastTermID   string             // most recently created terminal id
-	snaps        map[string]json.RawMessage
-	snapsOrder   []string
-	pendingResolve   map[int][2]string // sendConversationCommandV4 call id -> {sessionId, interactionId}
-	deadInteractions map[string]bool   // interactionIds the engine reported as no-pending (stale rows)
-	lastKick         int64             // unix ts of last pendingApproval-triggered refresh (rate limit)
-	refresherStarted bool              // turn-running periodic refresher goroutine started
-	modeBySess       map[string]string // sessionId -> collaboration mode (build/edit/plan/yolo)
+	mu               sync.Mutex
+	listenID         int            // EventListen id for onDynamicConversationFrame
+	pendingSub       map[int]string // subscribe/resync call id -> sessionId
+	pendingRead      map[int]string // synthetic readSession call id -> sessionId
+	priorListenIDs   []int
+	subBySession     map[string]string           // sessionId -> subscriptionId (from acks)
+	epochBySess      map[string]string           // sessionId -> logEpoch (from subscribe acks)
+	nextID           int                         // synthetic promise-call id counter
+	wireOrdinal      int                         // logicalFrameOrdinal of synthesized wire frames
+	lastID           int                         // id of the most recently minted synthetic call
+	pendingRows      map[int]string              // synthetic rowsRange call id -> sessionId
+	lastRowsJSON     map[string]string           // sessionId -> last emitted rows JSON (dedup)
+	resyncPend       map[string]bool             // sessionId -> resyncConversationV4 awaiting its recovery frame
+	snapSeqBy        map[string]int              // sessionId -> last snapshot seq (must advance per emission)
+	pendingTask      map[int]string              // call id -> "op|taskId" for zcode-task list mutations
+	queuedSends      map[string][]map[string]any // sessionId -> pending queue items (mid-turn sends)
+	turnRunning      map[string]bool             // sessionId -> last observed turnHeader.state == running
+	admSeq           int                         // admissionSeq counter for synthesized queue items
+	lastQEmitted     map[string]int              // sessionId -> queue size at last emitted snapshot
+	termListens      []*relay.ChannelCall        // cached terminal.onDynamic* listens (forwarded after create)
+	pendingCreate    map[int]bool                // terminal.create call ids awaiting their id
+	lastTermID       string                      // most recently created terminal id
+	snaps            map[string]json.RawMessage
+	snapsOrder       []string
+	pendingResolve   map[int][2]string       // sendConversationCommandV4 call id -> {sessionId, interactionId}
+	deadInteractions map[string]bool         // interactionIds the engine reported as no-pending (stale rows)
+	lastKick         int64                   // unix ts of last pendingApproval-triggered refresh (rate limit)
+	refresherStarted bool                    // turn-running periodic refresher goroutine started
+	modeBySess       map[string]string       // sessionId -> collaboration mode (build/edit/plan/yolo)
+	pendingRaw       map[int]*pendingRawCall // call id -> encoded promise call (handshake retry)
+	retrying         map[int]bool            // call ids with a handshake-retry loop in flight
 }
 
 // sameAsLast reports whether the rows payload is byte-identical to the last
@@ -300,21 +302,21 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 			"pauseGoal":     map[string]any{"allowed": false, "reasonCode": "noGoalToPause"},
 			"resumeGoal":    map[string]any{"allowed": false, "reasonCode": "noGoalToResume"},
 		},
-		"inputRouting":        map[string]any{"mode": "startNow"},
-		"meta":                map[string]any{"title": "", "titleSource": "default"},
-		"config":              map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": mode},
-		"modelTransition":     nil,
+		"inputRouting":    map[string]any{"mode": "startNow"},
+		"meta":            map[string]any{"title": "", "titleSource": "default"},
+		"config":          map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": mode},
+		"modelTransition": nil,
 		"usage": map[string]any{
 			"contextWindow": map[string]any{"usedTokens": 0, "maxTokens": 1000000, "autoCompactThresholdTokens": nil},
 			"cumulative":    map[string]any{"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0},
 		},
-		"queue":               map[string]any{"items": queued, "autoDrain": true},
-		"pendingInteractions": interactions,
-		"pendingCommands":     []any{},
-		"backgroundWorks":     []any{},
-		"subagents":           map[string]any{"revision": 0, "childSessionIds": []any{}, "running": []any{}, "endedTotal": 0},
-		"goal":                nil,
-		"plan":                nil,
+		"queue":                  map[string]any{"items": queued, "autoDrain": true},
+		"pendingInteractions":    interactions,
+		"pendingCommands":        []any{},
+		"backgroundWorks":        []any{},
+		"subagents":              map[string]any{"revision": 0, "childSessionIds": []any{}, "running": []any{}, "endedTotal": 0},
+		"goal":                   nil,
+		"plan":                   nil,
 		"workspaceHookAdmission": nil,
 		"rows": map[string]any{
 			"window":     window,
@@ -660,6 +662,30 @@ func requestConversationRows(b *officialHostBridge, sid string) {
 	forwardRawToOfficialHost(raw)
 }
 
+// retryUntilReady replays a handshake-rejected call with backoff. Each
+// replay reuses the original call id, so the host (once ready) answers the
+// same id; that answer (or a host death) ends the loop via the bookkeeping
+// cleanup in inspectOfficialResponse.
+func (r *officialRecovery) retryUntilReady(b *officialHostBridge, id int, pr *pendingRawCall) {
+	for _, d := range []time.Duration{200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond,
+		1500 * time.Millisecond, 3 * time.Second, 5 * time.Second, 8 * time.Second, 12 * time.Second} {
+		time.Sleep(d)
+		r.mu.Lock()
+		still := r.retrying[id]
+		r.mu.Unlock()
+		if !still {
+			return // answered in the meantime
+		}
+		if !b.h.Alive() {
+			fmt.Printf("zcode: recovery: retry %d (%s) aborted — host gone\n", id, pr.typ)
+			return
+		}
+		fmt.Printf("zcode: recovery: replaying call %d (%s) after handshake rejection\n", id, pr.typ)
+		forwardRawToOfficialHost(pr.raw)
+	}
+	fmt.Printf("zcode: recovery: retry %d (%s) gave up — host never became ready\n", id, pr.typ)
+}
+
 // inspectOfficialResponse watches host replies for the synthetic readSession
 // results and the subscribe acks, and drives the synthesized snapshot stream.
 func inspectOfficialResponse(raw []byte) {
@@ -702,6 +728,38 @@ func inspectOfficialResponse(raw []byte) {
 	}
 	if kind != relay.KindPromiseOK && kind != relay.KindPromiseErr {
 		return
+	}
+	// Handshake-retry bookkeeping. A call rejected with
+	// fault.connection.handshakeRequired never reached the host's agent
+	// service — replay it with backoff instead of dropping it on the floor.
+	if handshakeFailed := kind == relay.KindPromiseErr && len(data) > 0 &&
+		bytes.Contains(data, []byte("handshakeRequired")); handshakeFailed {
+		r.mu.Lock()
+		pr := r.pendingRaw[id]
+		already := r.retrying[id]
+		if pr != nil && !already {
+			if r.retrying == nil {
+				r.retrying = map[int]bool{}
+			}
+			r.retrying[id] = true
+		}
+		r.mu.Unlock()
+		if pr != nil && !already {
+			go r.retryUntilReady(b, id, pr)
+		}
+		if pr != nil {
+			return // retry loop owns this id
+		}
+	} else {
+		r.mu.Lock()
+		pr := r.pendingRaw[id]
+		wasRetried := r.retrying[id]
+		delete(r.pendingRaw, id)
+		delete(r.retrying, id)
+		r.mu.Unlock()
+		if pr != nil && wasRetried && kind == relay.KindPromiseOK && pr.typ == "sendText" && pr.sid != "" {
+			go scheduleRecoverySnapshots(b, pr.sid)
+		}
 	}
 	r.mu.Lock()
 	taskMut, isTask := r.pendingTask[id]
@@ -1391,9 +1449,44 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 	{
 		b, _ := json.Marshal(c.Arg)
 		out := relay.ChannelCallBytes(c)
+		// Remember the encoded bytes of promise calls: if the host answers
+		// fault.connection.handshakeRequired (phone sent before the host
+		// pipe finished handshaking — typical right after a daemon restart)
+		// the call is otherwise silently lost.
+		if c.Kind == relay.KindPromise {
+			if rec := officialActiveRec(); rec != nil {
+				env, _ := argMap(c.Arg)["envelope"].(map[string]any)
+				typ, _ := env["type"].(string)
+				sid, _ := env["sessionId"].(string)
+				rec.mu.Lock()
+				if rec.pendingRaw == nil {
+					rec.pendingRaw = map[int]*pendingRawCall{}
+				}
+				rec.pendingRaw[c.ID] = &pendingRawCall{raw: out, typ: typ, sid: sid}
+				rec.mu.Unlock()
+			}
+		}
 		fmt.Printf("zcode: inject ws into %s.%s -> %s | frame %d bytes: %x\n", c.ChannelName, c.Name, string(b), len(out), out[:min(48, len(out))])
 		return forwardRawToOfficialHost(out)
 	}
+}
+
+// pendingRawCall remembers an encoded promise call for handshake retry.
+type pendingRawCall struct {
+	raw []byte
+	typ string
+	sid string
+}
+
+// officialActiveRec returns the active recovery recorder, or nil.
+func officialActiveRec() *officialRecovery {
+	officialState.mu.Lock()
+	b := officialState.active
+	officialState.mu.Unlock()
+	if b == nil {
+		return nil
+	}
+	return b.rec
 }
 
 // forwardRawToOfficialHost pipes raw channel bytes (calls, initialize acks,
