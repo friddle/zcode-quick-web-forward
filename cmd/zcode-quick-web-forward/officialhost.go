@@ -562,6 +562,12 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 				cmdID, _ := env["commandId"].(string)
 				clientID, _ := env["clientId"].(string)
 				r.mu.Lock()
+				if r.queuedSends == nil {
+					// Crash-on-first-mid-turn-send: appending to a nil map
+					// killed the whole daemon (systemd revived it, but the
+					// queued message was lost).
+					r.queuedSends = map[string][]map[string]any{}
+				}
 				r.admSeq++
 				item := map[string]any{
 					"sourceCommandId": cmdID,
@@ -1030,6 +1036,9 @@ func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
 	stored := make([]map[string]any, len(kept))
 	for i, it := range kept {
 		stored[i] = it.(map[string]any)
+	}
+	if r.queuedSends == nil {
+		r.queuedSends = map[string][]map[string]any{}
 	}
 	r.queuedSends[sid] = stored
 	return kept
