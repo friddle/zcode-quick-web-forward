@@ -307,10 +307,12 @@ func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
 		r.turnRunning = map[string]bool{}
 	}
 	r.turnRunning[sid] = running
+	// Keep only items whose text has not yet shown up as a userInput row
+	// (i.e. the message has not begun executing). Previously an extra
+	// unconditional pass copied every queued item into `kept` first, so the
+	// queue doubled on each snapshot refresh (1 -> 2 -> 4 -> ...), rendering
+	// the same pending message dozens of times in the phone UI.
 	var kept []any
-	for _, it := range r.queuedSends[sid] {
-		kept = append(kept, it)
-	}
 	for _, item := range r.queuedSends[sid] {
 		text, _ := item["text"].(string)
 		started := false
