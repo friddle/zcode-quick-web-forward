@@ -1428,24 +1428,10 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 		}
 		return true
 	}
-	// The host's listArchivedTasks resolves against its in-memory task
-	// sources only — tasks archived via the daemon fallback (or created by an
-	// earlier host run) are invisible to it, so the phone's 归档 view shows
-	// "暂无归档任务". Answer from the shared index instead.
-	if c.Kind == relay.KindPromise && c.ChannelName == "zcode-task" && c.Name == "listArchivedTasks" {
-		items := taskListPayload("archived", nil)
-		out, err := json.Marshal(items)
-		if err == nil {
-			fmt.Println("zcode: recovery: served listArchivedTasks from daemon index:", len(items))
-			officialState.mu.Lock()
-			b := officialState.active
-			officialState.mu.Unlock()
-			if b != nil && b.engine != nil && b.engine.HasIdentity() {
-				b.engine.SendRawChannelBytes(relay.PromiseSuccessBytes(c.ID, out), senderSend())
-			}
-			return true
-		}
-	}
+	// listArchivedTasks interception removed: the host now reads the shared
+	// tasks-index.sqlite itself (including archived rows), and the daemon's
+	// item shape didn't match the page's task-row schema — the 归档 panel
+	// stayed empty ("暂无归档任务") with the synthesized answer.
 	{
 		b, _ := json.Marshal(c.Arg)
 		out := relay.ChannelCallBytes(c)
