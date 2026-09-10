@@ -556,6 +556,18 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			// the turn streams for a while — refresh the snapshot a few times
 			// so the assistant reply renders as it lands
 			go scheduleRecoverySnapshots(b, sid)
+			// Early-ack: the host pends a sendText ~30s while admitting it
+			// (longer when queued), and the page disables its send buttons
+			// GLOBALLY while any command is in flight — every other task's
+			// composer was frozen meanwhile. Answer accepted immediately;
+			// the page's applyAck is idempotent so the late host ack is a
+			// harmless duplicate.
+			if b.engine != nil && b.engine.HasIdentity() {
+				if out, err := json.Marshal(map[string]any{"status": "accepted"}); err == nil {
+					b.engine.SendRawChannelBytes(relay.PromiseSuccessBytes(c.ID, out), senderSend())
+					fmt.Printf("zcode: recovery: early-acked sendText for %s (call %d)\n", sid, c.ID)
+				}
+			}
 			// While a turn is already running this send is QUEUED, not
 			// executed. The host's queue decision never resolves quickly (its
 			// RPC pends ~30s), so surface the queued state ourselves: echo the
