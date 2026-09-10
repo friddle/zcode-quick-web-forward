@@ -94,6 +94,7 @@ type officialRecovery struct {
 	deadInteractions map[string]bool   // interactionIds the engine reported as no-pending (stale rows)
 	lastKick         int64             // unix ts of last pendingApproval-triggered refresh (rate limit)
 	refresherStarted bool              // turn-running periodic refresher goroutine started
+	modeBySess       map[string]string // sessionId -> collaboration mode (build/edit/plan/yolo)
 }
 
 // sameAsLast reports whether the rows payload is byte-identical to the last
@@ -189,7 +190,7 @@ func (r *officialRecovery) snapFor(sid string) json.RawMessage {
 // meta/config/usage/queue/pendingCommands/backgroundWorks/rows/...). The
 // official rows come from conversationRowsRangeV4; everything static is
 // filled with the client-schema-required defaults.
-func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool) map[string]any {
+func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string) map[string]any {
 	fullRows, _ := rowsRes["rows"].([]any)
 	// The latest turnHeader row carries the live turn state — without it the
 	// composer never shows the 停止 button mid-turn (canStop hardcoded false
@@ -301,7 +302,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		},
 		"inputRouting":        map[string]any{"mode": "startNow"},
 		"meta":                map[string]any{"title": "", "titleSource": "default"},
-		"config":              map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": "build"},
+		"config":              map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": mode},
 		"modelTransition":     nil,
 		"usage": map[string]any{
 			"contextWindow": map[string]any{"usedTokens": 0, "maxTokens": 1000000, "autoCompactThresholdTokens": nil},
@@ -516,6 +517,22 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
 		sid, _ := env["sessionId"].(string)
 		typ, _ := env["type"].(string)
+		if sid != "" && typ == "switchCollaborationMode" {
+			// The page's mode selector state lives in our snapshot's
+			// config.mode (previously hardcoded "build") — without tracking
+			// this every refresh snapshot flipped the chip back to
+			// 变更前确认 even though the host/engine applied the switch.
+			pl, _ := env["payload"].(map[string]any)
+			if mode, _ := pl["mode"].(string); mode != "" {
+				r.mu.Lock()
+				if r.modeBySess == nil {
+					r.modeBySess = map[string]string{}
+				}
+				r.modeBySess[sid] = mode
+				r.mu.Unlock()
+				fmt.Printf("zcode: recovery: session %s mode -> %s\n", sid, mode)
+			}
+		}
 		if sid != "" && typ == "resolveInteraction" {
 			// Watch the ack: the engine answers an interaction it no longer
 			// has pending with a no-op. Rows responses keep the historical
@@ -823,7 +840,8 @@ func inspectOfficialResponse(raw []byte) {
 		}
 		r.rememberRows(rowsid, data)
 		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
-		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead)
+		mode := r.modeFor(rowsid)
+		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode)
 		r.mu.Lock()
 		if r.lastQEmitted == nil {
 			r.lastQEmitted = map[string]int{}
@@ -943,6 +961,17 @@ func (r *officialRecovery) ensureTurnRefresher(b *officialHostBridge) {
 			}
 		}
 	}()
+}
+
+// modeFor returns the session's collaboration mode (build/edit/plan/yolo),
+// defaulting to build until the page sends switchCollaborationMode.
+func (r *officialRecovery) modeFor(sid string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m := r.modeBySess[sid]; m != "" {
+		return m
+	}
+	return "build"
 }
 
 // queuedCount reports how many synthesized queue items are pending for sid.
