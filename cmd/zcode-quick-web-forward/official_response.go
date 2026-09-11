@@ -268,6 +268,12 @@ func inspectOfficialResponse(raw []byte) {
 	if isRows && len(data) > 0 {
 		var rowsRes map[string]any
 		_ = json.Unmarshal(data, &rowsRes)
+		// rowsRange echoes the engine's current log epoch — keep it fresh even
+		// when the subscribe ack was missed (the edit-retry/rewind command
+		// family validates its exact baseLogEpoch against this).
+		if ep, _ := rowsRes["atLogEpoch"].(string); ep != "" {
+			r.setEpoch(rowsid, ep)
+		}
 		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
 		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
 		r.observeTurnState(b, rowsid, rowsRes)

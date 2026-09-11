@@ -308,6 +308,30 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 							fmt.Printf("zcode: recovery: injected baseRevision %d for %s\n", rev, sid)
 						}
 					}
+					// The edit-retry/rewind family (editUserQuery, retryTurn,
+					// applyFileRewind, forkAssistant, setAssistantFeedback)
+					// additionally requires an EXACT baseLogEpoch — the engine
+					// rejects a stale one with proto.staleLogEpoch before even
+					// looking at baseRevision. Repair an epoch the page took
+					// from an early snapshot (advertised "0" before the
+					// subscribe ack taught us the real one). Only touch the
+					// field when the page itself sent it: the envelope schemas
+					// of other command types don't carry it.
+					typ, _ := env["type"].(string)
+					switch typ {
+					case "editUserQuery", "retryTurn", "applyFileRewind", "forkAssistant", "setAssistantFeedback":
+						if learned := rec.epochFor(sid); learned != "" {
+							if ble, has := env["baseLogEpoch"].(string); has && ble != learned {
+								env["baseLogEpoch"] = learned
+								if m, ok := c.Arg.(map[string]any); ok {
+									m["envelope"] = env
+								} else {
+									c.Arg = argMap(c.Arg)
+								}
+								fmt.Printf("zcode: recovery: injected baseLogEpoch %s for %s (%s)\n", learned, sid, typ)
+							}
+						}
+					}
 				}
 			}
 		}

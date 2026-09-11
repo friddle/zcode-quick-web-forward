@@ -469,6 +469,15 @@ func (r *officialRecovery) replayWithRevision(b *officialHostBridge, pr *pending
 	}
 	env, _ := argMap(pr.call.Arg)["envelope"].(map[string]any)
 	env["baseRevision"] = float64(rev)
+	// A stale ack on the edit-retry/rewind family is usually
+	// proto.staleLogEpoch — repairing only baseRevision here would make the
+	// replay go stale again forever. Refresh the epoch too, but only when the
+	// page itself sent one (the field doesn't exist on every command schema).
+	if ep := r.epochFor(pr.sid); ep != "" {
+		if ble, has := env["baseLogEpoch"].(string); has && ble != ep {
+			env["baseLogEpoch"] = ep
+		}
+	}
 	if m, ok := pr.call.Arg.(map[string]any); ok {
 		m["envelope"] = env
 	}
