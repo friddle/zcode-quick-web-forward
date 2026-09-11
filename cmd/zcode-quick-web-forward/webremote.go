@@ -293,10 +293,14 @@ func workspaceListPayload(workspaces []string) []any {
 	}
 	// Projects discovered from the task index: a task created under a
 	// workspace that isn't in the configured list still gets its own card on
-	// the phone's landing page instead of silently missing.
-	if tasks, err := zcode.ListTasks("", ""); err == nil {
-		for _, t := range tasks {
-			add(t.WorkspacePath)
+	// the phone's landing page instead of silently missing. Skipped when the
+	// stored workspace list is pinned (workspacesPinned) — dropped workspaces
+	// must not resurface through old task rows.
+	if !workspacesPinned() {
+		if tasks, err := zcode.ListTasks("", ""); err == nil {
+			for _, t := range tasks {
+				add(t.WorkspacePath)
+			}
 		}
 	}
 	return wsList
@@ -334,6 +338,15 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 	if err != nil {
 		return []any{}
 	}
+	// Pinned workspaces: tasks under dropped workspaces stay in the index but
+	// are no longer offered to the phone (their workspace cards are gone).
+	allowed := map[string]bool{}
+	pinned := workspacesPinned()
+	if pinned && ps != nil {
+		for _, w := range ps.workspacesList() {
+			allowed[filepath.Clean(w)] = true
+		}
+	}
 	out := make([]any, 0, len(tasks))
 	seen := map[string]bool{}
 	for _, t := range tasks {
@@ -341,6 +354,9 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 		// remote: prefix) have no matching local workspace the phone can open,
 		// and the phone stalls waiting for a bridge it can never get.
 		if strings.HasPrefix(t.WorkspaceKey, "remote:") {
+			continue
+		}
+		if pinned && ps != nil && !allowed[filepath.Clean(t.WorkspacePath)] {
 			continue
 		}
 		seen[t.TaskID] = true
@@ -359,9 +375,12 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 			if sid == "" || seen[sid] {
 				continue // already surfaced from the persisted task index
 			}
-			seen[sid] = true
 			title, _ := m["title"].(string)
 			ws, _ := m["workspacePath"].(string)
+			if pinned && !allowed[filepath.Clean(ws)] {
+				continue
+			}
+			seen[sid] = true
 			item := map[string]any{
 				"taskId":         sid,
 				"title":          title,

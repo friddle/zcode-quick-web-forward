@@ -109,35 +109,51 @@ func (o commonOpts) resolveWorkspaces() []string {
 			}
 		}
 	}
+	seen := map[string]bool{}
 	out := []string{}
+	add := func(p string) {
+		c := filepath.Clean(p)
+		if p == "" || seen[c] {
+			return
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
 	if len(explicit) > 0 {
-		out = append(out, explicit...)
-	} else if cwd, err := os.Getwd(); err == nil {
-		out = append(out, cwd) // startup directory is the default workspace
+		for _, w := range explicit {
+			add(w)
+		}
+		return out
+	}
+	// A non-empty stored list (`workspace add` / zqf-workspaces.json) is the
+	// AUTHORITATIVE workspace set: the startup cwd and task-index discoveries
+	// are NOT merged in. This is how the phone's project list is pinned down
+	// to exactly the wanted projects (workspace add/remove manages the file,
+	// watchStoredWorkspaces hot-reloads it).
+	if stored := zcode.StoredWorkspaces(); len(stored) > 0 {
+		for _, p := range stored {
+			add(p)
+		}
+		return out
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		add(cwd) // startup directory is the default workspace
 	}
 	// merge in real workspaces from the task index (dedup)
-	seen := map[string]bool{}
-	for _, w := range out {
-		seen[filepath.Clean(w)] = true
-	}
 	if ws, err := zcode.Workspaces(); err == nil {
 		for _, w := range ws {
-			p := filepath.Clean(w.WorkspacePath)
-			if !seen[p] {
-				out = append(out, w.WorkspacePath)
-				seen[p] = true
-			}
-		}
-	}
-	// merge in workspaces registered via `workspace add`
-	for _, p := range zcode.StoredWorkspaces() {
-		c := filepath.Clean(p)
-		if !seen[c] {
-			out = append(out, c)
-			seen[c] = true
+			add(w.WorkspacePath)
 		}
 	}
 	return out
+}
+
+// workspacesPinned reports whether the stored workspace file is the
+// authoritative list (non-empty zqf-workspaces.json). When pinned, the phone
+// landing page must NOT resurrect workspaces from the task index — old tasks
+// under dropped workspaces stay in the DB but are no longer offered.
+func workspacesPinned() bool {
+	return len(zcode.StoredWorkspaces()) > 0
 }
 
 func fatal(format string, a ...any) {
