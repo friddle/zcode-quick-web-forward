@@ -117,10 +117,15 @@ func inspectOfficialResponse(raw []byte) {
 		// revisionAtDecision — because the page sent baseRevision 0. Learn
 		// the real revision and replay the command with it, so the fork/
 		// feedback actually lands instead of silently no-oping.
-		if kind == relay.KindPromiseOK && pr != nil && len(data) > 0 &&
-			bytes.Contains(data, []byte(`"status":"stale"`)) {
+		//
+		// Every sendConversationCommandV4 ack carries revisionAtDecision, not
+		// just the stale ones — harvest it wherever it appears so the
+		// synthesized snapshot can advertise a baseRevision the engine
+		// accepts on the FIRST press (queue ops are exact-match).
+		if kind == relay.KindPromiseOK && pr != nil && pr.sid != "" && len(data) > 0 {
 			var st struct {
-				RevisionAtDecision int `json:"revisionAtDecision"`
+				Status             string `json:"status"`
+				RevisionAtDecision int    `json:"revisionAtDecision"`
 			}
 			if json.Unmarshal(data, &st) == nil && st.RevisionAtDecision > 0 {
 				r.mu.Lock()
@@ -129,8 +134,10 @@ func inspectOfficialResponse(raw []byte) {
 				}
 				r.sessionRevision[pr.sid] = st.RevisionAtDecision
 				r.mu.Unlock()
-				fmt.Printf("zcode: recovery: learned revision %d for %s (was %s) — replaying\n", st.RevisionAtDecision, pr.sid, pr.typ)
-				go r.replayWithRevision(b, pr, st.RevisionAtDecision)
+				if st.Status == "stale" {
+					fmt.Printf("zcode: recovery: learned revision %d for %s (was %s) — replaying\n", st.RevisionAtDecision, pr.sid, pr.typ)
+					go r.replayWithRevision(b, pr, st.RevisionAtDecision)
+				}
 			}
 		}
 		if pr != nil && wasRetried && kind == relay.KindPromiseOK && pr.typ == "sendText" && pr.sid != "" {
@@ -302,7 +309,7 @@ func inspectOfficialResponse(raw []byte) {
 				mode = "build"
 			}
 		}
-		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode, optRow, facts)
+		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode, optRow, facts, r.learnedRevision(rowsid))
 		if r.optimisticRunning(rowsid) {
 			// Send just happened and the engine's turnHeader hasn't caught
 			// up — report running so the composer flips to 停止生成 instead

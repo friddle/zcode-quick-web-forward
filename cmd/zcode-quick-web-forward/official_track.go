@@ -116,6 +116,25 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
 		sid, _ := env["sessionId"].(string)
 		typ, _ := env["type"].(string)
+		// Queue mutations the phone sends back against the queue chips this
+		// daemon synthesized. The command below is forwarded verbatim (the
+		// engine applies the real mutation) — here the mirror in queuedSends
+		// is kept in step, otherwise a deleted/edited item keeps rendering:
+		// no userInput row will ever retire it. A prompt snapshot refresh
+		// makes the button press feel instant (the scheduled cadence is 15s+).
+		switch typ {
+		case "deleteQueueItem", "sendQueuedNow", "editQueueItem", "reorderQueueItem":
+			pl, _ := env["payload"].(map[string]any)
+			r.applyQueueOp(sid, typ, pl)
+			if b.h.Alive() {
+				go func(sid string) {
+					time.Sleep(250 * time.Millisecond)
+					if b.h.Alive() {
+						requestRecoverySnapshot(b, sid)
+					}
+				}(sid)
+			}
+		}
 		if cid, _ := env["clientId"].(string); cid != "" && sid != "" {
 			// Remember the phone page's clientId per session — synthesized
 			// commands (switchModelConfig) must reuse it or the host rejects
@@ -290,7 +309,13 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 						r.admSeq++
 						item := map[string]any{
 							"sourceCommandId": cmdID,
-							"queueItemId":     "q-" + cmdID,
+							// The engine names its queue items queue_<commandId>
+							// (zcode.cjs: queueItemId:`queue_${e.commandId}`).
+							// The phone echoes this id back on editQueueItem/
+							// deleteQueueItem/reorderQueueItem/sendQueuedNow —
+							// any other prefix makes the engine throw
+							// queue.itemMissing and every queue button no-ops.
+							"queueItemId":     "queue_" + cmdID,
 							"clientId":        clientID,
 							"kind":            "sendText",
 							"text":            text,

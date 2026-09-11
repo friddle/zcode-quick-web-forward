@@ -131,7 +131,7 @@ func (r *officialRecovery) factsFor(sid string) *sessionFacts {
 	return f
 }
 
-func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string, optRow map[string]any, facts *sessionFacts) map[string]any {
+func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string, optRow map[string]any, facts *sessionFacts, rev int) map[string]any {
 	fullRows, _ := rowsRes["rows"].([]any)
 	// The latest turnHeader row carries the live turn state — without it the
 	// composer never shows the 停止 button mid-turn (canStop hardcoded false
@@ -284,7 +284,14 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		"sessionId":       sid,
 		"logEpoch":        "0",
 		"seq":             1,
-		"revision":        0,
+		// The page takes its next commands' baseRevision from this field, and
+		// the engine compares it EXACTLY against the live conversation revision
+		// (baseRevision !== revision → ack stale, proto.staleRevision) —
+		// advertising 0 made every revision-checked command (queue ops,
+		// switchModelConfig, pauseGoal, …) fail on first press. rev is the
+		// latest revision learned from command acks (see harvest in
+		// inspectOfficialResponse).
+		"revision": rev,
 		"control": map[string]any{
 			"phase": phase, "sessionEnded": false, "canStop": canStop,
 			"stopState": stopState, "stopTargetKind": stopTarget,
@@ -563,6 +570,14 @@ func (r *officialRecovery) queuedCount(sid string) int {
 	return len(r.queuedSends[sid])
 }
 
+// learnedRevision returns the freshest conversation revision harvested from
+// command acks (0 when none seen yet) — feeds the snapshot's revision field.
+func (r *officialRecovery) learnedRevision(sid string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sessionRevision[sid]
+}
+
 // optimisticCount reports whether an optimistic sent row is pending for sid.
 func (r *officialRecovery) optimisticCount(sid string) int {
 	r.mu.Lock()
@@ -622,7 +637,10 @@ func (r *officialRecovery) takeOptimisticRow(sid string, rows []any) map[string]
 			r.admSeq++
 			r.queuedSends[sid] = append(r.queuedSends[sid], map[string]any{
 				"sourceCommandId": cmdID,
-				"queueItemId":     "q-" + cmdID,
+				// Must match the engine's queue_<commandId> naming (see the
+				// twin site in official_track.go) — the phone sends this id
+				// back on every queue mutation.
+				"queueItemId":     "queue_" + cmdID,
 				"clientId":        clientID,
 				"kind":            "sendText",
 				"text":            text,
@@ -715,6 +733,73 @@ func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
 	}
 	r.queuedSends[sid] = stored
 	return kept
+}
+
+// applyQueueOp mirrors a phone-issued queue mutation onto the synthesized
+// queue (queuedSends). The command itself is forwarded to the engine verbatim
+// — this only keeps the snapshot's queue view consistent with what the engine
+// just did:
+//   - deleteQueueItem: the engine removed it and no userInput row will ever
+//     retire the chip, so drop it here too;
+//   - sendQueuedNow: the engine dispatches it immediately — drop optimistically
+//     (the resulting userInput row supersedes it through the normal rows flow);
+//   - editQueueItem: retext the chip;
+//   - reorderQueueItem: move the chip before beforeQueueItemId (null = tail).
+
+func (r *officialRecovery) applyQueueOp(sid, typ string, pl map[string]any) {
+	qid, _ := pl["queueItemId"].(string)
+	cmdID := strings.TrimPrefix(qid, "queue_")
+	if sid == "" || cmdID == "" {
+		return
+	}
+	r.mu.Lock()
+	items := r.queuedSends[sid]
+	idx := -1
+	for i, it := range items {
+		if it["sourceCommandId"] == cmdID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		r.mu.Unlock()
+		return
+	}
+	renumber := func() {
+		for i, x := range items {
+			if o, ok := x["order"].(map[string]any); ok {
+				o["queuePosition"] = i
+			}
+		}
+	}
+	switch typ {
+	case "editQueueItem":
+		if nt, _ := pl["newText"].(string); nt != "" {
+			items[idx]["text"] = nt
+		}
+	case "reorderQueueItem":
+		before, _ := pl["beforeQueueItemId"].(string)
+		bCmd := strings.TrimPrefix(before, "queue_")
+		it := items[idx]
+		items = append(items[:idx], items[idx+1:]...)
+		pos := len(items)
+		if bCmd != "" {
+			for i, x := range items {
+				if x["sourceCommandId"] == bCmd {
+					pos = i
+					break
+				}
+			}
+		}
+		items = append(items[:pos], append([]map[string]any{it}, items[pos:]...)...)
+		renumber()
+	default: // deleteQueueItem, sendQueuedNow
+		items = append(items[:idx], items[idx+1:]...)
+		renumber()
+	}
+	r.queuedSends[sid] = items
+	r.mu.Unlock()
+	fmt.Printf("zcode: recovery: queue op %s %s mirrored (%d left for %s)\n", typ, cmdID, len(items), sid)
 }
 
 // emitRecoverySnapshot wraps a readSession result into the conversation topic

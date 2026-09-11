@@ -274,6 +274,26 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 			if rec := officialActiveRec(); rec != nil {
 				if env, ok := argMap(c.Arg)["envelope"].(map[string]any); ok {
 					sid, _ := env["sessionId"].(string)
+					// The stop guard aborts with fault.guard.stopTargetChanged
+					// when expectedForegroundExecutionId doesn't equal the
+					// engine's live one (runtime_command_<counter>, unknowable
+					// to our synthesized snapshot — it used to advertise
+					// runtime_command_<sessionId>, so every stop button press
+					// was rejected). The field is optional: absent means "stop
+					// whatever is running", which is what the phone means.
+					if typ, _ := env["type"].(string); typ == "stop" {
+						if pl, ok := env["payload"].(map[string]any); ok {
+							if _, has := pl["expectedForegroundExecutionId"]; has {
+								delete(pl, "expectedForegroundExecutionId")
+								if m, ok := c.Arg.(map[string]any); ok {
+									m["envelope"] = env
+								} else {
+									c.Arg = argMap(c.Arg)
+								}
+								fmt.Println("zcode: recovery: stripped expectedForegroundExecutionId from stop")
+							}
+						}
+					}
 					if br, _ := env["baseRevision"].(float64); br == 0 && sid != "" {
 						rec.mu.Lock()
 						rev := rec.sessionRevision[sid]
