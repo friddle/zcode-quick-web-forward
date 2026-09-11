@@ -126,6 +126,33 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		case "deleteQueueItem", "sendQueuedNow", "editQueueItem", "reorderQueueItem":
 			pl, _ := env["payload"].(map[string]any)
 			r.applyQueueOp(sid, typ, pl)
+			// Early-ack: queue ops are revision-checked, and on the first
+			// press after a (re)start the engine's revision is still unknown
+			// — the command goes stale and the page ABANDONS its flow on the
+			// stale ack (chip 编辑 stopped repopulating the composer that
+			// way). Answer accepted immediately: the item already lives in
+			// OUR mirror (applyQueueOp above), the forwarded command below
+			// still lands engine-side via the stale-replay path, and the
+			// engine's own — possibly stale — ack for this call id is
+			// swallowed in onPortBytes so the page never sees the
+			// contradiction.
+			if b.engine != nil && b.engine.HasIdentity() {
+				r.mu.Lock()
+				rev := r.sessionRevision[sid]
+				if r.suppressAck == nil {
+					r.suppressAck = map[int]bool{}
+				}
+				r.suppressAck[c.ID] = true
+				r.mu.Unlock()
+				if out, err := json.Marshal(map[string]any{
+					"commandId":          env["commandId"],
+					"status":             "accepted",
+					"revisionAtDecision": rev,
+				}); err == nil {
+					b.engine.SendRawChannelBytes(relay.PromiseSuccessBytes(c.ID, out), senderSend())
+					fmt.Printf("zcode: recovery: early-acked %s for %s (call %d)\n", typ, sid, c.ID)
+				}
+			}
 			if b.h.Alive() {
 				go func(sid string) {
 					time.Sleep(250 * time.Millisecond)
@@ -488,6 +515,15 @@ func (r *officialRecovery) replayWithRevision(b *officialHostBridge, pr *pending
 		r.pendingRaw = map[int]*pendingRawCall{}
 	}
 	r.pendingRaw[pr.call.ID] = &pendingRawCall{raw: out, typ: pr.typ, sid: pr.sid, call: pr.call}
+	// A replayed queue op's ack must stay invisible too — the page already
+	// holds the early-acked answer for the original commandId.
+	switch pr.typ {
+	case "deleteQueueItem", "sendQueuedNow", "editQueueItem", "reorderQueueItem":
+		if r.suppressAck == nil {
+			r.suppressAck = map[int]bool{}
+		}
+		r.suppressAck[pr.call.ID] = true
+	}
 	r.mu.Unlock()
 	forwardRawToOfficialHost(out)
 }

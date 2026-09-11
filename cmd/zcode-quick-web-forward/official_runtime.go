@@ -164,6 +164,19 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 		}
 		b.answered[id] = true
 		b.mu.Unlock()
+		// An early-acked queue op's real engine ack (often a stale
+		// rejection pending replay) must not reach the page — it would
+		// contradict the accepted answer and abort the user's flow.
+		if b.rec != nil {
+			b.rec.mu.Lock()
+			sup := b.rec.suppressAck[id]
+			delete(b.rec.suppressAck, id)
+			b.rec.mu.Unlock()
+			if sup {
+				fmt.Printf("zcode: recovery: swallowed engine ack for early-acked queue op (call %d)\n", id)
+				return
+			}
+		}
 	}
 	if b.engine == nil || !b.engine.HasIdentity() {
 		// The host speaks before the phone's bridge exists (its channel

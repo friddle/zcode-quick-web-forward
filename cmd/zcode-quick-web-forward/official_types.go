@@ -98,6 +98,7 @@ type officialRecovery struct {
 	planStash        map[string]json.RawMessage // sessionId -> latest plans/goal payload
 	pendingRaw       map[int]*pendingRawCall    // call id -> encoded promise call (handshake retry)
 	retrying         map[int]bool               // call ids with a handshake-retry loop in flight
+	suppressAck      map[int]bool               // early-acked queue-op call ids whose engine ack must not reach the page
 }
 
 // sameAsLast reports whether the rows payload is byte-identical to the last
