@@ -63,7 +63,9 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 		fmt.Printf("zcode: official host start failed: %v — using built-in handlers\n", err)
 		return false
 	}
-	b := &officialHostBridge{h: h, engine: engine, sender: sender, rec: &officialRecovery{}}
+	rec := &officialRecovery{}
+	rec.initMaps()
+	b := &officialHostBridge{h: h, engine: engine, sender: sender, rec: rec}
 	// register EARLY: the host's "local services ready" log (which flips the
 	// pipe's ready gate) can fire while this function is still inside
 	// WaitReady/attach — the callback resolves the bridge via officialState.

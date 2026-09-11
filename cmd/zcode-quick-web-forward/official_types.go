@@ -102,6 +102,46 @@ type officialRecovery struct {
 	seenCommand      map[string]int64           // "sid|type|commandId" -> unix ms of first forward (phone re-delivery dedupe)
 }
 
+// initMaps makes every map field. officialRecovery is constructed once at
+// host start with zero values, and a write to any nil map panics — which
+// takes the whole daemon (and every phone task) down. Call this at every
+// construction site; reads of nil maps are safe, so lazily-written maps
+// elsewhere stay as-is.
+func (r *officialRecovery) initMaps() {
+	r.pendingSub = map[int]string{}
+	r.pendingRead = map[int]string{}
+	r.subBySession = map[string]string{}
+	r.epochBySess = map[string]string{}
+	r.pendingRows = map[int]string{}
+	r.lastRowsJSON = map[string]string{}
+	r.resyncPend = map[string]bool{}
+	r.snapSeqBy = map[string]int{}
+	r.pendingTask = map[int]string{}
+	r.queuedSends = map[string][]map[string]any{}
+	r.turnRunning = map[string]bool{}
+	r.lastQEmitted = map[string]int{}
+	r.pendingCreate = map[int]bool{}
+	r.snaps = map[string]json.RawMessage{}
+	r.pendingResolve = map[int][2]string{}
+	r.deadInteractions = map[string]bool{}
+	r.modeBySess = map[string]string{}
+	r.modelTracked = map[string]map[string]any{}
+	r.modelSwitched = map[string]bool{}
+	r.clientBySession = map[string]string{}
+	r.sessionRevision = map[string]int{}
+	r.sendAt = map[string]int64{}
+	r.optimisticRun = map[string]int64{}
+	r.optimisticRow = map[string]map[string]any{}
+	r.lastTurnDone = map[string]int64{}
+	r.lastRefresh = map[string]int64{}
+	r.pendingPlans = map[int]string{}
+	r.planStash = map[string]json.RawMessage{}
+	r.pendingRaw = map[int]*pendingRawCall{}
+	r.retrying = map[int]bool{}
+	r.suppressAck = map[int]bool{}
+	r.seenCommand = map[string]int64{}
+}
+
 // sameAsLast reports whether the rows payload is byte-identical to the last
 // emitted snapshot for the session (duplicate application breaks the store).
 

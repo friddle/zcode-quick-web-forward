@@ -274,6 +274,13 @@ func inspectOfficialResponse(raw []byte) {
 		if ep, _ := rowsRes["atLogEpoch"].(string); ep != "" {
 			r.setEpoch(rowsid, ep)
 		}
+		// Workspaces the host never registered lose their streamed assistant
+		// rows — rebuild them from the session/read transcript when incomplete.
+		if r.mergeMessageRows(rowsid, rowsRes) {
+			if b2, err := json.Marshal(rowsRes); err == nil {
+				data = json.RawMessage(b2)
+			}
+		}
 		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
 		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
 		r.observeTurnState(b, rowsid, rowsRes)
