@@ -229,46 +229,68 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			// executed. The host's queue decision never resolves quickly (its
 			// RPC pends ~30s), so surface the queued state ourselves: echo the
 			// item in queue.items until the message shows up in the rows.
-			// Synthesize regardless of the observed turn state — the user
-			// must see their message immediately, not after the first rows
-			// refresh happens to report running.
+			// On an IDLE session (no observed running turn) the queue-chip
+			// presentation read as "every task chases the queue" — there the
+			// message renders as a normal optimistic userInput row instead
+			// (the other presentation), falling back to the queue chip only
+			// if it is still unexecuted after the optimistic window.
 			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" {
 				cmdID, _ := env["commandId"].(string)
 				clientID, _ := env["clientId"].(string)
 				r.mu.Lock()
+				if r.turnRunning == nil {
+					r.turnRunning = map[string]bool{}
+				}
+				// A send renders as a queue chip when the session is really
+				// mid-turn, or when another send is already optimistically
+				// displayed (anything after an in-flight send IS queued).
+				// Only a truly idle session gets the optimistic sent-row
+				// presentation — a queue chip there read as "every task
+				// chases the queue" for messages that were never queued.
 				if r.queuedSends == nil {
 					// Crash-on-first-mid-turn-send: appending to a nil map
 					// killed the whole daemon (systemd revived it, but the
 					// queued message was lost).
 					r.queuedSends = map[string][]map[string]any{}
 				}
-				// The phone transport re-delivers commands (new call id,
-				// SAME commandId) — one synthesized queue item per delivery
-				// rendered the message N times.
-				dup := false
-				for _, it := range r.queuedSends[sid] {
-					if it["sourceCommandId"] == cmdID {
-						dup = true
-						break
-					}
+				if r.optimisticRow == nil {
+					r.optimisticRow = map[string]map[string]any{}
 				}
-				if !dup {
-					r.admSeq++
-					item := map[string]any{
-						"sourceCommandId": cmdID,
-						"queueItemId":     "q-" + cmdID,
-						"clientId":        clientID,
-						"kind":            "sendText",
-						"text":            text,
-						"attachments":     []any{},
-						"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
-						"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
-						"steer":           map[string]any{"state": "notRequested"},
-						"dispatch":        map[string]any{"state": "queued"},
-						"admittedAt":      time.Now().UnixMilli(),
+				queuedPath := r.turnRunning[sid] || r.optimisticRow[sid] != nil
+				if queuedPath {
+					// The phone transport re-delivers commands (new call id,
+					// SAME commandId) — one synthesized queue item per delivery
+					// rendered the message N times.
+					dup := false
+					for _, it := range r.queuedSends[sid] {
+						if it["sourceCommandId"] == cmdID {
+							dup = true
+							break
+						}
 					}
-					r.queuedSends[sid] = append(r.queuedSends[sid], item)
-					fmt.Printf("zcode: recovery: queued mid-turn send for %s (%d queued)\n", sid, len(r.queuedSends[sid]))
+					if !dup {
+						r.admSeq++
+						item := map[string]any{
+							"sourceCommandId": cmdID,
+							"queueItemId":     "q-" + cmdID,
+							"clientId":        clientID,
+							"kind":            "sendText",
+							"text":            text,
+							"attachments":     []any{},
+							"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
+							"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
+							"steer":           map[string]any{"state": "notRequested"},
+							"dispatch":        map[string]any{"state": "queued"},
+							"admittedAt":      time.Now().UnixMilli(),
+						}
+						r.queuedSends[sid] = append(r.queuedSends[sid], item)
+						fmt.Printf("zcode: recovery: queued send for %s (%d queued)\n", sid, len(r.queuedSends[sid]))
+					}
+				} else {
+					r.optimisticRow[sid] = map[string]any{
+						"text": text, "cmdID": cmdID, "clientID": clientID, "at": now,
+					}
+					fmt.Printf("zcode: recovery: optimistic sent row for idle session %s\n", sid)
 				}
 				r.mu.Unlock()
 			}
@@ -290,7 +312,16 @@ func scheduleRecoverySnapshots(b *officialHostBridge, sid string) {
 		}
 		requestRecoverySnapshot(b, sid)
 	}
-	for i := 0; i < 33; i++ {
+	// most turns finish within minutes — a 10s cadence keeps the completion
+	// flip (and streaming rows) fresh through that window, then relaxes to 20s
+	for i := 0; i < 12; i++ {
+		time.Sleep(10 * time.Second)
+		if !b.h.Alive() {
+			return
+		}
+		requestRecoverySnapshot(b, sid)
+	}
+	for i := 0; i < 21; i++ {
 		time.Sleep(20 * time.Second)
 		if !b.h.Alive() {
 			return

@@ -418,9 +418,10 @@ func switchSessionModel(b *officialHostBridge, sid, provider, model, thought str
 
 // Switch-model override, sourced from three env vars (no quotes/JSON so
 // systemd's Environment= parsing can't mangle them):
-//   ZQF_SWITCH_PROVIDER=siliconflow
-//   ZQF_SWITCH_MODEL_NAME=deepseek-ai/DeepSeek-V3.1
-//   ZQF_SWITCH_THOUGHT=max
+//
+//	ZQF_SWITCH_PROVIDER=siliconflow
+//	ZQF_SWITCH_MODEL_NAME=deepseek-ai/DeepSeek-V3.1
+//	ZQF_SWITCH_THOUGHT=max
 var switchModelProvider = os.Getenv("ZQF_SWITCH_PROVIDER")
 var switchModelName = os.Getenv("ZQF_SWITCH_MODEL_NAME")
 var switchModelThought = os.Getenv("ZQF_SWITCH_THOUGHT")

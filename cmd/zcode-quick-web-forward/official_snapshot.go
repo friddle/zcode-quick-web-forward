@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 	"os"
+	"strings"
 	"time"
 )
 
-func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string) map[string]any {
+func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string, optRow map[string]any) map[string]any {
 	fullRows, _ := rowsRes["rows"].([]any)
 	// The latest turnHeader row carries the live turn state — without it the
 	// composer never shows the 停止 button mid-turn (canStop hardcoded false
@@ -91,6 +92,13 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 			firstRowID = m["rowId"]
 		}
 	}
+	// An idle-session send renders as a normal optimistic userInput row at the
+	// tail of the window (the "other presentation"): the conversation looks
+	// alive immediately instead of showing a queue chip for a message that is
+	// not queued at all.
+	if optRow != nil {
+		window = append(window, optRow)
+	}
 	// This recipe mirrors with_self_implement's conversationSnapshotFrame —
 	// field-for-field the shape this exact phone page renders.
 	return map[string]any{
@@ -148,6 +156,13 @@ func keysOf(m map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// sameText compares a queued/optimistic message against a transcript row with
+// whitespace trimmed (the engine normalizes the text it stores).
+
+func sameText(a, b string) bool {
+	return strings.TrimSpace(a) == strings.TrimSpace(b)
 }
 
 // firstJSON truncates raw JSON for a log line.
@@ -215,9 +230,12 @@ func (r *officialRecovery) observeTurnState(b *officialHostBridge, sid string, r
 }
 
 // ensureTurnRefresher starts a per-host goroutine that keeps refreshing the
-// snapshot every 20s while any session's turn is running. The post-send
-// schedule covers only ~12 minutes; longer turns (and permission requests
-// that arrive after it ends) would otherwise leave the page on stale state.
+// snapshot while any session's turn is running. The post-send schedule covers
+// only ~12 minutes; longer turns (and permission requests that arrive after
+// it ends) would otherwise leave the page on stale state. Cadence is
+// adaptive: ~5s while the turn is young (the completion of a short turn used
+// to sit behind a flat 20s poll — "task completion feels slow"), 15s after.
+
 func (r *officialRecovery) ensureTurnRefresher(b *officialHostBridge) {
 	r.mu.Lock()
 	if r.refresherStarted {
@@ -228,14 +246,28 @@ func (r *officialRecovery) ensureTurnRefresher(b *officialHostBridge) {
 	r.mu.Unlock()
 	go func() {
 		for {
-			time.Sleep(20 * time.Second)
+			time.Sleep(5 * time.Second)
 			if !b.h.Alive() {
 				return
 			}
+			now := time.Now().UnixMilli()
+			var sids []string
 			r.mu.Lock()
-			sids := make([]string, 0, len(r.turnRunning))
+			if r.lastRefresh == nil {
+				// assignment to a nil map panics — and took the whole daemon
+				// down the first time a turn ran (DEVICE_OFFLINE on the phone)
+				r.lastRefresh = map[string]int64{}
+			}
 			for sid, run := range r.turnRunning {
-				if run {
+				if !run {
+					continue
+				}
+				interval := int64(15000)
+				if now-r.sendAt[sid] < 90000 {
+					interval = 5000
+				}
+				if now-r.lastRefresh[sid] >= interval {
+					r.lastRefresh[sid] = now
 					sids = append(sids, sid)
 				}
 			}
@@ -283,6 +315,100 @@ func (r *officialRecovery) queuedCount(sid string) int {
 	return len(r.queuedSends[sid])
 }
 
+// optimisticCount reports whether an optimistic sent row is pending for sid.
+func (r *officialRecovery) optimisticCount(sid string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if row := r.optimisticRow[sid]; row != nil {
+		return 1
+	}
+	return 0
+}
+
+// takeOptimisticRow resolves the optimistic sent row for sid against the
+// latest transcript rows. Returns the synthetic userInput row to render, or
+// nil when it must not (or no longer) render:
+//   - the real userInput row appeared → the sent row is official, drop it;
+//   - the optimistic window expired without execution → the send was queued
+//     after all (the pre-send turnRunning observation was stale) — fall back
+//     to a queue chip so the message stays visible.
+//
+// The returned row mirrors the official userInput row field-for-field (the
+// page validates snapshot rows with a strict schema; a shape mismatch would
+// reject the whole snapshot frame).
+
+func (r *officialRecovery) takeOptimisticRow(sid string, rows []any) map[string]any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	opt, ok := r.optimisticRow[sid]
+	if !ok || opt == nil {
+		return nil
+	}
+	text, _ := opt["text"].(string)
+	for _, row := range rows {
+		if m, ok := row.(map[string]any); ok && m["kind"] == "userInput" {
+			if t, _ := m["text"].(string); sameText(t, text) {
+				delete(r.optimisticRow, sid)
+				return nil
+			}
+		}
+	}
+	at, _ := opt["at"].(int64)
+	if time.Now().UnixMilli()-at > 45000 {
+		// Still unexecuted well past the optimistic window — it really is
+		// queued (mid-turn send that started between our observations).
+		delete(r.optimisticRow, sid)
+		cmdID, _ := opt["cmdID"].(string)
+		clientID, _ := opt["clientID"].(string)
+		if r.queuedSends == nil {
+			r.queuedSends = map[string][]map[string]any{}
+		}
+		dup := false
+		for _, it := range r.queuedSends[sid] {
+			if it["sourceCommandId"] == cmdID {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			r.admSeq++
+			r.queuedSends[sid] = append(r.queuedSends[sid], map[string]any{
+				"sourceCommandId": cmdID,
+				"queueItemId":     "q-" + cmdID,
+				"clientId":        clientID,
+				"kind":            "sendText",
+				"text":            text,
+				"attachments":     []any{},
+				"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
+				"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
+				"steer":           map[string]any{"state": "notRequested"},
+				"dispatch":        map[string]any{"state": "queued"},
+				"admittedAt":      time.Now().UnixMilli(),
+			})
+			fmt.Printf("zcode: recovery: optimistic row for %s expired unexecuted — fell back to queue chip\n", sid)
+		}
+		return nil
+	}
+	cmdID, _ := opt["cmdID"].(string)
+	clientID, _ := opt["clientID"].(string)
+	optID := "msg_zqfopt_" + cmdID
+	return map[string]any{
+		"rowId":               2_000_000_000,
+		"turnId":              optID,
+		"entityId":            optID,
+		"productTurnId":       optID,
+		"visibility":          "visible",
+		"createdAt":           at,
+		"createdAtSeq":        0,
+		"kind":                "userInput",
+		"text":                text,
+		"origin":              "realUser",
+		"sourceCommandId":     cmdID,
+		"rootSourceCommandId": cmdID,
+		"clientId":            clientID,
+	}
+}
+
 // fullRowsOf extracts the uncapped rows list from a conversationRowsRangeV4
 // result.
 func fullRowsOf(rowsRes map[string]any) []any {
@@ -318,7 +444,7 @@ func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
 		started := false
 		for _, row := range rows {
 			if m, ok := row.(map[string]any); ok && m["kind"] == "userInput" {
-				if t, _ := m["text"].(string); t == text {
+				if t, _ := m["text"].(string); sameText(t, text) {
 					started = true
 					break
 				}

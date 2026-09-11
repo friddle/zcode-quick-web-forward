@@ -47,6 +47,29 @@ func inspectOfficialResponse(raw []byte) {
 				}
 			}
 		}
+		// Turn lifecycle events stream past here live. A turn.completed /
+		// turn.failed frame is the ENGINE's own completion signal — refreshing
+		// immediately ends the "turn is done but the phone shows 正在执行 for
+		// another 20s poll interval" lag.
+		if len(data) > 0 && (bytes.Contains(data, []byte(`"type":"turn.completed"`)) ||
+			bytes.Contains(data, []byte(`"type":"turn.failed"`))) {
+			if sid := sidFromFrameBytes(data); sid != "" {
+				r.mu.Lock()
+				if r.lastTurnDone == nil {
+					r.lastTurnDone = map[string]int64{}
+				}
+				nowMs := time.Now().UnixMilli()
+				due := nowMs-r.lastTurnDone[sid] >= 1000
+				if due {
+					r.lastTurnDone[sid] = nowMs
+				}
+				r.mu.Unlock()
+				if due {
+					fmt.Println("zcode: recovery: turn lifecycle event — instant snapshot for", sid)
+					go requestRecoverySnapshot(b, sid)
+				}
+			}
+		}
 		return
 	}
 	if kind != relay.KindPromiseOK && kind != relay.KindPromiseErr {
@@ -242,14 +265,18 @@ func inspectOfficialResponse(raw []byte) {
 				break
 			}
 		}
-		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && !r.sendFresh(rowsid) && r.queuedCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 && !blocked {
+		// Resolve the optimistic sent row BEFORE the duplicate-skip: an
+		// expired optimistic row converts into a queue item, which must lift
+		// the suppression or the fallback chip would never render.
+		optRow := r.takeOptimisticRow(rowsid, fullRowsOf(rowsRes))
+		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && !r.sendFresh(rowsid) && r.queuedCount(rowsid) == 0 && r.optimisticCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 && !blocked {
 			fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
 			return
 		}
 		r.rememberRows(rowsid, data)
 		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
 		mode := r.modeFor(rowsid)
-		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode)
+		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode, optRow)
 		if r.optimisticRunning(rowsid) {
 			// Send just happened and the engine's turnHeader hasn't caught
 			// up — report running so the composer flips to 停止生成 instead
@@ -273,6 +300,24 @@ func inspectOfficialResponse(raw []byte) {
 		}
 		emitRecoverySnapshot(b, rowsid, snap)
 	}
+}
+
+// sidFromFrameBytes best-effort extracts the session id a live frame belongs
+// to: conversation frames carry topic "conversation/<sessionId>", engine
+// lifecycle events carry a sessionId field. Empty when neither appears.
+
+func sidFromFrameBytes(data []byte) string {
+	for _, marker := range []string{`"topic":"conversation/`, `"sessionId":"`} {
+		i := bytes.Index(data, []byte(marker))
+		if i < 0 {
+			continue
+		}
+		rest := data[i+len(marker):]
+		if end := bytes.IndexByte(rest, '"'); end > 0 {
+			return string(rest[:end])
+		}
+	}
+	return ""
 }
 
 // keysOf returns the top-level keys of a decoded JSON object (diagnostics).
