@@ -80,22 +80,24 @@ type officialRecovery struct {
 	lastTermID       string                      // most recently created terminal id
 	snaps            map[string]json.RawMessage
 	snapsOrder       []string
-	pendingResolve   map[int][2]string         // sendConversationCommandV4 call id -> {sessionId, interactionId}
-	deadInteractions map[string]bool           // interactionIds the engine reported as no-pending (stale rows)
-	lastKick         int64                     // unix ts of last pendingApproval-triggered refresh (rate limit)
-	refresherStarted bool                      // turn-running periodic refresher goroutine started
-	modeBySess       map[string]string         // sessionId -> collaboration mode (build/edit/plan/yolo)
-	modelTracked     map[string]map[string]any // sessionId -> page-chosen switchModelConfig {provider,model,thought}
-	modelSwitched    map[string]bool           // sessionId -> switchModelConfig already sent
-	clientBySession  map[string]string         // sessionId -> the phone page's clientId (commands must reuse it)
-	sessionRevision  map[string]int            // sessionId -> engine conversation revision (for fork/feedback/etc.)
-	sendAt           map[string]int64          // sessionId -> unix ms of last sendText (dedupe bypass window)
-	optimisticRun    map[string]int64          // sessionId -> unix ms deadline forcing phase=running
-	optimisticRow    map[string]map[string]any // sessionId -> optimistic sent userInput row (idle-session send display)
-	lastTurnDone     map[string]int64          // sessionId -> unix ms of last turn.completed/failed refresh kick
-	lastRefresh      map[string]int64          // sessionId -> unix ms of last refresher-issued snapshot
-	pendingRaw       map[int]*pendingRawCall   // call id -> encoded promise call (handshake retry)
-	retrying         map[int]bool              // call ids with a handshake-retry loop in flight
+	pendingResolve   map[int][2]string          // sendConversationCommandV4 call id -> {sessionId, interactionId}
+	deadInteractions map[string]bool            // interactionIds the engine reported as no-pending (stale rows)
+	lastKick         int64                      // unix ts of last pendingApproval-triggered refresh (rate limit)
+	refresherStarted bool                       // turn-running periodic refresher goroutine started
+	modeBySess       map[string]string          // sessionId -> collaboration mode (build/edit/plan/yolo)
+	modelTracked     map[string]map[string]any  // sessionId -> page-chosen switchModelConfig {provider,model,thought}
+	modelSwitched    map[string]bool            // sessionId -> switchModelConfig already sent
+	clientBySession  map[string]string          // sessionId -> the phone page's clientId (commands must reuse it)
+	sessionRevision  map[string]int             // sessionId -> engine conversation revision (for fork/feedback/etc.)
+	sendAt           map[string]int64           // sessionId -> unix ms of last sendText (dedupe bypass window)
+	optimisticRun    map[string]int64           // sessionId -> unix ms deadline forcing phase=running
+	optimisticRow    map[string]map[string]any  // sessionId -> optimistic sent userInput row (idle-session send display)
+	lastTurnDone     map[string]int64           // sessionId -> unix ms of last turn.completed/failed refresh kick
+	lastRefresh      map[string]int64           // sessionId -> unix ms of last refresher-issued snapshot
+	pendingPlans     map[int]string             // synthetic conversationPlansV4 call id -> sessionId
+	planStash        map[string]json.RawMessage // sessionId -> latest plans/goal payload
+	pendingRaw       map[int]*pendingRawCall    // call id -> encoded promise call (handshake retry)
+	retrying         map[int]bool               // call ids with a handshake-retry loop in flight
 }
 
 // sameAsLast reports whether the rows payload is byte-identical to the last

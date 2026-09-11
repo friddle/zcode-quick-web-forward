@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
+	"os"
 )
 
 func (r *officialRecovery) sameAsLast(sid string, data json.RawMessage) bool {
@@ -90,6 +91,24 @@ func (r *officialRecovery) snapFor(sid string) json.RawMessage {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.snaps[sid]
+}
+
+// stashPlans remembers the latest conversationPlansV4 payload for a session.
+func (r *officialRecovery) stashPlans(sid string, raw json.RawMessage) {
+	r.mu.Lock()
+	if r.planStash == nil {
+		r.planStash = map[string]json.RawMessage{}
+	}
+	r.planStash[sid] = raw
+	r.mu.Unlock()
+	_ = os.WriteFile("/tmp/zqf-plans.json", raw, 0644)
+}
+
+// plansFor returns the stashed conversationPlansV4 payload of a session.
+func (r *officialRecovery) plansFor(sid string) json.RawMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.planStash[sid]
 }
 
 // buildProjectionSnapshot composes the conversation projection snapshot the

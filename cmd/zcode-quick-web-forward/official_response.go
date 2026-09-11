@@ -24,6 +24,15 @@ func inspectOfficialResponse(raw []byte) {
 	}
 	r := b.rec
 	if kind == relay.KindEventFire {
+		// The engine publishes v4/conversation/frame through the host onto
+		// this event stream — frames we never synthesize ourselves. Capture
+		// one for diagnostics (schema ground truth for live state merging).
+		if len(data) > 0 && bytes.Contains(data, []byte(`"conversation/`)) {
+			if !bytes.Contains(data, []byte(`"logicalFrameOrdinal"`)) { // skip our own synthesized wire frames
+				_ = os.WriteFile("/tmp/zqf-live-frame.json", data, 0644)
+				fmt.Printf("zcode: recovery: LIVE engine frame %d bytes captured\n", len(data))
+			}
+		}
 		// A live conversation frame that carries a fresh pendingApproval row
 		// means the engine is now blocked on a permission. The page renders
 		// approval cards only from our snapshot's pendingInteractions list —
@@ -234,13 +243,21 @@ func inspectOfficialResponse(raw []byte) {
 		_ = os.WriteFile("/tmp/zqf-snap.json", data, 0644)
 		r.stashSnap(rsid, data)
 		requestConversationRows(b, rsid)
+		go requestConversationPlans(b, rsid)
 	}
 	r.mu.Lock()
 	rowsid, isRows := r.pendingRows[id]
 	if isRows {
 		delete(r.pendingRows, id)
 	}
+	plansid, isPlans := r.pendingPlans[id]
+	if isPlans {
+		delete(r.pendingPlans, id)
+	}
 	r.mu.Unlock()
+	if isPlans && kind == relay.KindPromiseOK && len(data) > 0 {
+		r.stashPlans(plansid, data)
+	}
 	if isRows && len(data) > 0 {
 		var rowsRes map[string]any
 		_ = json.Unmarshal(data, &rowsRes)
@@ -285,10 +302,7 @@ func inspectOfficialResponse(raw []byte) {
 				mode = "build"
 			}
 		}
-		r.mu.Lock()
-		canFlush := r.turnRunning[rowsid] && len(queued) > 0
-		r.mu.Unlock()
-		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode, optRow, facts, canFlush)
+		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode, optRow, facts)
 		if r.optimisticRunning(rowsid) {
 			// Send just happened and the engine's turnHeader hasn't caught
 			// up — report running so the composer flips to 停止生成 instead

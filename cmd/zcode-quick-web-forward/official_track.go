@@ -396,6 +396,31 @@ func requestConversationRows(b *officialHostBridge, sid string) {
 	forwardRawToOfficialHost(raw)
 }
 
+// requestConversationPlans fetches the session's goal/plan state (the engine
+// exposes it via v4/conversation/plans; the snapshot synthesizer used to
+// report plan:nil forever because nothing pulled it).
+func requestConversationPlans(b *officialHostBridge, sid string) {
+	r := b.rec
+	officialState.mu.Lock()
+	ws := officialState.workspace
+	officialState.mu.Unlock()
+	if ws == "" {
+		return
+	}
+	raw := relay.ChannelCallBytes(&relay.ChannelCall{
+		Kind: relay.KindPromise, ID: r.mintID(),
+		ChannelName: "zcode-agent", Name: "conversationPlansV4",
+		Arg: map[string]any{"workspacePath": ws, "sessionId": sid},
+	})
+	r.mu.Lock()
+	if r.pendingPlans == nil {
+		r.pendingPlans = map[int]string{}
+	}
+	r.pendingPlans[r.lastID] = sid
+	r.mu.Unlock()
+	forwardRawToOfficialHost(raw)
+}
+
 // deepCopyCall returns an independent copy of a channel call (Arg deep-copied
 // via JSON), safe to mutate and re-encode after the original is gone.
 

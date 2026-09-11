@@ -24,6 +24,7 @@ type sessionFacts struct {
 	ctxUsed       int
 	ctxWindow     int
 	slash         []any
+	goal          any // session.target — the engine's goal object (objective/status/...)
 }
 
 // parseSessionFacts decodes a readSession payload; nil/invalid input yields
@@ -39,6 +40,7 @@ func parseSessionFacts(raw json.RawMessage) *sessionFacts {
 			Title  string `json:"title"`
 			Status string `json:"status"`
 			Mode   string `json:"mode"`
+			Target any    `json:"target"`
 			Model  struct {
 				ProviderID string `json:"providerId"`
 				ModelID    string `json:"modelId"`
@@ -79,6 +81,7 @@ func parseSessionFacts(raw json.RawMessage) *sessionFacts {
 	f.title = snap.Session.Title
 	f.status = snap.Session.Status
 	f.mode = snap.Session.Mode
+	f.goal = snap.Session.Target
 	f.providerID = snap.Settings.Model.Current.ProviderID
 	if f.providerID == "" {
 		f.providerID = snap.Session.Model.ProviderID
@@ -128,7 +131,7 @@ func (r *officialRecovery) factsFor(sid string) *sessionFacts {
 	return f
 }
 
-func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string, optRow map[string]any, facts *sessionFacts, canFlushQueue bool) map[string]any {
+func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string, optRow map[string]any, facts *sessionFacts) map[string]any {
 	fullRows, _ := rowsRes["rows"].([]any)
 	// The latest turnHeader row carries the live turn state — without it the
 	// composer never shows the 停止 button mid-turn (canStop hardcoded false
@@ -256,6 +259,24 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 			map[string]any{"name": "init", "description": "创建或更新工作区 AGENTS.md", "inputHint": "[notes]", "source": "builtin"},
 		}
 	}
+	goal := clientGoal(facts.goal)
+	// Running-state shapes mirror the OFFICIAL desktop capture (testdata/
+	// official-projection.json statePatches.running): activeWorks carries a
+	// primaryTurn entry, stopState/stopTargetKind become stoppable/assistant,
+	// and inputRouting flips to enqueue so new messages compose into the
+	// queue instead of starting a parallel turn.
+	activeWorks := []any{}
+	stopState, stopTarget := "idle", "unknown"
+	routing := "startNow"
+	if phase == "running" {
+		stopState, stopTarget = "stoppable", "assistant"
+		routing = "enqueue"
+		activeWorks = []any{map[string]any{
+			"kind":                  "primaryTurn",
+			"foregroundExecutionId": "runtime_command_" + sid,
+			"startedAt":             time.Now().UnixMilli(),
+		}}
+	}
 	// This recipe mirrors with_self_implement's conversationSnapshotFrame —
 	// field-for-field the shape this exact phone page renders.
 	return map[string]any{
@@ -266,21 +287,23 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		"revision":        0,
 		"control": map[string]any{
 			"phase": phase, "sessionEnded": false, "canStop": canStop,
-			"stopState": "idle", "stopTargetKind": "unknown",
-			"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
+			"stopState": stopState, "stopTargetKind": stopTarget,
+			"activeWorks": activeWorks, "lastError": nil, "apiRetry": nil,
 		},
 		"availability": map[string]any{
-			"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
+			// fork/compact stay always-allowed: the 0.7.0 phone page's schema
+			// predates the official gating shapes (the 3.10 desktop capture
+			// shows disallowed+reasonCode, but feeding that shape here trips
+			// fault.subscription.recoveryFailed on the old strict schema)
+			"fork":              map[string]any{"allowed": true},
+			"compact":           map[string]any{"allowed": true},
 			"switchModelConfig": map[string]any{"allowed": true}, "setFollowupMode": map[string]any{"allowed": true},
-			"queueEdit": map[string]any{"allowed": true},
-			// 立即 flushes the queue — only meaningful while a turn is actually
-			// running and something is queued (hardcoded false left the button
-			// permanently dead)
-			"sendQueuedNow": map[string]any{"allowed": canFlushQueue, "reasonCode": "sendQueuedNowRequiresRunning"},
-			"pauseGoal":     map[string]any{"allowed": false, "reasonCode": "noGoalToPause"},
-			"resumeGoal":    map[string]any{"allowed": false, "reasonCode": "noGoalToResume"},
+			"queueEdit":     map[string]any{"allowed": true},
+			"sendQueuedNow": avail(phase == "running", "sendQueuedNowRequiresRunning"),
+			"pauseGoal":     goalAvailability(facts.goal, "active"),
+			"resumeGoal":    goalAvailability(facts.goal, "paused"),
 		},
-		"inputRouting":    map[string]any{"mode": "startNow"},
+		"inputRouting":    map[string]any{"mode": routing},
 		"meta":            map[string]any{"title": facts.title, "titleSource": "default"},
 		"config":          map[string]any{"provider": provider, "model": model, "thought": thought, "thoughtLevels": levels, "followupMode": "queue", "mode": mode},
 		"modelTransition": nil,
@@ -288,12 +311,15 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 			"contextWindow": map[string]any{"usedTokens": facts.ctxUsed, "maxTokens": maxCtx, "autoCompactThresholdTokens": nil},
 			"cumulative":    map[string]any{"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0},
 		},
-		"queue":                  map[string]any{"items": queued, "autoDrain": true},
-		"pendingInteractions":    interactions,
-		"pendingCommands":        []any{},
+		"queue":               map[string]any{"items": queued, "autoDrain": true},
+		"pendingInteractions": interactions,
+		"pendingCommands":     []any{},
+		// backgroundWorks/subagents keep the long-standing synthetic shapes:
+		// the 0.7.0 page schema predates nullable-null here too (official
+		// 3.10 desktop sends null; feeding null trips the old strict schema)
 		"backgroundWorks":        []any{},
 		"subagents":              map[string]any{"revision": 0, "childSessionIds": []any{}, "running": []any{}, "endedTotal": 0},
-		"goal":                   nil,
+		"goal":                   goal,
 		"plan":                   nil,
 		"workspaceHookAdmission": nil,
 		"rows": map[string]any{
@@ -303,6 +329,75 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		},
 		"slashCommands": slash,
 	}
+}
+
+// clientGoal reshapes the engine's session.target (goal) object into the
+// client's goal schema. The shapes differ in three load-bearing ways and a
+// raw pass-through gets the whole snapshot rejected
+// (fault.subscription.recoveryFailed):
+//   - status enum: engine reports active|paused|budget_limited|complete; the
+//     client only accepts active|paused|verifying|verified|notSatisfied|failed
+//   - iteration (number) and verifications (array) are REQUIRED client-side
+//     and absent on the engine object
+//   - engine-only fields (sessionId, tokenBudget, tokensUsed, ...) must go
+//
+// Returns nil when there is no goal or the status has no client equivalent.
+
+func clientGoal(target any) any {
+	t, ok := target.(map[string]any)
+	if !ok {
+		return nil
+	}
+	engineStatus, _ := t["status"].(string)
+	var status string
+	switch engineStatus {
+	case "active":
+		status = "active"
+	case "paused", "budget_limited":
+		status = "paused"
+	case "complete":
+		status = "verified"
+	default:
+		return nil
+	}
+	return map[string]any{
+		"targetId":             t["targetId"],
+		"objective":            t["objective"],
+		"summaryTitle":         t["summaryTitle"],
+		"timeUsedSeconds":      t["timeUsedSeconds"],
+		"activeRunStartedAtMs": t["activeRunStartedAtMs"],
+		"status":               status,
+		"iteration":            0,
+		"verifications":        []any{},
+	}
+}
+
+// goalAvailability gates pause/resume buttons off the goal object the engine
+// reports in session.target (status: active|paused|budget_limited|complete).
+
+func goalAvailability(goal any, wantStatus string) map[string]any {
+	m, ok := goal.(map[string]any)
+	if !ok {
+		return map[string]any{"allowed": false, "reasonCode": "noGoalToPause"}
+	}
+	status, _ := m["status"].(string)
+	if status == wantStatus {
+		return map[string]any{"allowed": true}
+	}
+	if wantStatus == "paused" {
+		return map[string]any{"allowed": false, "reasonCode": "goalNotPaused"}
+	}
+	return map[string]any{"allowed": false, "reasonCode": "noGoalToPause"}
+}
+
+// avail builds an availability entry; the reasonCode appears only when
+// disallowed (matching the official desktop's snapshot shapes).
+
+func avail(allowed bool, reason string) map[string]any {
+	if allowed {
+		return map[string]any{"allowed": true}
+	}
+	return map[string]any{"allowed": false, "reasonCode": reason}
 }
 
 func keysOf(m map[string]any) []string {
