@@ -231,6 +231,7 @@ func inspectOfficialResponse(raw []byte) {
 		}
 	case isRead && len(data) > 0:
 		// stash the session snapshot, then fetch the official transcript rows
+		_ = os.WriteFile("/tmp/zqf-snap.json", data, 0644)
 		r.stashSnap(rsid, data)
 		requestConversationRows(b, rsid)
 	}
@@ -275,8 +276,19 @@ func inspectOfficialResponse(raw []byte) {
 		}
 		r.rememberRows(rowsid, data)
 		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
+		facts := r.factsFor(rowsid)
 		mode := r.modeFor(rowsid)
-		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode, optRow)
+		if mode == "" {
+			if facts.mode != "" {
+				mode = facts.mode
+			} else {
+				mode = "build"
+			}
+		}
+		r.mu.Lock()
+		canFlush := r.turnRunning[rowsid] && len(queued) > 0
+		r.mu.Unlock()
+		snap := buildProjectionSnapshot(rowsid, rowsRes, queued, dead, mode, optRow, facts, canFlush)
 		if r.optimisticRunning(rowsid) {
 			// Send just happened and the engine's turnHeader hasn't caught
 			// up — report running so the composer flips to 停止生成 instead

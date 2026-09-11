@@ -150,6 +150,24 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 				}
 			}
 		}
+		if sid != "" && typ == "switchModelConfig" {
+			// The page's model picker choice — tracked so the next snapshot's
+			// config.provider/model/thought report the switch immediately
+			// instead of the stale session snapshot (or the old hardcoded
+			// bigmodel/GLM-5.3).
+			pl, _ := env["payload"].(map[string]any)
+			if p, _ := pl["provider"].(string); p != "" {
+				if m, _ := pl["model"].(string); m != "" {
+					r.mu.Lock()
+					if r.modelTracked == nil {
+						r.modelTracked = map[string]map[string]any{}
+					}
+					r.modelTracked[sid] = map[string]any{"provider": p, "model": m, "thought": pl["thought"]}
+					r.mu.Unlock()
+					fmt.Printf("zcode: recovery: session %s model -> %s/%s\n", sid, p, m)
+				}
+			}
+		}
 		if sid != "" && typ == "switchCollaborationMode" {
 			// The page's mode selector state lives in our snapshot's
 			// config.mode (previously hardcoded "build") — without tracking

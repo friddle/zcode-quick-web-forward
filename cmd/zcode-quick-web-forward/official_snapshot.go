@@ -9,7 +9,126 @@ import (
 	"time"
 )
 
-func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string, optRow map[string]any) map[string]any {
+// sessionFacts carries the real session state extracted from the stashed
+// zcode-session.readSession result — everything the projection snapshot used
+// to hardcode (title, model config, usage meter, slash commands).
+
+type sessionFacts struct {
+	title         string
+	status        string // session.status: idle/running/...
+	providerID    string
+	modelID       string
+	thought       string
+	thoughtLevels []any
+	mode          string // settings.mode.current (session-level fallback)
+	ctxUsed       int
+	ctxWindow     int
+	slash         []any
+}
+
+// parseSessionFacts decodes a readSession payload; nil/invalid input yields
+// zero fields (callers fall back to the previous defaults).
+
+func parseSessionFacts(raw json.RawMessage) *sessionFacts {
+	f := &sessionFacts{}
+	if len(raw) == 0 {
+		return f
+	}
+	var snap struct {
+		Session struct {
+			Title  string `json:"title"`
+			Status string `json:"status"`
+			Mode   string `json:"mode"`
+			Model  struct {
+				ProviderID string `json:"providerId"`
+				ModelID    string `json:"modelId"`
+			} `json:"model"`
+		} `json:"session"`
+		Settings struct {
+			Model struct {
+				Current struct {
+					ProviderID string `json:"providerId"`
+					ModelID    string `json:"modelId"`
+				} `json:"current"`
+				Available []struct {
+					Label         string `json:"label"`
+					ContextWindow int    `json:"contextWindow"`
+				} `json:"available"`
+			} `json:"model"`
+			ThoughtLevel struct {
+				Enabled   bool   `json:"enabled"`
+				Current   string `json:"current"`
+				Available []struct {
+					Value string `json:"value"`
+				} `json:"available"`
+			} `json:"thoughtLevel"`
+			Mode struct {
+				Current string `json:"current"`
+			} `json:"mode"`
+		} `json:"settings"`
+		Projection struct {
+			TotalTokenCount int `json:"totalTokenCount"`
+			ContextUsed     int `json:"contextUsed"`
+			ContextWindow   int `json:"contextWindow"`
+		} `json:"projection"`
+		SlashCommands []any `json:"slashCommands"`
+	}
+	if json.Unmarshal(raw, &snap) != nil {
+		return f
+	}
+	f.title = snap.Session.Title
+	f.status = snap.Session.Status
+	f.mode = snap.Session.Mode
+	f.providerID = snap.Settings.Model.Current.ProviderID
+	if f.providerID == "" {
+		f.providerID = snap.Session.Model.ProviderID
+	}
+	f.modelID = snap.Settings.Model.Current.ModelID
+	if f.modelID == "" {
+		f.modelID = snap.Session.Model.ModelID
+	}
+	if snap.Settings.ThoughtLevel.Enabled {
+		f.thought = snap.Settings.ThoughtLevel.Current
+		for _, l := range snap.Settings.ThoughtLevel.Available {
+			if l.Value != "" {
+				f.thoughtLevels = append(f.thoughtLevels, l.Value)
+			}
+		}
+	}
+	if f.mode == "" {
+		f.mode = snap.Settings.Mode.Current
+	}
+	f.ctxUsed = snap.Projection.ContextUsed
+	f.ctxWindow = snap.Projection.ContextWindow
+	if len(snap.SlashCommands) > 0 {
+		f.slash = snap.SlashCommands
+	}
+	return f
+}
+
+// factsFor parses the stashed readSession payload for sid and overlays the
+// page's own switchModelConfig choice (authoritative until the session
+// snapshot catches up with the switch).
+func (r *officialRecovery) factsFor(sid string) *sessionFacts {
+	f := parseSessionFacts(r.snapFor(sid))
+	r.mu.Lock()
+	m := r.modelTracked[sid]
+	r.mu.Unlock()
+	if m != nil {
+		if p, _ := m["provider"].(string); p != "" {
+			f.providerID = p
+		}
+		if mm, _ := m["model"].(string); mm != "" {
+			f.modelID = mm
+		}
+		if t, _ := m["thought"].(string); t != "" {
+			f.thought = t
+		}
+	}
+	return f
+}
+
+func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, dead map[string]bool, mode string, optRow map[string]any, facts *sessionFacts, canFlushQueue bool) map[string]any {
 	fullRows, _ := rowsRes["rows"].([]any)
 	// The latest turnHeader row carries the live turn state — without it the
 	// composer never shows the 停止 button mid-turn (canStop hardcoded false
@@ -99,6 +218,44 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 	if optRow != nil {
 		window = append(window, optRow)
 	}
+	// Real session state (readSession stash) replaces the former hardcoded
+	// title/model/usage/slash placeholders; fall back to the previous
+	// defaults when the session has not reported them (brand-new sessions).
+	if facts == nil {
+		facts = &sessionFacts{}
+	}
+	if facts.status == "running" {
+		// a session the engine reports running but whose rows carry no
+		// turnHeader yet (fresh turn) still means running
+		phase, canStop = "running", true
+	}
+	provider, model, thought := facts.providerID, facts.modelID, facts.thought
+	if provider == "" {
+		provider = "bigmodel"
+	}
+	if model == "" {
+		model = "GLM-5.3"
+	}
+	if thought == "" {
+		thought = "max"
+	}
+	levels := facts.thoughtLevels
+	if len(levels) == 0 {
+		levels = []any{"low", "high", "max"}
+	}
+	maxCtx := facts.ctxWindow
+	if maxCtx <= 0 {
+		maxCtx = 1000000
+	}
+	slash := facts.slash
+	if len(slash) == 0 {
+		slash = []any{
+			map[string]any{"name": "compact", "description": "压缩当前会话上下文", "inputHint": "[instructions]", "source": "builtin"},
+			map[string]any{"name": "plan", "description": "切换到 Plan 模式并可选下发任务", "inputHint": "[task]", "source": "builtin"},
+			map[string]any{"name": "goal", "description": "查看或设置当前会话目标", "inputHint": "[pause|resume|clear|replace <objective>|<objective>]", "source": "builtin"},
+			map[string]any{"name": "init", "description": "创建或更新工作区 AGENTS.md", "inputHint": "[notes]", "source": "builtin"},
+		}
+	}
 	// This recipe mirrors with_self_implement's conversationSnapshotFrame —
 	// field-for-field the shape this exact phone page renders.
 	return map[string]any{
@@ -112,26 +269,23 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 			"stopState": "idle", "stopTargetKind": "unknown",
 			"activeWorks": []any{}, "lastError": nil, "apiRetry": nil,
 		},
-		"slashCommands": []any{
-			map[string]any{"name": "compact", "description": "压缩当前会话上下文", "inputHint": "[instructions]", "source": "builtin"},
-			map[string]any{"name": "plan", "description": "切换到 Plan 模式并可选下发任务", "inputHint": "[task]", "source": "builtin"},
-			map[string]any{"name": "goal", "description": "查看或设置当前会话目标", "inputHint": "[pause|resume|clear|replace <objective>|<objective>]", "source": "builtin"},
-			map[string]any{"name": "init", "description": "创建或更新工作区 AGENTS.md", "inputHint": "[notes]", "source": "builtin"},
-		},
 		"availability": map[string]any{
 			"fork": map[string]any{"allowed": true}, "compact": map[string]any{"allowed": true},
 			"switchModelConfig": map[string]any{"allowed": true}, "setFollowupMode": map[string]any{"allowed": true},
-			"queueEdit":     map[string]any{"allowed": true},
-			"sendQueuedNow": map[string]any{"allowed": false, "reasonCode": "sendQueuedNowRequiresRunning"},
+			"queueEdit": map[string]any{"allowed": true},
+			// 立即 flushes the queue — only meaningful while a turn is actually
+			// running and something is queued (hardcoded false left the button
+			// permanently dead)
+			"sendQueuedNow": map[string]any{"allowed": canFlushQueue, "reasonCode": "sendQueuedNowRequiresRunning"},
 			"pauseGoal":     map[string]any{"allowed": false, "reasonCode": "noGoalToPause"},
 			"resumeGoal":    map[string]any{"allowed": false, "reasonCode": "noGoalToResume"},
 		},
 		"inputRouting":    map[string]any{"mode": "startNow"},
-		"meta":            map[string]any{"title": "", "titleSource": "default"},
-		"config":          map[string]any{"provider": "bigmodel", "model": "GLM-5.3", "thought": "max", "thoughtLevels": []any{"low", "high", "max"}, "followupMode": "queue", "mode": mode},
+		"meta":            map[string]any{"title": facts.title, "titleSource": "default"},
+		"config":          map[string]any{"provider": provider, "model": model, "thought": thought, "thoughtLevels": levels, "followupMode": "queue", "mode": mode},
 		"modelTransition": nil,
 		"usage": map[string]any{
-			"contextWindow": map[string]any{"usedTokens": 0, "maxTokens": 1000000, "autoCompactThresholdTokens": nil},
+			"contextWindow": map[string]any{"usedTokens": facts.ctxUsed, "maxTokens": maxCtx, "autoCompactThresholdTokens": nil},
 			"cumulative":    map[string]any{"inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0},
 		},
 		"queue":                  map[string]any{"items": queued, "autoDrain": true},
@@ -147,6 +301,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 			"totalCount": len(window),
 			"firstRowId": firstRowID,
 		},
+		"slashCommands": slash,
 	}
 }
 
@@ -279,16 +434,14 @@ func (r *officialRecovery) ensureTurnRefresher(b *officialHostBridge) {
 	}()
 }
 
-// modeFor returns the session's collaboration mode (build/edit/plan/yolo),
-// defaulting to build until the page sends switchCollaborationMode.
+// modeFor returns the session's collaboration mode (build/edit/plan/yolo).
+// The page's own switchCollaborationMode choice wins; an empty result means
+// the caller should fall back to the session's reported mode, then build.
 
 func (r *officialRecovery) modeFor(sid string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if m := r.modeBySess[sid]; m != "" {
-		return m
-	}
-	return "build"
+	return r.modeBySess[sid]
 }
 
 // sendFresh reports whether a sendText for sid happened recently enough that

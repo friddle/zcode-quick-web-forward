@@ -85,6 +85,7 @@ type officialRecovery struct {
 	lastKick         int64                     // unix ts of last pendingApproval-triggered refresh (rate limit)
 	refresherStarted bool                      // turn-running periodic refresher goroutine started
 	modeBySess       map[string]string         // sessionId -> collaboration mode (build/edit/plan/yolo)
+	modelTracked     map[string]map[string]any // sessionId -> page-chosen switchModelConfig {provider,model,thought}
 	modelSwitched    map[string]bool           // sessionId -> switchModelConfig already sent
 	clientBySession  map[string]string         // sessionId -> the phone page's clientId (commands must reuse it)
 	sessionRevision  map[string]int            // sessionId -> engine conversation revision (for fork/feedback/etc.)
