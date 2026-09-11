@@ -99,6 +99,7 @@ type officialRecovery struct {
 	pendingRaw       map[int]*pendingRawCall    // call id -> encoded promise call (handshake retry)
 	retrying         map[int]bool               // call ids with a handshake-retry loop in flight
 	suppressAck      map[int]bool               // early-acked queue-op call ids whose engine ack must not reach the page
+	seenCommand      map[string]int64           // "sid|type|commandId" -> unix ms of first forward (phone re-delivery dedupe)
 }
 
 // sameAsLast reports whether the rows payload is byte-identical to the last

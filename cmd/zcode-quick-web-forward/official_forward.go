@@ -274,6 +274,35 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 			if rec := officialActiveRec(); rec != nil {
 				if env, ok := argMap(c.Arg)["envelope"].(map[string]any); ok {
 					sid, _ := env["sessionId"].(string)
+					typ, _ := env["type"].(string)
+					// The phone transport re-delivers conversation commands (new
+					// call id, SAME commandId). The engine queues each delivery
+					// as its own queue entry — a re-delivered mid-turn sendText
+					// then dispatched twice, and a deleteQueueItem only removed
+					// one copy (taken-back messages still executed). Forward
+					// each envelope exactly once; the page's ack handling is
+					// idempotent so re-deliveries need no answer of their own.
+					if cid, _ := env["commandId"].(string); cid != "" && sid != "" {
+						key := sid + "|" + typ + "|" + cid
+						rec.mu.Lock()
+						nowMs := time.Now().UnixMilli()
+						first := rec.seenCommand[key] == 0
+						if first {
+							rec.seenCommand[key] = nowMs
+						}
+						if len(rec.seenCommand) > 4096 {
+							for k, ts := range rec.seenCommand {
+								if nowMs-ts > 300_000 {
+									delete(rec.seenCommand, k)
+								}
+							}
+						}
+						rec.mu.Unlock()
+						if !first {
+							fmt.Printf("zcode: recovery: dropped re-delivered %s command %s for %s\n", typ, cid, sid)
+							return true
+						}
+					}
 					// The stop guard aborts with fault.guard.stopTargetChanged
 					// when expectedForegroundExecutionId doesn't equal the
 					// engine's live one (runtime_command_<counter>, unknowable
@@ -281,7 +310,7 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 					// runtime_command_<sessionId>, so every stop button press
 					// was rejected). The field is optional: absent means "stop
 					// whatever is running", which is what the phone means.
-					if typ, _ := env["type"].(string); typ == "stop" {
+					if typ == "stop" {
 						if pl, ok := env["payload"].(map[string]any); ok {
 							if _, has := pl["expectedForegroundExecutionId"]; has {
 								delete(pl, "expectedForegroundExecutionId")
@@ -317,7 +346,6 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 					// subscribe ack taught us the real one). Only touch the
 					// field when the page itself sent it: the envelope schemas
 					// of other command types don't carry it.
-					typ, _ := env["type"].(string)
 					switch typ {
 					case "editUserQuery", "retryTurn", "applyFileRewind", "forkAssistant", "setAssistantFeedback":
 						if learned := rec.epochFor(sid); learned != "" {
