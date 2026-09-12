@@ -45,3 +45,21 @@ python3 decode_capture.py official-ws-frames.json   # 输出 /tmp/official-decod
 我们要实现的「宿主侧」（构建 conversation/sessions-index/tasks-index 帧）在官方代码里
 没有可复用的实现——桌面宿主是闭源 Electron 应用。所以正确姿势是：官方客户端当
 验收标准 + 本目录的夹具/文档当参照，宿主侧用 Go（或任何语言）对着夹具实现。
+
+## 回车提交版（手机用）
+
+官方 bundle 在「web 远控 + 手机视口」（`(max-width:767px) and (hover:none) and
+(pointer:coarse)`）下把 composer 的 enterSubmits 硬编码为 false——手机上回车永远
+只插换行，任务只能点发送箭头；而消息编辑条（rewind）的回车提交却没关，同一页面
+两种回车习惯。daemon 是协议管道改不到官方页面 JS，所以通过本镜像出一个注入了
+`enter_patch.js` 的版本：回车=提交任务（与点发送按钮同一条链路），输入法组词中
+第一下回车只上屏确认、第二下才提交，Shift+Enter 仍为换行，@、/ 菜单打开时回车
+仍是选词；桌面宽度不受影响（媒体查询不匹配时补丁直接放行）。
+
+- 注入发生在每次响应（磁盘 index.html 保持原样），官方更新后懒拉取的新 HTML
+  照样被注入；URL 加 `&zqfp=0` 可临时关掉补丁做 A/B 对照。
+- 服务器部署：`/root/zcode-web-mirror/{serve.py,enter_patch.js}` +
+  `zqf-webpage.service`（0.0.0.0:8899）。手机把配对链接的域名换成
+  `http://<服务器IP>:8899` 即可，其余参数原样保留。
+- 注意 relay 同一设备同一时间只允许一个终端页：用回车提交版时原版书签页会被
+  顶下线，反之亦然。
