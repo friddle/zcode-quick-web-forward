@@ -551,6 +551,10 @@ func (r *officialRecovery) ensureTurnRefresher(b *officialHostBridge) {
 			}
 			r.mu.Unlock()
 			for _, sid := range sids {
+				// Stuck-queue rescue first: a turn the host still considers
+				// running while our queue mirror sits undelivered means the
+				// message silently never dispatches (BUG-002).
+				rescueStuckQueues(b, sid, now)
 				requestRecoverySnapshot(b, sid)
 			}
 		}

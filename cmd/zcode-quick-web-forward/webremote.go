@@ -241,6 +241,10 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		// Opening the task counts as "read": a 结束蓝点 set by an earlier
 		// turn completion clears on this and later list pushes.
 		officialMarkTaskViewed(v.TaskID)
+		// Bridge-open is the phone's recovery moment: after a daemon restart
+		// the in-memory turnRunning map is empty (running tasks had no card /
+		// spinner), so re-observe rows for the most recent tasks.
+		go rescueRecentTurns(12)
 		ps.mu.Lock()
 		prevWS := ps.workspacePath
 		ps.workspacePath = v.WorkspaceKey

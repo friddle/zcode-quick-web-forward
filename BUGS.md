@@ -34,24 +34,47 @@ daemon 侧 `officialTaskRuntime()` 负责给列表卡片覆盖 `displayStatus`/`
 3. **页面左侧大图标不随 running 转**（页面自身设计，daemon 侧无法改变）
    - 如果用户预期是左侧图标转菊花，那属于官方页面视觉设计，只能记录为产品差异。
 
-### 修复方案（待指令后实施）
+### 修复状态：**代码已写（official_rescue.go 等），见下方「修复实施」**
 
-- **a) 重启恢复**：daemon 启动 / relay 重连后，对已知 session（索引最近任务 +
-  `clientBySession`）逐个拉一次 rows，恢复 `turnRunning` 真实状态，消除重启盲区。
-- **b) 覆盖所有 turn 启动路径**：queued send / sendQueuedNow / followup 续跑也走
-  乐观标记 + refresher（现在只有 sendText 直发路径有）。
-- **c) 可选**：`turnRunning` 持久化到 state 文件，重启后先按文件恢复再校正。
+- **a) 重启恢复** ✅：bridge-open 时调用 `rescueRecentTurns(12)`，对索引里最近的
+  任务逐个补一次 rows 观察，恢复 turnRunning（运行中的卡片恢复菊花徽章）。
+- **b) 覆盖 sendQueuedNow** ✅：强制派发队列项时乐观标记 running + 启动 refresher。
 
-### 验证方式（修复后）
+---
 
-手机视口（390×844 + hover:none/pointer:coarse）：提交 30s 任务 → 主页卡片应为
-「运行中」+ 转圈；结束后翻转「已完成」+ 蓝点；打开任务后蓝点消失。
+## BUG-002: 「提交不成功」——turn 异常结束后消息被静默吞掉（已修代码，待部署观察）
 
-### 状态
+- **报告**: 2026-09-14。用户把一段分析任务提交到「分析 bi overview retention 留存数据偏低原因」
+  （sess_2e76d6aa），多次提交都没有反应。
 
-- [ ] 修复代码
-- [ ] 部署
-- 等待与其余任务一起做。
+### 日志取证时间线
+
+- 13:07–13:10 会话正常跑了 turn，但**最后一个 assistant 消息以
+  `AiSdkModelAdapterError` 结束**（模型 API 调用失败，13:10:41）。
+- 13:11–13:14 用户多次重试提交（call 71/108/115/99/92），daemon 全部 early-ack
+  并转发； ourselves 的队列镜像也记录了 "1 queued"。
+- 但 **engine 的 db.sqlite 里该会话在 13:10:42 之后 0 条新消息** —— 用户文本
+  从未入库。host 侧 `resyncConversationV4 FAIL fault.subscription.notOwned`、
+  大量 `fault.subscribe.sessionNotFound`（91 次）。
+
+### 根因
+
+turn 异常结束后 **host 的投影把 turnHeader 卡在 `running`（endedAt=None）**，
+host 认为会话仍占用 → 后续 sendText 全部进入 host 内部队列**等待一个永远不会结束
+的 turn**，永不派发；而 daemon 已经 early-ack（页面清空输入框，无任何报错），
+消息静默消失。
+
+### 修复实施（official_rescue.go）
+
+- **卡队列自愈**：refresher 每 5s 巡检 turnRunning 会话；若队列镜像里有条目
+  `admittedAt` 超过 60s 仍未投递（且 120s 内没自救过）：
+  1. 注入一条不带 `expectedForegroundExecutionId` 的 `stop` 强制释放 stale turn；
+  2. 6s 后把卡住的 queued 文本作为**全新 sendText envelope**（新 commandId）重投；
+  3. 清掉本地队列镜像并推送列表。
+- **sendQueuedNow 乐观标记**（同 BUG-001-b）。
+- **重启盲区恢复**（同 BUG-001-a）。
+
+### 修复状态：**代码已写 + 单测通过，已部署待线上验证**
 
 ---
 
@@ -62,3 +85,4 @@ daemon 侧 `officialTaskRuntime()` 负责给列表卡片覆盖 `displayStatus`/`
   用户要求关闭，恢复方法见 `scripts/web-remote-mirror/README.md`。
 - relay 同一设备同一时间只允许一个终端页：多端互踢是官方设计。测试/调试连接
   会顶掉手机页面（本次已注意，调试前先知会）。
+

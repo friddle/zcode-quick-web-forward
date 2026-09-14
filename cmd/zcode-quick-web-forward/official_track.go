@@ -126,6 +126,22 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		case "deleteQueueItem", "sendQueuedNow", "editQueueItem", "reorderQueueItem":
 			pl, _ := env["payload"].(map[string]any)
 			r.applyQueueOp(sid, typ, pl)
+			if typ == "sendQueuedNow" && sid != "" {
+				// Force-dispatch promotes the queued item into a real turn:
+				// mark it running optimistically so the task card flips to
+				// 运行中 without waiting for the next rows fetch (queued
+				// sends have no sendText early-ack to do it for us).
+				r.mu.Lock()
+				if r.turnRunning == nil {
+					r.turnRunning = map[string]bool{}
+				}
+				r.turnRunning[sid] = true
+				r.mu.Unlock()
+				r.ensureTurnRefresher(b)
+				if f := taskStatusNudge; f != nil {
+					time.AfterFunc(300*time.Millisecond, f)
+				}
+			}
 			// Early-ack: queue ops are revision-checked, and on the first
 			// press after a (re)start the engine's revision is still unknown
 			// — the command goes stale and the page ABANDONS its flow on the

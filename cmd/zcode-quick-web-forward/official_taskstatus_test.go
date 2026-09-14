@@ -1,7 +1,6 @@
 package main
 
 import (
-	"sync"
 	"testing"
 	"time"
 )
@@ -106,5 +105,43 @@ func TestRecoveryMapsInitialized(t *testing.T) {
 	if r.seenCommand["k"] != 1 || r.completedAt["s"] != 2 || r.viewedAt["s"] != 3 {
 		t.Fatal("map writes lost")
 	}
-	var _ sync.Mutex = r.mu
+}
+
+// A queue item stuck past admission while the session is "running" must arm
+// the rescue (lastQueueRescue stamped); a fresh item must not.
+func TestStuckQueueRescueTrigger(t *testing.T) {
+	rec := taskStatusTestRec()
+	// 注意：不设 officialState.active —— rescue 内部的 inject 在无 active
+	// bridge 时是 no-op，这里只验证触发判定逻辑。
+	now := time.Now().UnixMilli()
+	rec.mu.Lock()
+	rec.turnRunning["sess_z"] = true
+	rec.queuedSends["sess_z"] = []map[string]any{{
+		"text":       "stuck message",
+		"admittedAt": now - 120_000, // stuck 2min
+	}}
+	rec.mu.Unlock()
+
+	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_z", now)
+	rec.mu.Lock()
+	stamped := rec.lastQueueRescue["sess_z"] != 0
+	rec.mu.Unlock()
+	if !stamped {
+		t.Fatal("stuck queue did not arm the rescue")
+	}
+
+	rec.mu.Lock()
+	rec.queuedSends["sess_f"] = []map[string]any{{
+		"text":       "fresh message",
+		"admittedAt": now - 5_000, // just admitted
+	}}
+	rec.mu.Unlock()
+	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_f", now)
+	rec.mu.Lock()
+	notStuck := rec.lastQueueRescue["sess_f"] == 0
+	rec.mu.Unlock()
+	if !notStuck {
+		t.Fatal("fresh queue item wrongly armed the rescue")
+	}
+	// 让 6s 后的重投 goroutine 不影响其他用例（没有 active bridge 时 inject 是 no-op）
 }

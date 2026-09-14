@@ -103,6 +103,7 @@ type officialRecovery struct {
 	seenCommand      map[string]int64           // "sid|type|commandId" -> unix ms of first forward (phone re-delivery dedupe)
 	completedAt      map[string]int64           // sessionId -> unix ms the last turn flipped running→ended (drives the phone's 结束蓝点)
 	viewedAt         map[string]int64           // sessionId -> unix ms the phone last opened the task (clears the dot)
+	lastQueueRescue  map[string]int64           // sessionId -> unix ms of the last stuck-queue rescue (rate limit)
 }
 
 // initMaps makes every map field. officialRecovery is constructed once at
@@ -145,6 +146,7 @@ func (r *officialRecovery) initMaps() {
 	r.seenCommand = map[string]int64{}
 	r.completedAt = map[string]int64{}
 	r.viewedAt = map[string]int64{}
+	r.lastQueueRescue = map[string]int64{}
 }
 
 // taskStatusNudge is installed by startWebRemote: re-pushes the
