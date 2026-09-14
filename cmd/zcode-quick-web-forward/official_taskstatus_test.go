@@ -115,19 +115,32 @@ func TestStuckQueueRescueTrigger(t *testing.T) {
 	// bridge 时是 no-op，这里只验证触发判定逻辑。
 	now := time.Now().UnixMilli()
 	rec.mu.Lock()
+	// RUNNING + queued = normal followupMode=queue — must NOT arm the rescue
+	// (an earlier version stopped live turns here and killed healthy work).
 	rec.turnRunning["sess_z"] = true
 	rec.queuedSends["sess_z"] = []map[string]any{{
 		"text":       "stuck message",
-		"admittedAt": now - 120_000, // stuck 2min
+		"admittedAt": now - 120_000,
 	}}
 	rec.mu.Unlock()
 
 	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_z", now)
 	rec.mu.Lock()
+	armed := rec.lastQueueRescue["sess_z"] != 0
+	rec.mu.Unlock()
+	if armed {
+		t.Fatal("running session with a queued followup must not arm the rescue")
+	}
+
+	rec.mu.Lock()
+	rec.turnRunning["sess_z"] = false // turn ended, item still undelivered
+	rec.mu.Unlock()
+	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_z", now)
+	rec.mu.Lock()
 	stamped := rec.lastQueueRescue["sess_z"] != 0
 	rec.mu.Unlock()
 	if !stamped {
-		t.Fatal("stuck queue did not arm the rescue")
+		t.Fatal("idle session with a stuck queue did not arm the rescue")
 	}
 
 	rec.mu.Lock()

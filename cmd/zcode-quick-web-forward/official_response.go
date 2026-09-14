@@ -122,6 +122,15 @@ func inspectOfficialResponse(raw []byte) {
 		delete(r.pendingRaw, id)
 		delete(r.retrying, id)
 		r.mu.Unlock()
+		// A sendText the host ultimately REJECTED (its ~30s admission pend
+		// ended in an error) must never stay silent: we early-acked the page,
+		// so without this line the message just vanishes from the user's view.
+		// The stuck-queue rescue picks the text up from the mirror and
+		// resubmits; log loudly so the failure is visible in the log.
+		if kind == relay.KindPromiseErr && pr != nil && pr.typ == "sendText" {
+			fmt.Printf("zcode: recovery: host REJECTED sendText for %s (call %d): %s — queued mirror will resubmit\n",
+				pr.sid, id, firstJSON(data))
+		}
 		// The engine answers revision-sensitive commands (fork/feedback/
 		// retry/edit) with a PromiseSuccess whose body is status:"stale" +
 		// revisionAtDecision — because the page sent baseRevision 0. Learn

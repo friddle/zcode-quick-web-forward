@@ -7,13 +7,14 @@ package main
 //     a mid-flight turn was invisible (no card, no spinner, lost completion
 //     dots). recoverRecentTurns() re-observes rows for the most recent tasks
 //     on every bridge-open.
-//   - BUG-002: when a turn ends abnormally (e.g. AiSdkModelAdapterError) the
-//     host's projection can keep the turnHeader "running" (endedAt None)
-//     forever; every later sendText for the session is then queued by the
-//     host and NEVER dispatched, while we already early-acked it — the
-//     message silently vanishes ("提交不成功"). The refresher detects a queue
-//     mirror that stayed undelivered too long, force-releases the stale turn
-//     with a stop, and resubmits the queued texts as fresh envelopes.
+//   - BUG-002: when a send goes missing — the host rejects it after its ~30s
+//     admission pend, or the engine queue wedges after an abnormal turn end —
+//     the message silently vanishes ("提交不成功"): we already early-acked the
+//     page and nothing ever dispatches. The refresher detects queue-mirror
+//     items still undelivered after the turn has ENDED and resubmits the
+//     texts as fresh envelopes. While the turn is running a queued item is
+//     normal followupMode=queue behavior and is never touched — an earlier
+//     version stop-ed live turns here and killed healthy work.
 
 import (
 	"fmt"
@@ -90,6 +91,14 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 		rec.mu.Unlock()
 		return
 	}
+	if rec.turnRunning[sid] {
+		// A queued item while the turn is genuinely running is NORMAL
+		// followupMode=queue behavior — it dispatches when the turn ends.
+		// Stopping here would kill live work (this exact mistake cancelled a
+		// healthy model request on 2026-09-14 14:16).
+		rec.mu.Unlock()
+		return
+	}
 	oldest := int64(0)
 	for _, it := range items {
 		if at, _ := it["admittedAt"].(int64); at > 0 && (oldest == 0 || at < oldest) {
@@ -101,7 +110,6 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 		rec.mu.Unlock()
 		return
 	}
-	running := rec.turnRunning[sid]
 	if rec.lastQueueRescue == nil {
 		rec.lastQueueRescue = map[string]int64{}
 	}
@@ -117,25 +125,10 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 	}
 	rec.mu.Unlock()
 
-	if running {
-		fmt.Printf("zcode: recovery: queue for %s stuck %ds past admission while running (%d items) — stale host turn lease suspected, force-releasing\n",
-			sid, (now-oldest)/1000, len(items))
-
-		// 1) Force-release the stale running turn: a bare stop (we strip
-		// expectedForegroundExecutionId on the forward path) ends it host-side,
-		// which unblocks the host's queue dispatch.
-		officialInjectCommand(sid, "stop", map[string]any{}, "")
-		// 2) Give the stop a moment, then resubmit the queued texts as fresh
-		// envelopes (new commandIds — the originals were answered by our early
-		// ack, and the host never dispatched them).
-		time.AfterFunc(6*time.Second, func() {
-			officialResubmitQueued(sid, texts, clients)
-		})
-		return
-	}
-	// Not running but the engine still holds the message(s): a turn that
-	// ended abnormally wedged the engine's queue — nothing will dispatch it.
-	// A fresh sendText re-runs the whole admission path from a clean state.
+	// The turn has ENDED (turnRunning false) yet the message(s) never
+	// dispatched — the engine queue wedged after an abnormal turn end. A
+	// fresh sendText re-runs admission from a clean state. No stop needed:
+	// nothing is running.
 	fmt.Printf("zcode: recovery: queue for %s stuck %ds past admission while idle (%d items) — engine queue wedged, resubmitting\n",
 		sid, (now-oldest)/1000, len(items))
 	time.AfterFunc(2*time.Second, func() {
