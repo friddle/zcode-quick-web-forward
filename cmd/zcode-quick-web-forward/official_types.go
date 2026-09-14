@@ -208,6 +208,26 @@ func officialTurnRunning(sid string) bool {
 	return rec.turnRunning[sid]
 }
 
+// officialAnyTurnRunning reports whether ANY engine session has a turn in
+// flight. The bridge-open restart guard previously consulted
+// phoneSessions.anyTurnRunning(), which reads a runningSids map that is never
+// populated on the official path — the guard was a no-op and a workspace
+// switch could restart the engine (and kill background turns) even mid-turn.
+func officialAnyTurnRunning() bool {
+	rec := officialActiveRec()
+	if rec == nil {
+		return false
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, running := range rec.turnRunning {
+		if running {
+			return true
+		}
+	}
+	return false
+}
+
 // officialSyntheticTasks returns engine-known tasks that the on-disk task
 // index does not have yet. The host writes the index row at first completion,
 // so a task whose turn is still running would be invisible in the phone's

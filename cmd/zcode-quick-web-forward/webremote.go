@@ -255,7 +255,9 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		// It must also not restart on EVERY open: the phone re-opens the bridge
 		// on each reload, and engine-restart → resync → reload → bridge-open is
 		// a frontend restart loop. Only a real workspace switch justifies one.
-		if restartEngine != nil && !ps.anyTurnRunning() && prevWS != "" && prevWS != v.WorkspaceKey {
+		// The turn state is the official recovery's engine-observed running map
+		// (phoneSessions.anyTurnRunning reads a map nothing ever writes).
+		if restartEngine != nil && !officialAnyTurnRunning() && prevWS != "" && prevWS != v.WorkspaceKey {
 			restartEngine()
 		}
 		bridge := map[string]any{

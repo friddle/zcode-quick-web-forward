@@ -211,3 +211,29 @@ func TestFactsForUsagePersistence(t *testing.T) {
 		t.Fatalf("invented usage for unknown session: %d/%d", f2.ctxUsed, f2.ctxWindow)
 	}
 }
+
+// officialAnyTurnRunning reads the engine-observed turn map; it must report
+// running when any session is mid-turn (the bridge-open restart guard relies
+// on this — the old phoneSessions.anyTurnRunning read a never-written map).
+func TestOfficialAnyTurnRunning(t *testing.T) {
+	rec := taskStatusTestRec()
+	prev := officialState.active
+	officialState.mu.Lock()
+	officialState.active = &officialHostBridge{rec: rec}
+	officialState.mu.Unlock()
+	defer func() {
+		officialState.mu.Lock()
+		officialState.active = prev
+		officialState.mu.Unlock()
+	}()
+
+	if officialAnyTurnRunning() {
+		t.Fatal("no turns running, but reported running")
+	}
+	rec.mu.Lock()
+	rec.turnRunning["sess_a"] = true
+	rec.mu.Unlock()
+	if !officialAnyTurnRunning() {
+		t.Fatal("turn running but reported idle")
+	}
+}
