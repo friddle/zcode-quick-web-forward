@@ -106,6 +106,9 @@ type officialRecovery struct {
 	lastQueueRescue  map[string]int64           // sessionId -> unix ms of the last stuck-queue rescue (rate limit)
 	lastRecentRescue int64                      // unix ms of the last rescueRecentTurns sweep (rate limit)
 	ctxBySess        map[string][2]int          // sessionId -> last reported {contextUsed, contextWindow} (usage meter persistence)
+	lastRowsAt       map[string]int64           // sessionId -> unix ms of the last conversationRowsRangeV4 reply (rescue freshness gate)
+	selfInjected     map[int]bool               // daemon-minted call ids whose sendText bookkeeping must be skipped (rescue injects already sit in the mirror)
+	lastHandshakeTry int64                      // unix ms of the last daemon-side host handshake bootstrap (rate limit)
 }
 
 // initMaps makes every map field. officialRecovery is constructed once at
@@ -151,6 +154,8 @@ func (r *officialRecovery) initMaps() {
 	r.lastQueueRescue = map[string]int64{}
 	r.lastRecentRescue = 0
 	r.ctxBySess = map[string][2]int{}
+	r.lastRowsAt = map[string]int64{}
+	r.selfInjected = map[int]bool{}
 }
 
 // taskStatusNudge is installed by startWebRemote: re-pushes the

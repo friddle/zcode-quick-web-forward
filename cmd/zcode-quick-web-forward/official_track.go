@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/friddle/zcode-quick-web-forward/internal/relay"
+	"strings"
 	"time"
+
+	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 )
 
 func argMap(arg any) map[string]any {
@@ -45,6 +47,13 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 	case c.Kind == relay.KindEventListen && c.ChannelName == "zcode-agent" && c.Name == "onDynamicConversationFrame":
 		r.recordListen(c.ID)
 		fmt.Println("zcode: recovery: onDynamicConversationFrame listen id", c.ID)
+	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "helloConversationV4":
+		// The page is running its own handshake. A previous daemon-side
+		// bootstrap may have bound a connection to a client id — a fresh
+		// attachment (fresh connection, empty registry) lets the page's
+		// hello + initialize land without fault.connection.clientChanged.
+		fmt.Println("zcode: recovery: page-initiated handshake — reattaching service port")
+		officialReattach()
 	case c.Kind == relay.KindPromise && (c.Name == "subscribeConversationV4" || c.Name == "resyncConversationV4"):
 		sid, _ := argMap(c.Arg)["sessionId"].(string)
 		if sid == "" {
@@ -131,7 +140,41 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		switch typ {
 		case "deleteQueueItem", "sendQueuedNow", "editQueueItem", "reorderQueueItem":
 			pl, _ := env["payload"].(map[string]any)
-			delivered := r.applyQueueOp(sid, typ, pl)
+			// sendQueuedNow is REWRITTEN into a real sendText before the
+			// forward below: the engine's queue-drain is the one piece that
+			// intermittently wedges in headless mode, so "dispatch now" must
+			// not depend on it. On an idle session the sendText starts the
+			// turn immediately; mid-turn the engine re-queues it (and the
+			// post-turn drain hook covers the wedge). A fresh commandId keeps
+			// every dedupe layer out of the way; the page's own call id is
+			// already answered by the early-ack below and the engine's ack
+			// for it is suppressed.
+			pageCommandID, _ := env["commandId"].(string)
+			if typ == "sendQueuedNow" {
+				qid, _ := pl["queueItemId"].(string)
+				if text := r.queuedTextFor(sid, strings.TrimPrefix(qid, "queue_")); text != "" {
+					env["type"] = "sendText"
+					env["payload"] = map[string]any{"text": text}
+					env["commandId"] = uuidNew()
+					env["issuedAt"] = time.Now().UnixMilli()
+					if m, ok := c.Arg.(map[string]any); ok {
+						m["envelope"] = env
+					}
+					// The mirror item STAYS until a real userInput row retires
+					// it (takeQueuedItems): if the engine wedges again the
+					// post-turn drain hook still has the text to resubmit,
+					// and deleting it here is what lost messages before.
+					r.mu.Lock()
+					delete(r.lastRowsJSON, sid)
+					r.mu.Unlock()
+					fmt.Printf("zcode: recovery: sendQueuedNow rewritten to sendText for %s\n", sid)
+				}
+				// Mirror (and therefore the chip) is intentionally untouched.
+			}
+			delivered := true
+			if typ != "sendQueuedNow" {
+				delivered = r.applyQueueOp(sid, typ, pl)
+			}
 			// 撤回一条已经派发执行的消息：镜像里已没有它（userInput row 一出现
 			// 就会退役），引擎对删除只会回 queue.itemMissing，任务照跑。用户
 			// 语义上的删除/编辑此时应当先停掉正在跑的 turn。
@@ -180,7 +223,7 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 				r.suppressAck[c.ID] = true
 				r.mu.Unlock()
 				if out, err := json.Marshal(map[string]any{
-					"commandId":          env["commandId"],
+					"commandId":          pageCommandID,
 					"status":             "accepted",
 					"revisionAtDecision": rev,
 				}); err == nil {
@@ -349,7 +392,7 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			// message renders as a normal optimistic userInput row instead
 			// (the other presentation), falling back to the queue chip only
 			// if it is still unexecuted after the optimistic window.
-			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" {
+			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" && !r.selfInjectedCall(c.ID) {
 				cmdID, _ := env["commandId"].(string)
 				clientID, _ := env["clientId"].(string)
 				r.mu.Lock()

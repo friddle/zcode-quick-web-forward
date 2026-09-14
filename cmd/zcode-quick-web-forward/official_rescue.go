@@ -126,6 +126,16 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 		rec.mu.Unlock()
 		return
 	}
+	// Resubmit only on a FRESH observation. The mirror retires when a rows
+	// fetch shows the matching userInput row; if our last rows view is stale,
+	// the engine may have already taken the message and resubmitting now
+	// would run it twice (both copies landed in the engine DB on 09-14
+	// 19:48). Ask for rows instead and let a later refresher tick decide.
+	if now-rec.lastRowsAt[sid] > 15_000 {
+		rec.mu.Unlock()
+		requestConversationRows(b, sid)
+		return
+	}
 	if rec.lastQueueRescue == nil {
 		rec.lastQueueRescue = map[string]int64{}
 	}
@@ -173,6 +183,121 @@ func officialResubmitQueued(sid string, texts, clients []string) {
 	}
 }
 
+// dispatchQueuedAfterTurn fires ~4s after a turn ends: the engine is
+// supposed to auto-dispatch messages that were queued behind that turn, but
+// in headless mode that drain intermittently never happens (the message then
+// sits invisible until the 60s patrol). When the turn really ended, the
+// engine is idle, and mirror items are still undelivered on a fresh rows
+// view, inject them now. When the engine DID start the next turn itself,
+// session.status reports running and this aborts — no double dispatch.
+func (r *officialRecovery) dispatchQueuedAfterTurn(sid string) {
+	r.mu.Lock()
+	items := r.queuedSends[sid]
+	if len(items) == 0 {
+		r.mu.Unlock()
+		return
+	}
+	now := time.Now().UnixMilli()
+	if now-r.lastQueueRescue[sid] < 120_000 {
+		r.mu.Unlock()
+		return
+	}
+	// Same freshness rule as rescueStuckQueues: act only on a rows view that
+	// had the chance to retire delivered items.
+	if now-r.lastRowsAt[sid] > 15_000 {
+		officialState.mu.Lock()
+		b := officialState.active
+		officialState.mu.Unlock()
+		if b != nil {
+			r.mu.Unlock()
+			requestConversationRows(b, sid)
+			return
+		}
+	}
+	texts := make([]string, 0, len(items))
+	clients := make([]string, 0, len(items))
+	for _, it := range items {
+		t, _ := it["text"].(string)
+		c, _ := it["clientId"].(string)
+		texts = append(texts, t)
+		clients = append(clients, c)
+	}
+	r.mu.Unlock()
+
+	f := parseSessionFacts(r.snapFor(sid))
+	switch f.status {
+	case "running", "in-progress", "active":
+		return // engine took the queued message itself — a new turn is live
+	}
+	r.mu.Lock()
+	if r.lastQueueRescue == nil {
+		r.lastQueueRescue = map[string]int64{}
+	}
+	r.lastQueueRescue[sid] = now
+	r.mu.Unlock()
+	// Without an active bridge the inject inside is a no-op; the mirror clear
+	// still happens, matching the rescue path's behavior.
+	fmt.Printf("zcode: recovery: turn ended with %d undelivered queued send(s) for %s — dispatching\n", len(texts), sid)
+	officialResubmitQueued(sid, texts, clients)
+}
+
+// bootstrapHostHandshake completes the host-side connection handshake on
+// behalf of the page. The host gates every state-changing call behind
+// helloConversationV4 + initializeConversationV4 (fault.connection.
+// handshakeRequired otherwise); the page only runs that dance on a
+// workspace-bridge-open, so after a daemon/host restart with a silently
+// reconnected page (no reload → no bridge-open) every page write was
+// rejected forever while the daemon's early-acks hid it from the user. The
+// daemon is the service-port client: speaking the handshake here is the
+// transport's job. Uses the page's CURRENT clientId (learned from its own
+// envelopes) so later page commands pass the clientMismatch check.
+func bootstrapHostHandshake(b *officialHostBridge) {
+	if b == nil || !b.h.Alive() {
+		return
+	}
+	r := b.rec
+	r.mu.Lock()
+	now := time.Now().UnixMilli()
+	if now-r.lastHandshakeTry < 3000 {
+		r.mu.Unlock()
+		return
+	}
+	r.lastHandshakeTry = now
+	clientID := ""
+	for _, c := range r.clientBySession {
+		if c != "" {
+			clientID = c
+			break
+		}
+	}
+	r.mu.Unlock()
+	if clientID == "" {
+		return // no page envelope seen yet — nothing to register as
+	}
+	hello := &relay.ChannelCall{Kind: relay.KindPromise, ID: r.mintID(),
+		ChannelName: "zcode-agent", Name: "helloConversationV4", Arg: map[string]any{}}
+	init := &relay.ChannelCall{Kind: relay.KindPromise, ID: r.mintID(),
+		ChannelName: "zcode-agent", Name: "initializeConversationV4",
+		Arg: map[string]any{
+			"kind":            "clientHello",
+			"protocolVersion": 3,
+			"clientId":        clientID,
+			"clientKind":      "desktop",
+			"appVersion":      "unknown",
+			"capabilities":    map[string]any{"workspaceHookReviewUi": true},
+		}}
+	// Same-port frames are processed in arrival order, so hello flips
+	// helloDone before initialize checks it — no reply round-trip needed.
+	// The synthetic replies must not reach the page (unknown call ids).
+	r.mu.Lock()
+	r.suppressAck[hello.ID] = true
+	r.suppressAck[init.ID] = true
+	r.mu.Unlock()
+	fmt.Printf("zcode: recovery: bootstrapping host handshake for page client %s\n", clientID)
+	forwardCallToOfficialHost(hello)
+	forwardCallToOfficialHost(init)
+}
+
 // officialInjectCommand builds a fresh sendConversationCommandV4 envelope and
 // forwards it to the official host exactly like a phone-issued call (fresh
 // call id + commandId; the forward path applies its usual repairs).
@@ -203,6 +328,19 @@ func officialInjectCommand(sid, typ string, payload map[string]any, clientID str
 	}
 	arg := map[string]any{"workspacePath": ws, "envelope": env}
 	c := &relay.ChannelCall{Kind: relay.KindPromise, ID: b.rec.mintID(), ChannelName: "zcode-agent", Name: "sendConversationCommandV4", Arg: arg}
+	// The interceptor's sendText bookkeeping (optimistic row / queue mirror)
+	// must not fire for our own inject: a rescue resubmit of an undelivered
+	// item would otherwise be re-queued behind a stale optimistic running
+	// mark and duplicate the very item it is rescuing.
+	b.rec.mu.Lock()
+	if b.rec.selfInjected == nil {
+		b.rec.selfInjected = map[int]bool{}
+	}
+	b.rec.selfInjected[c.ID] = true
+	b.rec.mu.Unlock()
 	fmt.Printf("zcode: recovery: injecting %s for %s (rescue)\n", typ, sid)
 	forwardCallToOfficialHost(c)
+	b.rec.mu.Lock()
+	delete(b.rec.selfInjected, c.ID)
+	b.rec.mu.Unlock()
 }

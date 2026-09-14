@@ -101,6 +101,11 @@ func inspectOfficialResponse(raw []byte) {
 	// service — replay it with backoff instead of dropping it on the floor.
 	if handshakeFailed := kind == relay.KindPromiseErr && len(data) > 0 &&
 		bytes.Contains(data, []byte("handshakeRequired")); handshakeFailed {
+		// The host handshake is per CONNECTION — it dies with every daemon or
+		// host restart, and a silently reconnected page (no reload, no
+		// bridge-open) never redoes it. Complete it here so the replay loop
+		// below can actually succeed instead of running out its backoff.
+		bootstrapHostHandshake(b)
 		r.mu.Lock()
 		pr := r.pendingRaw[id]
 		already := r.retrying[id]
@@ -351,13 +356,20 @@ func inspectOfficialResponse(raw []byte) {
 		// expired optimistic row converts into a queue item, which must lift
 		// the suppression or the fallback chip would never render.
 		optRow := r.takeOptimisticRow(rowsid, fullRowsOf(rowsRes))
-		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && !r.sendFresh(rowsid) && r.queuedCount(rowsid) == 0 && r.optimisticCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 && !blocked {
+		// A queue mirror whose size did NOT change since the last emission
+		// must not lift the duplicate-skip on its own: while an item sat
+		// stuck undelivered this session re-pushed an identical ~48KB
+		// snapshot on every poll (~12/min) and starved the host. Mirror
+		// mutations drop the dedupe key themselves, and a size change
+		// (new item / retirement by a userInput row) compares unequal here.
+		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && !r.sendFresh(rowsid) && r.queuedCount(rowsid) == r.lastQEmitted[rowsid] && r.optimisticCount(rowsid) == 0 && !blocked {
 			if verboseLogs {
 				fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
 			}
 			return
 		}
 		r.rememberRows(rowsid, data)
+		r.markRowsSeen(rowsid)
 		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
 		facts := r.factsFor(rowsid)
 		mode := r.modeFor(rowsid)

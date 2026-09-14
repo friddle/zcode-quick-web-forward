@@ -518,6 +518,11 @@ func (r *officialRecovery) recordTurnRunning(sid string, running bool) {
 			r.completedAt = map[string]int64{}
 		}
 		r.completedAt[sid] = time.Now().UnixMilli()
+		// Fast queue drain: give the engine ~4s to auto-dispatch messages
+		// queued behind this turn, then cover the case where that drain
+		// never happens (headless wedge — the 60s patrol alone made
+		// follow-up messages feel lost).
+		time.AfterFunc(4*time.Second, func() { r.dispatchQueuedAfterTurn(sid) })
 	}
 	if f := taskStatusNudge; f != nil {
 		time.AfterFunc(300*time.Millisecond, f)
@@ -647,6 +652,42 @@ func (r *officialRecovery) queuedCount(sid string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.queuedSends[sid])
+}
+
+// markRowsSeen records when a session's transcript rows were last observed.
+// The queue rescues only act on decisions this fresh — an older view cannot
+// tell "engine already took the message" from "message still undelivered".
+func (r *officialRecovery) markRowsSeen(sid string) {
+	r.mu.Lock()
+	if r.lastRowsAt == nil {
+		r.lastRowsAt = map[string]int64{}
+	}
+	r.lastRowsAt[sid] = time.Now().UnixMilli()
+	r.mu.Unlock()
+}
+
+// queuedTextFor returns the mirrored text behind a queue_<commandId> item,
+// or "" when the mirror has no such item (the engine's own queue is then the
+// only copy — leave the forwarded command untouched).
+func (r *officialRecovery) queuedTextFor(sid, cmdID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, it := range r.queuedSends[sid] {
+		if it["sourceCommandId"] == cmdID {
+			t, _ := it["text"].(string)
+			return t
+		}
+	}
+	return ""
+}
+
+// selfInjectedCall reports whether a sendConversationCommandV4 call was
+// minted by this daemon (rescue/queue dispatch) rather than by the phone —
+// its sendText must skip the optimistic/queue bookkeeping.
+func (r *officialRecovery) selfInjectedCall(id int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.selfInjected[id]
 }
 
 // learnedRevision returns the freshest conversation revision harvested from

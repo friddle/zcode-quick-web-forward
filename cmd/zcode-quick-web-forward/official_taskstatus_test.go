@@ -135,6 +135,11 @@ func TestStuckQueueRescueTrigger(t *testing.T) {
 
 	// 引擎报告 idle（turn 已结束）而条目仍未投递 → 自愈介入。
 	rec.stashSnap("sess_z", json.RawMessage(`{"session":{"status":"idle"}}`))
+	// rescue 只在新鲜的 rows 视图上判定「未投递」——陈旧视图无法区分
+	// 「引擎已接手」和「消息卡住」，盲日重投曾把同一消息跑了两遍。
+	rec.mu.Lock()
+	rec.lastRowsAt["sess_z"] = now
+	rec.mu.Unlock()
 	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_z", now)
 	rec.mu.Lock()
 	stamped := rec.lastQueueRescue["sess_z"] != 0
@@ -147,9 +152,26 @@ func TestStuckQueueRescueTrigger(t *testing.T) {
 		t.Fatalf("mirror cleared too early (%d left) — resubmit happens in the 2s goroutine", kept)
 	}
 
+	// rows 视图陈旧 → 先拉取 rows，不武装重投（防重复投递）。
+	rec.stashSnap("sess_s", json.RawMessage(`{"session":{"status":"idle"}}`))
+	rec.mu.Lock()
+	rec.queuedSends["sess_s"] = []map[string]any{{
+		"text":       "stale view message",
+		"admittedAt": now - 120_000,
+	}}
+	rec.mu.Unlock()
+	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_s", now)
+	rec.mu.Lock()
+	notArmed := rec.lastQueueRescue["sess_s"] == 0
+	rec.mu.Unlock()
+	if !notArmed {
+		t.Fatal("rescue armed on a stale rows view — duplicate-dispatch risk")
+	}
+
 	// 未投递的新条目不触发。
 	rec.stashSnap("sess_f", json.RawMessage(`{"session":{"status":"idle"}}`))
 	rec.mu.Lock()
+	rec.lastRowsAt["sess_f"] = now
 	rec.queuedSends["sess_f"] = []map[string]any{{
 		"text":       "fresh message",
 		"admittedAt": now - 5_000,
@@ -235,5 +257,71 @@ func TestOfficialAnyTurnRunning(t *testing.T) {
 	rec.mu.Unlock()
 	if !officialAnyTurnRunning() {
 		t.Fatal("turn running but reported idle")
+	}
+}
+
+// After a turn ends, undelivered queue items must dispatch quickly — but only
+// when the engine really is idle and the rows view is fresh (otherwise the
+// engine already took the message itself, and injecting would run it twice).
+func TestDispatchQueuedAfterTurn(t *testing.T) {
+	rec := taskStatusTestRec()
+	now := time.Now().UnixMilli()
+
+	// 空镜像：无事可做。
+	rec.dispatchQueuedAfterTurn("sess_x")
+	rec.mu.Lock()
+	armed := rec.lastQueueRescue["sess_x"] != 0
+	rec.mu.Unlock()
+	if armed {
+		t.Fatal("empty mirror must not arm the post-turn dispatch")
+	}
+
+	// 引擎自己已经开始下一个 turn（status=running）→ 绝不注入。
+	rec.stashSnap("sess_x", json.RawMessage(`{"session":{"status":"running"}}`))
+	rec.mu.Lock()
+	rec.queuedSends["sess_x"] = []map[string]any{{"text": "followup", "admittedAt": now - 60_000}}
+	rec.lastRowsAt["sess_x"] = now
+	rec.mu.Unlock()
+	rec.dispatchQueuedAfterTurn("sess_x")
+	rec.mu.Lock()
+	armed = rec.lastQueueRescue["sess_x"] != 0
+	n := len(rec.queuedSends["sess_x"])
+	rec.mu.Unlock()
+	if armed {
+		t.Fatal("engine-reported running turn must not arm the post-turn dispatch")
+	}
+	if n != 1 {
+		t.Fatalf("mirror mutated under a running engine (%d left)", n)
+	}
+
+	// 引擎 idle + rows 新鲜 + 条目未投递 → 武装派发。
+	rec.stashSnap("sess_x", json.RawMessage(`{"session":{"status":"idle"}}`))
+	rec.dispatchQueuedAfterTurn("sess_x")
+	rec.mu.Lock()
+	armed = rec.lastQueueRescue["sess_x"] != 0
+	rec.mu.Unlock()
+	if !armed {
+		t.Fatal("idle engine with undelivered items did not arm the post-turn dispatch")
+	}
+}
+
+func TestQueuedTextForAndSelfInjected(t *testing.T) {
+	rec := taskStatusTestRec()
+	rec.mu.Lock()
+	rec.queuedSends["sess_q"] = []map[string]any{{"sourceCommandId": "cmd-1", "text": "hello queue"}}
+	rec.selfInjected[42] = true
+	rec.mu.Unlock()
+
+	if got := rec.queuedTextFor("sess_q", "cmd-1"); got != "hello queue" {
+		t.Fatalf("queuedTextFor = %q", got)
+	}
+	if got := rec.queuedTextFor("sess_q", "cmd-missing"); got != "" {
+		t.Fatalf("queuedTextFor missing item = %q", got)
+	}
+	if !rec.selfInjectedCall(42) || rec.selfInjectedCall(43) {
+		t.Fatal("selfInjectedCall lookup broken")
+	}
+	if got := rec.queuedTextFor("sess_other", "cmd-1"); got != "" {
+		t.Fatalf("cross-session leak: %q", got)
 	}
 }
