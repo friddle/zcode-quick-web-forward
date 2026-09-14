@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -114,12 +115,12 @@ func TestStuckQueueRescueTrigger(t *testing.T) {
 	// 注意：不设 officialState.active —— rescue 内部的 inject 在无 active
 	// bridge 时是 no-op，这里只验证触发判定逻辑。
 	now := time.Now().UnixMilli()
+	// 引擎真源闸门：status=running（host readSession 报告的活跃 turn）时
+	// 队列条目是正常 followup 排队，绝不能触发自愈。
+	rec.stashSnap("sess_z", json.RawMessage(`{"session":{"status":"running"}}`))
 	rec.mu.Lock()
-	// RUNNING + queued = normal followupMode=queue — must NOT arm the rescue
-	// (an earlier version stopped live turns here and killed healthy work).
-	rec.turnRunning["sess_z"] = true
 	rec.queuedSends["sess_z"] = []map[string]any{{
-		"text":       "stuck message",
+		"text":       "queued followup",
 		"admittedAt": now - 120_000,
 	}}
 	rec.mu.Unlock()
@@ -129,24 +130,29 @@ func TestStuckQueueRescueTrigger(t *testing.T) {
 	armed := rec.lastQueueRescue["sess_z"] != 0
 	rec.mu.Unlock()
 	if armed {
-		t.Fatal("running session with a queued followup must not arm the rescue")
+		t.Fatal("engine running must not arm the rescue")
 	}
 
-	rec.mu.Lock()
-	rec.turnRunning["sess_z"] = false // turn ended, item still undelivered
-	rec.mu.Unlock()
+	// 引擎报告 idle（turn 已结束）而条目仍未投递 → 自愈介入。
+	rec.stashSnap("sess_z", json.RawMessage(`{"session":{"status":"idle"}}`))
 	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_z", now)
 	rec.mu.Lock()
 	stamped := rec.lastQueueRescue["sess_z"] != 0
+	kept := len(rec.queuedSends["sess_z"])
 	rec.mu.Unlock()
 	if !stamped {
-		t.Fatal("idle session with a stuck queue did not arm the rescue")
+		t.Fatal("idle engine with a stuck queue did not arm the rescue")
+	}
+	if kept != 1 {
+		t.Fatalf("mirror cleared too early (%d left) — resubmit happens in the 2s goroutine", kept)
 	}
 
+	// 未投递的新条目不触发。
+	rec.stashSnap("sess_f", json.RawMessage(`{"session":{"status":"idle"}}`))
 	rec.mu.Lock()
 	rec.queuedSends["sess_f"] = []map[string]any{{
 		"text":       "fresh message",
-		"admittedAt": now - 5_000, // just admitted
+		"admittedAt": now - 5_000,
 	}}
 	rec.mu.Unlock()
 	rescueStuckQueues(&officialHostBridge{rec: rec}, "sess_f", now)
@@ -156,6 +162,7 @@ func TestStuckQueueRescueTrigger(t *testing.T) {
 	if !notStuck {
 		t.Fatal("fresh queue item wrongly armed the rescue")
 	}
+	// 让 2s 后的重投 goroutine 不影响其他用例（没有 active bridge 时 inject 是 no-op）
 	// 让 6s 后的重投 goroutine 不影响其他用例（没有 active bridge 时 inject 是 no-op）
 }
 

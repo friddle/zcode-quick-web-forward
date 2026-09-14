@@ -101,14 +101,20 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 		rec.mu.Unlock()
 		return
 	}
-	if rec.turnRunning[sid] {
-		// A queued item while the turn is genuinely running is NORMAL
-		// followupMode=queue behavior — it dispatches when the turn ends.
-		// Stopping here would kill live work (this exact mistake cancelled a
-		// healthy model request on 2026-09-14 14:16).
-		rec.mu.Unlock()
+	rec.mu.Unlock()
+
+	// 引擎真源闸门：readSession（host 每 ~10s 轮询、stash 在此）里的
+	// session.status 才是「turn 是否还在跑」的权威信号。我们自己的
+	// turnRunning 推断（乐观标记 + turnHeader 行）两个方向都会错——
+	// 错误的自愈曾取消健康的模型请求（14:16 事故）。引擎报告 running
+	// 时绝不介入；队列条目只是在正常排队。
+	f := parseSessionFacts(rec.snapFor(sid))
+	switch f.status {
+	case "running", "in-progress", "active":
 		return
 	}
+
+	rec.mu.Lock()
 	oldest := int64(0)
 	for _, it := range items {
 		if at, _ := it["admittedAt"].(int64); at > 0 && (oldest == 0 || at < oldest) {
