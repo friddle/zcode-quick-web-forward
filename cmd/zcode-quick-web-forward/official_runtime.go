@@ -152,7 +152,9 @@ func (b *officialHostBridge) onPortBytes(portID string, raw []byte) {
 	if portID != want {
 		return // stale port from a previous bridge generation
 	}
-	fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
+	if verboseLogs {
+		fmt.Printf("zcode: official-host <- svc %d bytes\n", len(raw))
+	}
 	inspectOfficialResponse(raw)
 	if !hostForwardEnabled() {
 		return // pipe disabled — log only, don't leak host bytes to the phone

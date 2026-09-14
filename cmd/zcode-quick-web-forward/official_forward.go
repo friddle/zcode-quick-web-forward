@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// verboseLogs mirrors ZQF_RELAY_DEBUG/ZQF_DEBUG: full frame dumps, per-call
+// inject dumps, rows payloads and host info-logs. Default (off) keeps only
+// lifecycle, errors and rescue events.
+var verboseLogs = os.Getenv("ZQF_RELAY_DEBUG") != "" || os.Getenv("ZQF_DEBUG") != ""
+
 func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nodeBin, script, workspace, mid string) bool {
 	if os.Getenv("ZCODE_OFFICIAL_HOST") == "0" {
 		return false // explicit opt-out
@@ -104,9 +109,15 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	}
 	h.OnLog = func(line string) {
 		for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
-			if l != "" {
+			if l == "" {
+				continue
+			}
+			markServicesReady(l)
+			// host info spam (readSession polls etc.) only matters in debug;
+			// warnings/errors/panics always surface.
+			if verboseLogs || strings.Contains(l, `"level":"warn"`) ||
+				strings.Contains(l, `"level":"error"`) || strings.Contains(l, "panic") {
 				fmt.Println("zcode: official-host | " + l)
-				markServicesReady(l)
 			}
 		}
 	}
@@ -123,7 +134,9 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 				if len(line) > 4000 {
 					line = line[:4000] + "…"
 				}
-				fmt.Println("zcode: official-host | " + line)
+				if verboseLogs || strings.Contains(line, `"level":"warn"`) || strings.Contains(line, `"level":"error"`) {
+					fmt.Println("zcode: official-host | " + line)
+				}
 			}
 			return
 		}
@@ -384,7 +397,9 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 				rec.mu.Unlock()
 			}
 		}
-		fmt.Printf("zcode: inject ws into %s.%s -> %s | frame %d bytes: %x\n", c.ChannelName, c.Name, string(b), len(out), out[:min(48, len(out))])
+		if verboseLogs {
+			fmt.Printf("zcode: inject ws into %s.%s -> %s | frame %d bytes: %x\n", c.ChannelName, c.Name, string(b), len(out), out[:min(48, len(out))])
+		}
 		return forwardRawToOfficialHost(out)
 	}
 }

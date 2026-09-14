@@ -29,8 +29,10 @@ func inspectOfficialResponse(raw []byte) {
 		// one for diagnostics (schema ground truth for live state merging).
 		if len(data) > 0 && bytes.Contains(data, []byte(`"conversation/`)) {
 			if !bytes.Contains(data, []byte(`"logicalFrameOrdinal"`)) { // skip our own synthesized wire frames
-				_ = os.WriteFile("/tmp/zqf-live-frame.json", data, 0644)
-				fmt.Printf("zcode: recovery: LIVE engine frame %d bytes captured\n", len(data))
+				if verboseLogs {
+					_ = os.WriteFile("/tmp/zqf-live-frame.json", data, 0644)
+					fmt.Printf("zcode: recovery: LIVE engine frame %d bytes captured\n", len(data))
+				}
 			}
 		}
 		// A live conversation frame that carries a fresh pendingApproval row
@@ -266,8 +268,29 @@ func inspectOfficialResponse(raw []byte) {
 		}
 	case isRead && len(data) > 0:
 		// stash the session snapshot, then fetch the official transcript rows
-		_ = os.WriteFile("/tmp/zqf-snap.json", data, 0644)
+		if verboseLogs {
+			_ = os.WriteFile("/tmp/zqf-snap.json", data, 0644)
+		}
 		r.stashSnap(rsid, data)
+		// Usage-meter liveness: the context meter renders from the
+		// synthesized snapshot's usage block, but a readSession reply with
+		// fresh projection numbers changes NO rows — the rows-unchanged
+		// dedupe would swallow every snapshot carrying it and the meter
+		// stayed hidden between unrelated updates. When the reported usage
+		// differs from what the last emitted snapshot carried, drop the
+		// dedupe key and refetch so the new numbers reach the page.
+		if f := parseSessionFacts(data); f.ctxUsed > 0 {
+			r.mu.Lock()
+			prev, ok := r.ctxBySess[rsid]
+			changed := !ok || prev[0] != f.ctxUsed || prev[1] != f.ctxWindow
+			r.mu.Unlock()
+			if changed {
+				r.mu.Lock()
+				delete(r.lastRowsJSON, rsid)
+				r.mu.Unlock()
+				go requestRecoverySnapshot(b, rsid)
+			}
+		}
 		requestConversationRows(b, rsid)
 		go requestConversationPlans(b, rsid)
 	}
@@ -300,8 +323,10 @@ func inspectOfficialResponse(raw []byte) {
 				data = json.RawMessage(b2)
 			}
 		}
-		fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
-		_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
+		if verboseLogs {
+			fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
+			_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)
+		}
 		r.observeTurnState(b, rowsid, rowsRes)
 		// Never suppress a snapshot that carries a pending approval — the
 		// page can't answer what it never sees. Interactions the engine
@@ -327,7 +352,9 @@ func inspectOfficialResponse(raw []byte) {
 		// the suppression or the fallback chip would never render.
 		optRow := r.takeOptimisticRow(rowsid, fullRowsOf(rowsRes))
 		if r.sameAsLast(rowsid, data) && !r.resyncWaiting(rowsid) && !r.sendFresh(rowsid) && r.queuedCount(rowsid) == 0 && r.optimisticCount(rowsid) == 0 && r.lastQEmitted[rowsid] == 0 && !blocked {
-			fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
+			if verboseLogs {
+				fmt.Println("zcode: recovery: rows unchanged — skipping duplicate snapshot")
+			}
 			return
 		}
 		r.rememberRows(rowsid, data)
