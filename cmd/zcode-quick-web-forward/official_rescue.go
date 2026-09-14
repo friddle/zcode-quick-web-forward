@@ -101,6 +101,7 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 		rec.mu.Unlock()
 		return
 	}
+	running := rec.turnRunning[sid]
 	if rec.lastQueueRescue == nil {
 		rec.lastQueueRescue = map[string]int64{}
 	}
@@ -116,31 +117,51 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 	}
 	rec.mu.Unlock()
 
-	fmt.Printf("zcode: recovery: queue for %s stuck %ds past admission (%d items) — stale host turn lease suspected, force-releasing\n",
-		sid, (now-oldest)/1000, len(items))
+	if running {
+		fmt.Printf("zcode: recovery: queue for %s stuck %ds past admission while running (%d items) — stale host turn lease suspected, force-releasing\n",
+			sid, (now-oldest)/1000, len(items))
 
-	// 1) Force-release the stale running turn: a bare stop (we strip
-	// expectedForegroundExecutionId on the forward path) ends it host-side,
-	// which unblocks the host's queue dispatch.
-	officialInjectCommand(sid, "stop", map[string]any{}, "")
-	// 2) Give the stop a moment, then resubmit the queued texts as fresh
-	// envelopes (new commandIds — the originals were answered by our early
-	// ack, and the host never dispatched them).
-	time.AfterFunc(6*time.Second, func() {
-		for i, t := range texts {
-			text := t
-			client := clients[i]
-			time.Sleep(time.Duration(i) * 800 * time.Millisecond)
-			officialInjectCommand(sid, "sendText", map[string]any{"text": text}, client)
-		}
+		// 1) Force-release the stale running turn: a bare stop (we strip
+		// expectedForegroundExecutionId on the forward path) ends it host-side,
+		// which unblocks the host's queue dispatch.
+		officialInjectCommand(sid, "stop", map[string]any{}, "")
+		// 2) Give the stop a moment, then resubmit the queued texts as fresh
+		// envelopes (new commandIds — the originals were answered by our early
+		// ack, and the host never dispatched them).
+		time.AfterFunc(6*time.Second, func() {
+			officialResubmitQueued(sid, texts, clients)
+		})
+		return
+	}
+	// Not running but the engine still holds the message(s): a turn that
+	// ended abnormally wedged the engine's queue — nothing will dispatch it.
+	// A fresh sendText re-runs the whole admission path from a clean state.
+	fmt.Printf("zcode: recovery: queue for %s stuck %ds past admission while idle (%d items) — engine queue wedged, resubmitting\n",
+		sid, (now-oldest)/1000, len(items))
+	time.AfterFunc(2*time.Second, func() {
+		officialResubmitQueued(sid, texts, clients)
+	})
+}
+
+// officialResubmitQueued re-injects stuck queued texts as fresh sendText
+// envelopes and clears the mirror.
+func officialResubmitQueued(sid string, texts, clients []string) {
+	for i, t := range texts {
+		text := t
+		client := clients[i]
+		time.Sleep(time.Duration(i) * 800 * time.Millisecond)
+		officialInjectCommand(sid, "sendText", map[string]any{"text": text}, client)
+	}
+	rec := officialActiveRec()
+	if rec != nil {
 		rec.mu.Lock()
 		delete(rec.queuedSends, sid)
 		rec.mu.Unlock()
-		fmt.Printf("zcode: recovery: resubmitted %d stuck queued send(s) for %s\n", len(texts), sid)
-		if f := taskStatusNudge; f != nil {
-			time.AfterFunc(300*time.Millisecond, f)
-		}
-	})
+	}
+	fmt.Printf("zcode: recovery: resubmitted %d stuck queued send(s) for %s\n", len(texts), sid)
+	if f := taskStatusNudge; f != nil {
+		time.AfterFunc(300*time.Millisecond, f)
+	}
 }
 
 // officialInjectCommand builds a fresh sendConversationCommandV4 envelope and

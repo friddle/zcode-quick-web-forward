@@ -549,13 +549,35 @@ func (r *officialRecovery) ensureTurnRefresher(b *officialHostBridge) {
 					sids = append(sids, sid)
 				}
 			}
+			// BUG-002: sessions holding undelivered queue-mirror items need
+			// rescue patrol even when NOT marked running — after an abnormal
+			// turn end the engine can wedge with queued messages and an idle
+			// projection, which the running-only sweep never saw.
+			cand := make(map[string]bool, len(sids))
+			for _, sid := range sids {
+				cand[sid] = true
+			}
+			for sid := range r.queuedSends {
+				if !cand[sid] {
+					sids = append(sids, sid)
+					cand[sid] = true
+				}
+			}
 			r.mu.Unlock()
 			for _, sid := range sids {
 				// Stuck-queue rescue first: a turn the host still considers
 				// running while our queue mirror sits undelivered means the
-				// message silently never dispatches (BUG-002).
+				// message silently never dispatches (BUG-002). Sessions not
+				// running get the resubmit-only variant (inside).
 				rescueStuckQueues(b, sid, now)
-				requestRecoverySnapshot(b, sid)
+				running := func() bool {
+					r.mu.Lock()
+					defer r.mu.Unlock()
+					return r.turnRunning[sid]
+				}()
+				if running {
+					requestRecoverySnapshot(b, sid)
+				}
 			}
 		}
 	}()
