@@ -17,7 +17,9 @@ package main
 //     version stop-ed live turns here and killed healthy work.
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
@@ -241,6 +243,51 @@ func (r *officialRecovery) dispatchQueuedAfterTurn(sid string) {
 	officialResubmitQueued(sid, texts, clients)
 }
 
+// pageClientStateFile persists the phone page's channel clientId across
+// daemon restarts. The page keeps the same id in localStorage
+// ("zcode-v4-client-id:v1") for the lifetime of the browser, so the daemon
+// can complete the host handshake on its behalf after a restart — without
+// it, a silently reconnected page (no reload → no bridge-open → no
+// hello/initialize) stays handshake-rejected forever.
+const pageClientStateFile = "/root/data/zqf-page-client.json"
+
+func loadPersistedPageClient() {
+	b, err := os.ReadFile(pageClientStateFile)
+	if err != nil {
+		return
+	}
+	var st struct {
+		ClientID string `json:"clientId"`
+	}
+	if json.Unmarshal(b, &st) != nil || st.ClientID == "" {
+		return
+	}
+	officialState.mu.Lock()
+	officialState.persistedClientID = st.ClientID
+	officialState.mu.Unlock()
+	fmt.Printf("zcode: recovery: restored page clientId %s\n", st.ClientID)
+}
+
+func persistPageClient(clientID string) {
+	if clientID == "" {
+		return
+	}
+	officialState.mu.Lock()
+	known := officialState.persistedClientID
+	if known == clientID {
+		officialState.mu.Unlock()
+		return
+	}
+	officialState.persistedClientID = clientID
+	officialState.mu.Unlock()
+	st, _ := json.Marshal(map[string]any{"clientId": clientID, "savedAt": time.Now().UnixMilli()})
+	if err := os.WriteFile(pageClientStateFile, st, 0644); err != nil {
+		fmt.Printf("zcode: recovery: persisting page clientId failed: %v\n", err)
+		return
+	}
+	fmt.Printf("zcode: recovery: persisted page clientId %s\n", clientID)
+}
+
 // bootstrapHostHandshake completes the host-side connection handshake on
 // behalf of the page. The host gates every state-changing call behind
 // helloConversationV4 + initializeConversationV4 (fault.connection.
@@ -250,7 +297,9 @@ func (r *officialRecovery) dispatchQueuedAfterTurn(sid string) {
 // rejected forever while the daemon's early-acks hid it from the user. The
 // daemon is the service-port client: speaking the handshake here is the
 // transport's job. Uses the page's CURRENT clientId (learned from its own
-// envelopes) so later page commands pass the clientMismatch check.
+// envelopes, or the persisted one — the page keeps it in localStorage, so
+// it is stable across reloads and restarts) so later page commands pass
+// the clientMismatch check.
 func bootstrapHostHandshake(b *officialHostBridge) {
 	if b == nil || !b.h.Alive() {
 		return
@@ -272,7 +321,12 @@ func bootstrapHostHandshake(b *officialHostBridge) {
 	}
 	r.mu.Unlock()
 	if clientID == "" {
-		return // no page envelope seen yet — nothing to register as
+		officialState.mu.Lock()
+		clientID = officialState.persistedClientID
+		officialState.mu.Unlock()
+	}
+	if clientID == "" {
+		return // page identity unknown — nothing safe to register as
 	}
 	hello := &relay.ChannelCall{Kind: relay.KindPromise, ID: r.mintID(),
 		ChannelName: "zcode-agent", Name: "helloConversationV4", Arg: map[string]any{}}

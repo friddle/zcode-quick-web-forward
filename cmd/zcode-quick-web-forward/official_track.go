@@ -54,6 +54,13 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		// hello + initialize land without fault.connection.clientChanged.
 		fmt.Println("zcode: recovery: page-initiated handshake — reattaching service port")
 		officialReattach()
+	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "initializeConversationV4":
+		// The page's own handshake carries its persistent clientId directly
+		// in the args — the most authoritative source for the daemon-side
+		// bootstrap after future restarts.
+		if cid, _ := argMap(c.Arg)["clientId"].(string); cid != "" {
+			persistPageClient(cid)
+		}
 	case c.Kind == relay.KindPromise && (c.Name == "subscribeConversationV4" || c.Name == "resyncConversationV4"):
 		sid, _ := argMap(c.Arg)["sessionId"].(string)
 		if sid == "" {
@@ -243,13 +250,17 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		if cid, _ := env["clientId"].(string); cid != "" && sid != "" {
 			// Remember the phone page's clientId per session — synthesized
 			// commands (switchModelConfig) must reuse it or the host rejects
-			// them with fault.command.clientMismatch.
+			// them with fault.command.clientMismatch. Also persist it: the
+			// page keeps the same id in localStorage, so after a daemon
+			// restart the host handshake can be completed on its behalf even
+			// if it never sends another command.
 			r.mu.Lock()
 			if r.clientBySession == nil {
 				r.clientBySession = map[string]string{}
 			}
 			r.clientBySession[sid] = cid
 			r.mu.Unlock()
+			persistPageClient(cid)
 			// Model override (ZQF_SWITCH_PROVIDER): trigger here, where the
 			// clientId is already known — a subscribe-time trigger fires before
 			// the page has sent any command, so it falls back to a random

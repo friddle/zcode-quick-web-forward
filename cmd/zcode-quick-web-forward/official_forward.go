@@ -202,6 +202,7 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	officialState.engine = engine
 	officialState.sender = sender
 	officialState.mu.Unlock()
+	loadPersistedPageClient()
 	fmt.Printf("zcode: OFFICIAL host active (%s) — channel traffic forwarded to the official implementation\n", dir)
 	return true
 }

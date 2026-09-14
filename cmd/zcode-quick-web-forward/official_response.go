@@ -29,6 +29,20 @@ func inspectOfficialResponse(raw []byte) {
 		// one for diagnostics (schema ground truth for live state merging).
 		if len(data) > 0 && bytes.Contains(data, []byte(`"conversation/`)) {
 			if !bytes.Contains(data, []byte(`"logicalFrameOrdinal"`)) { // skip our own synthesized wire frames
+				// The host's own subscription is ALIVE for this session. Our
+				// synthesized full-window snapshots carry an independent seq
+				// counter; interleaved with the host's real stream they read
+				// as sequence gaps, and the page answered every one with a
+				// resync/refetch — the "screen layout keeps refreshing" bug.
+				// Remember the liveness so the synthesizer can stand down.
+				if sid := sidFromFrameBytes(data); sid != "" {
+					r.mu.Lock()
+					if r.realFramesAt == nil {
+						r.realFramesAt = map[string]int64{}
+					}
+					r.realFramesAt[sid] = time.Now().UnixMilli()
+					r.mu.Unlock()
+				}
 				if verboseLogs {
 					_ = os.WriteFile("/tmp/zqf-live-frame.json", data, 0644)
 					fmt.Printf("zcode: recovery: LIVE engine frame %d bytes captured\n", len(data))
@@ -371,6 +385,19 @@ func inspectOfficialResponse(raw []byte) {
 		r.rememberRows(rowsid, data)
 		r.markRowsSeen(rowsid)
 		queued := r.takeQueuedItems(rowsid, fullRowsOf(rowsRes))
+		// The synthesizer stands down while the host's own live stream is
+		// delivering this session: interleaved synthesized snapshots (own seq
+		// counter, full window reset) made the page see sequence gaps and
+		// resync/refetch in a loop — the constant layout-refresh bug. The
+		// only exception is a pendingApproval (the page can't answer what it
+		// never sees, even mid-stream). Bookkeeping above (mirror retirement,
+		// turn state, rows freshness) still ran.
+		if !blocked && r.realFramesFresh(rowsid) {
+			if verboseLogs {
+				fmt.Println("zcode: recovery: host stream live — synthesizer standing down for", rowsid)
+			}
+			return
+		}
 		facts := r.factsFor(rowsid)
 		mode := r.modeFor(rowsid)
 		if mode == "" {
@@ -401,6 +428,18 @@ func inspectOfficialResponse(raw []byte) {
 		}
 		if st, ok := snap["rows"].(map[string]any); ok {
 			fmt.Printf("zcode: recovery: rows window %d\n", len(st["window"].([]any)))
+		}
+		// Streaming updates go out as official v4 deltas (row.appended /
+		// row.upserted / state.updated patches): the page applies them in
+		// place. Full-window snapshots reset the entire layout, and a
+		// snapshot per poll is what made the screen visibly refresh all the
+		// time. Full snapshots remain for bases: first emission, resync,
+		// queue/optimistic transitions, approval blocks.
+		forceFull := blocked || r.resyncWaiting(rowsid) || r.sendFresh(rowsid) ||
+			r.queuedCount(rowsid) != r.lastQEmitted[rowsid] || r.optimisticCount(rowsid) > 0
+		if ops, ok := r.deltaOpsFor(rowsid, snap, forceFull); ok {
+			emitRecoveryDeltas(b, rowsid, snap, ops)
+			return
 		}
 		emitRecoverySnapshot(b, rowsid, snap)
 	}

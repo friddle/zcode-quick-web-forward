@@ -325,3 +325,75 @@ func TestQueuedTextForAndSelfInjected(t *testing.T) {
 		t.Fatalf("cross-session leak: %q", got)
 	}
 }
+
+// Streaming updates must go out as official v4 deltas (row.appended /
+// row.upserted / state.updated) instead of full-window snapshots — a full
+// snapshot per poll resets the page's whole layout (constant refresh bug).
+func TestDeltaOpsFor(t *testing.T) {
+	r := taskStatusTestRec()
+	mk := func(id string, text string) map[string]any {
+		return map[string]any{"rowId": id, "kind": "assistantText", "text": text}
+	}
+	snapWith := func(rows []map[string]any, usage [2]int) map[string]any {
+		anyRows := make([]any, len(rows))
+		for i, row := range rows {
+			anyRows[i] = row
+		}
+		return map[string]any{
+			"rows":  map[string]any{"window": anyRows},
+			"usage": map[string]any{"contextUsed": usage[0], "contextWindow": usage[1]},
+			"meta":  map[string]any{"title": "t"},
+		}
+	}
+
+	// 无基线 → 全量快照。
+	if _, ok := r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("1", "a")}, [2]int{10, 100}), false); ok {
+		t.Fatal("no base must request a full snapshot")
+	}
+
+	// 建基线：模拟一次全量发射（emitRecoverySnapshot 负责 record 基线）。
+	r.mu.Lock()
+	r.lastEmittedRows["sess_d"] = []map[string]any{mk("1", "a"), mk("2", "b")}
+	r.lastEmittedState["sess_d"] = map[string]any{
+		"usage": map[string]any{"contextUsed": 10, "contextWindow": 100},
+		"meta":  map[string]any{"title": "t"},
+	}
+	r.mu.Unlock()
+
+	// 追加一行 → row.appended；usage 不变 → 无 state.updated。
+	ops, ok := r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("1", "a"), mk("2", "b"), mk("3", "c")}, [2]int{10, 100}), false)
+	if !ok || len(ops) != 1 || ops[0]["op"] != "row.appended" {
+		t.Fatalf("append diff wrong: ok=%v ops=%v", ok, ops)
+	}
+
+	// 行内容变化（同 rowId）→ row.upserted；usage 变化 → state.updated。
+	ops, ok = r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("1", "a"), mk("2", "b-edit"), mk("3", "c")}, [2]int{20, 100}), false)
+	if !ok {
+		t.Fatal("upsert diff refused")
+	}
+	kinds := map[string]int{}
+	for _, op := range ops {
+		kinds[op["op"].(string)]++
+	}
+	if kinds["row.upserted"] != 1 || kinds["state.updated"] != 1 {
+		t.Fatalf("upsert/state diff wrong: %v", kinds)
+	}
+
+	// 窗口滑动（头部裁剪）→ 容忍，不触发全量。
+	ops, ok = r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("3", "c"), mk("4", "d")}, [2]int{20, 100}), false)
+	if !ok {
+		t.Fatal("window slide must not force a full snapshot")
+	}
+	for _, op := range ops {
+		if op["op"] == "row.appended" {
+			if row, _ := op["row"].(map[string]any); row["rowId"] != "4" {
+				t.Fatalf("unexpected append: %v", op)
+			}
+		}
+	}
+
+	// 中段消失 → 结构性变化 → 全量。
+	if _, ok := r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("3", "c"), mk("5", "e")}, [2]int{20, 100}), false); ok {
+		t.Fatal("middle removal must force a full snapshot")
+	}
+}

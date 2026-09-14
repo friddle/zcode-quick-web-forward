@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 )
 
 // sessionFacts carries the real session state extracted from the stashed
@@ -666,6 +668,18 @@ func (r *officialRecovery) markRowsSeen(sid string) {
 	r.mu.Unlock()
 }
 
+// realFramesFresh reports whether the host's own subscription delivered a
+// live conversation frame for sid recently. While it does, the synthesizer
+// must NOT emit: a synthesized snapshot carries its own seq counter, and
+// interleaved with the host's real stream those frames look like sequence
+// gaps — the page resynced/refetched in a loop (constant layout resets).
+func (r *officialRecovery) realFramesFresh(sid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	at, ok := r.realFramesAt[sid]
+	return ok && time.Now().UnixMilli()-at < 10_000
+}
+
 // queuedTextFor returns the mirrored text behind a queue_<commandId> item,
 // or "" when the mirror has no such item (the engine's own queue is then the
 // only copy — leave the forwarded command untouched).
@@ -956,6 +970,184 @@ func shrinkWindowToBudget(window []any, budget int) ([]any, bool) {
 	return window[start:], true
 }
 
+// patchableStateKeys are the snapshot's non-rows parts the page accepts in a
+// state.updated delta patch (the official v4 deltas schema). rows and
+// slashCommands are deliberately absent: rows move via row.* ops, and a
+// changed slashCommands list falls back to a full snapshot.
+var patchableStateKeys = []string{
+	"revision", "control", "availability", "inputRouting", "meta", "config",
+	"modelTransition", "usage", "queue", "pendingInteractions",
+	"pendingCommands", "backgroundWorks", "subagents", "goal", "plan",
+	"workspaceHookAdmission",
+}
+
+// rowIdentity returns the stable row id the page's delta ops address.
+func rowIdentity(row map[string]any) (string, bool) {
+	switch v := row["rowId"].(type) {
+	case string:
+		return v, v != ""
+	case float64:
+		return fmt.Sprintf("%v", v), true
+	case int64:
+		return fmt.Sprintf("%v", v), true
+	}
+	return "", false
+}
+
+// deltaOpsFor diffs snap against the last emitted snapshot for sid and
+// returns official v4 delta ops (row.appended / row.upserted /
+// state.updated). ok=false when a full snapshot must be emitted instead —
+// no base yet, a structural change, or any force-full condition. While
+// deltas flow the page patches in place; full-window snapshots reset the
+// whole layout, which during streaming read as a constant screen refresh.
+//
+// Window slides (head trim) are tolerated: a contiguous missing prefix of
+// the previous window is treated as trimmed history, not removals — the
+// page keeps its own untrimmed view, exactly like the desktop host stream.
+func (r *officialRecovery) deltaOpsFor(sid string, snap map[string]any, forceFull bool) ([]map[string]any, bool) {
+	r.mu.Lock()
+	prevRows := r.lastEmittedRows[sid]
+	prevState := r.lastEmittedState[sid]
+	r.mu.Unlock()
+	if forceFull || prevState == nil {
+		return nil, false
+	}
+	rowsMap, _ := snap["rows"].(map[string]any)
+	newRowsAny, _ := rowsMap["window"].([]any)
+
+	prevByID := make(map[string]map[string]any, len(prevRows))
+	prevOrder := make([]string, 0, len(prevRows))
+	for _, row := range prevRows {
+		id, ok := rowIdentity(row)
+		if !ok {
+			return nil, false // unidentified row — full snapshot is the safe path
+		}
+		prevByID[id] = row
+		prevOrder = append(prevOrder, id)
+	}
+	ops := make([]map[string]any, 0, 8)
+	seen := make(map[string]bool, len(newRowsAny))
+	for _, ra := range newRowsAny {
+		row, ok := ra.(map[string]any)
+		if !ok {
+			continue
+		}
+		id, ok := rowIdentity(row)
+		if !ok {
+			return nil, false
+		}
+		seen[id] = true
+		if prev, existed := prevByID[id]; !existed {
+			ops = append(ops, map[string]any{"op": "row.appended", "row": row})
+		} else {
+			ab, _ := json.Marshal(prev)
+			bb, _ := json.Marshal(row)
+			if !bytes.Equal(ab, bb) {
+				ops = append(ops, map[string]any{"op": "row.upserted", "row": row})
+			}
+		}
+	}
+	// Removals: only a contiguous missing PREFIX is a window slide; anything
+	// else (middle/tail vanished) is structural — full snapshot.
+	prefix := true
+	for _, id := range prevOrder {
+		if seen[id] {
+			prefix = false
+			continue
+		}
+		if !prefix {
+			return nil, false
+		}
+	}
+	patch := map[string]any{}
+	for _, k := range patchableStateKeys {
+		nv, nb := snap[k]
+		pv, pb := prevState[k]
+		if !nb && !pb {
+			continue
+		}
+		ab, _ := json.Marshal(pv)
+		bb, _ := json.Marshal(nv)
+		if !bytes.Equal(ab, bb) && nb {
+			patch[k] = nv
+		}
+	}
+	if len(patch) > 0 {
+		ops = append(ops, map[string]any{"op": "state.updated", "patch": patch})
+	}
+	// Advance the diff base even when ops stay empty (the dedupe already
+	// decided this payload is worth processing).
+	newRows := make([]map[string]any, 0, len(newRowsAny))
+	for _, ra := range newRowsAny {
+		if row, ok := ra.(map[string]any); ok {
+			newRows = append(newRows, row)
+		}
+	}
+	newState := make(map[string]any, len(patchableStateKeys))
+	for _, k := range patchableStateKeys {
+		if v, ok := snap[k]; ok {
+			newState[k] = v
+		}
+	}
+	r.mu.Lock()
+	r.lastEmittedRows[sid] = newRows
+	r.lastEmittedState[sid] = newState
+	r.mu.Unlock()
+	return ops, true
+}
+
+// emitRecoveryDeltas wraps diff ops into the conversation topic frame the
+// page's store patches in place (payload kind "deltas"). Same wire envelope
+// as snapshots; deliveryKind "online" is the live-stream kind — a recovery
+// delivery must carry a full snapshot instead.
+func emitRecoveryDeltas(b *officialHostBridge, sid string, snap map[string]any, ops []map[string]any) {
+	r := b.rec
+	listen := r.listener()
+	if listen == 0 || len(ops) == 0 {
+		return
+	}
+	sub := r.subFor(sid)
+	if sub == "" {
+		sub = "sub-synth-" + uuidNew()
+		r.setSub(sid, sub)
+	}
+	delete(snap, "protocol")
+	epoch := r.epochFor(sid)
+	seq := r.nextSnapSeq(sid)
+	inner := map[string]any{
+		"topic":          "conversation/" + sid,
+		"subscriptionId": sub,
+		"logEpoch":       epoch,
+		"fromSeq":        seq,
+		"toSeq":          seq,
+		"sentAt":         time.Now().UnixMilli(),
+		"payload":        map[string]any{"kind": "deltas", "deltas": ops},
+	}
+	r.mu.Lock()
+	r.wireOrdinal++
+	ordinal := r.wireOrdinal
+	r.mu.Unlock()
+	frame := map[string]any{
+		"wireVersion":         3,
+		"kind":                "complete",
+		"deliveryKind":        "online",
+		"logicalFrameId":      uuidNew(),
+		"logicalFrameOrdinal": ordinal,
+		"topic":               "conversation/" + sid,
+		"subscriptionId":      sub,
+		"frame":               inner,
+	}
+	pb, err := json.Marshal(frame)
+	if err != nil {
+		return
+	}
+	out := relay.EventFireBytes(listen, pb)
+	fmt.Printf("zcode: recovery: synthesized deltas frame %d bytes (%d ops) for %s (listen %d)\n", len(out), len(ops), sid, listen)
+	if b.engine != nil && b.engine.HasIdentity() {
+		b.engine.SendRawChannelBytes(out, senderSend())
+	}
+}
+
 // emitRecoverySnapshot wraps a readSession result into the conversation topic
 // frame shape (topic/subscriptionId/seq/payload{kind:snapshot,snapshot}) and
 // delivers it as the onDynamicConversationFrame event the page listens on.
@@ -1015,6 +1207,27 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	}
 	out := relay.EventFireBytes(listen, pb)
 	fmt.Printf("zcode: recovery: synthesized %s snapshot frame %d bytes for %s (listen %d)\n", kind, len(out), sid, listen)
+	// A full snapshot REPLACES the page's base — it is also the new diff
+	// base for subsequent deltas.
+	newRowsAny, _ := snap["rows"].(map[string]any)
+	if window, ok := newRowsAny["window"].([]any); ok {
+		rows := make([]map[string]any, 0, len(window))
+		for _, ra := range window {
+			if row, ok := ra.(map[string]any); ok {
+				rows = append(rows, row)
+			}
+		}
+		state := make(map[string]any, len(patchableStateKeys))
+		for _, k := range patchableStateKeys {
+			if v, ok := snap[k]; ok {
+				state[k] = v
+			}
+		}
+		r.mu.Lock()
+		r.lastEmittedRows[sid] = rows
+		r.lastEmittedState[sid] = state
+		r.mu.Unlock()
+	}
 	if b.engine != nil && b.engine.HasIdentity() {
 		b.engine.SendRawChannelBytes(out, senderSend())
 	}

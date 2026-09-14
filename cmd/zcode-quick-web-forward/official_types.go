@@ -107,6 +107,9 @@ type officialRecovery struct {
 	lastRecentRescue int64                      // unix ms of the last rescueRecentTurns sweep (rate limit)
 	ctxBySess        map[string][2]int          // sessionId -> last reported {contextUsed, contextWindow} (usage meter persistence)
 	lastRowsAt       map[string]int64           // sessionId -> unix ms of the last conversationRowsRangeV4 reply (rescue freshness gate)
+	realFramesAt     map[string]int64           // sessionId -> unix ms of the last LIVE host conversation frame (synthesizer stand-down gate)
+	lastEmittedRows  map[string][]map[string]any // sessionId -> row copies of the last emitted snapshot window (delta diff base)
+	lastEmittedState map[string]map[string]any   // sessionId -> non-rows parts of the last emitted snapshot (state.updated patch diff base)
 	selfInjected     map[int]bool               // daemon-minted call ids whose sendText bookkeeping must be skipped (rescue injects already sit in the mirror)
 	lastHandshakeTry int64                      // unix ms of the last daemon-side host handshake bootstrap (rate limit)
 }
@@ -155,6 +158,9 @@ func (r *officialRecovery) initMaps() {
 	r.lastRecentRescue = 0
 	r.ctxBySess = map[string][2]int{}
 	r.lastRowsAt = map[string]int64{}
+	r.realFramesAt = map[string]int64{}
+	r.lastEmittedRows = map[string][]map[string]any{}
+	r.lastEmittedState = map[string]map[string]any{}
 	r.selfInjected = map[int]bool{}
 }
 
@@ -271,14 +277,19 @@ func officialSyntheticTasks() []map[string]any {
 // emitted snapshot for the session (duplicate application breaks the store).
 
 type officialHostState struct {
-	mu        sync.Mutex
-	active    *officialHostBridge
-	nodeBin   string
-	script    string
-	workspace string
-	mid       string
-	engine    *relay.BridgeEngine
-	sender    *relaySender
+	mu sync.Mutex
+	// persistedClientID is the phone page's channel clientId, restored from
+	// disk at startup (the page keeps the same id in localStorage). Without
+	// it the daemon-side host handshake cannot run after a restart until the
+	// page happens to reveal its id again.
+	persistedClientID string
+	active            *officialHostBridge
+	nodeBin           string
+	script            string
+	workspace         string
+	mid               string
+	engine            *relay.BridgeEngine
+	sender            *relaySender
 }
 
 var officialState officialHostState
