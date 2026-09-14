@@ -158,3 +158,25 @@ func TestStuckQueueRescueTrigger(t *testing.T) {
 	}
 	// 让 6s 后的重投 goroutine 不影响其他用例（没有 active bridge 时 inject 是 no-op）
 }
+
+// The snapshot window must shrink by BYTE budget (huge analysis rows), keeping
+// the newest rows, so a big task no longer freezes the phone on refresh.
+func TestShrinkWindowToBudget(t *testing.T) {
+	mk := func(id int, pad int) map[string]any {
+		return map[string]any{"rowId": id, "text": make([]byte, pad)}
+	}
+	window := []any{mk(1, 10_000), mk(2, 10_000), mk(3, 10_000)}
+	out, shrunk := shrinkWindowToBudget(window, 15_000)
+	if !shrunk {
+		t.Fatal("window clearly over budget was not shrunk")
+	}
+	if len(out) != 1 {
+		t.Fatalf("kept %d rows, want 1 (only the newest fits)", len(out))
+	}
+	if out[0].(map[string]any)["rowId"] != 3 {
+		t.Fatal("wrong row kept — newest rows must survive")
+	}
+	if _, shrunk := shrinkWindowToBudget(window, 1_000_000); shrunk {
+		t.Fatal("window within budget was shrunk")
+	}
+}

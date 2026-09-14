@@ -201,6 +201,17 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		})
 	}
 	window, _ := rows["window"].([]any)
+	// firstRowID/totalCount describe the FULL known history (pre-cap): the
+	// page uses them to decide that older rows exist and to page them in via
+	// rowsRange(beforeRowId) — reporting the capped window here is why some
+	// sessions could not scroll up through history.
+	firstRowID := any(nil)
+	if len(window) > 0 {
+		if m, ok := window[0].(map[string]any); ok {
+			firstRowID = m["rowId"]
+		}
+	}
+	totalRows := len(window)
 	// Cap the recovery window: long transcripts fragment into many rpc-frames
 	// and the client fails reassembly (endless recover loop). The visible
 	// tail is what matters.
@@ -208,11 +219,13 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 	if len(window) > maxSnapshotRows {
 		window = window[len(window)-maxSnapshotRows:]
 	}
-	firstRowID := any(nil)
-	if len(window) > 0 {
-		if m, ok := window[0].(map[string]any); ok {
-			firstRowID = m["rowId"]
-		}
+	// Byte budget on top of the row count: one huge analysis turn makes
+	// single rows weigh many KB, so even 24 rows can reach ~100KB — the phone
+	// chokes reassembling/rendering it and a refresh looks frozen. Keep the
+	// newest rows that fit the budget.
+	const snapshotByteBudget = 48 * 1024
+	if w, big := shrinkWindowToBudget(window, snapshotByteBudget); big {
+		window = w
 	}
 	// An idle-session send renders as a normal optimistic userInput row at the
 	// tail of the window (the "other presentation"): the conversation looks
@@ -331,7 +344,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		"workspaceHookAdmission": nil,
 		"rows": map[string]any{
 			"window":     window,
-			"totalCount": len(window),
+			"totalCount": totalRows,
 			"firstRowId": firstRowID,
 		},
 		"slashCommands": slash,
@@ -854,6 +867,33 @@ func (r *officialRecovery) applyQueueOp(sid, typ string, pl map[string]any) bool
 	r.mu.Unlock()
 	fmt.Printf("zcode: recovery: queue op %s %s mirrored (%d left for %s)\n", typ, cmdID, len(items), sid)
 	return true
+}
+
+// shrinkWindowToBudget trims a rows window (from the HEAD — the newest rows
+// at the tail are kept) until its JSON weight fits budget. Returns the
+// original window when it already fits.
+func shrinkWindowToBudget(window []any, budget int) ([]any, bool) {
+	total := 0
+	sizes := make([]int, len(window))
+	for i, row := range window {
+		b, err := json.Marshal(row)
+		if err != nil {
+			sizes[i] = 512
+		} else {
+			sizes[i] = len(b)
+		}
+		total += sizes[i]
+	}
+	if total <= budget {
+		return window, false
+	}
+	keep := total
+	start := 0
+	for start < len(window)-1 && keep > budget {
+		keep -= sizes[start]
+		start++
+	}
+	return window[start:], true
 }
 
 // emitRecoverySnapshot wraps a readSession result into the conversation topic
