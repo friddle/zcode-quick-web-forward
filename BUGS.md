@@ -108,6 +108,19 @@ host 认为会话仍占用 → 后续 sendText 全部进入 host 内部队列**�
 - **修复**: 队列删除/编辑未命中镜像、deleteTask 目标任务、editUserQuery 目标
   会话，三者只要 turn 正在运行就注入 bare stop（撤回 = 先停）。
 
+### BUG-005: 大任务刷新卡死 + 有些会话无法往上翻历史（已修）
+
+- **现象**: ①任务过大时刷新页面也卡住；②部分会话无法往上翻历史记录。
+- **根因**（两个独立缺陷叠加）:
+  1. 合成快照窗口按行数封顶（24 行），但单行文本很大（长分析回复）时 24 行
+     仍可达 ~100KB——手机组装/渲染直接卡死；
+  2. 合成快照把 `totalCount` 写成了窗口长度且**缺 `firstRowId`**——页面靠
+     `rows.window[0].rowId` 做游标、用 totalCount/firstRowId 判断有无更早
+     历史，于是认为没有历史可翻（rowsRange(beforeRowId) 根本不会发出）。
+- **修复**: ①窗口追加 48KiB 字节预算（保最新行，超预算从头裁）；②快照带上
+  裁剪前窗口的 `firstRowId` 和真实 `totalCount`，向上翻历史由页面原生
+  rowsRange(beforeRowId) 分页完成（host 侧已水合的会话直接可用）。
+
 ---
 
 ## 附：已知限制（非 bug，记录备查）
