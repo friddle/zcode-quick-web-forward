@@ -790,11 +790,15 @@ func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
 //   - editQueueItem: retext the chip;
 //   - reorderQueueItem: move the chip before beforeQueueItemId (null = tail).
 
-func (r *officialRecovery) applyQueueOp(sid, typ string, pl map[string]any) {
+// applyQueueOp mirrors a phone-issued queue mutation onto the synthesized
+// queue mirror. Returns false when the item is no longer in the mirror —
+// i.e. its message already dispatched (executing or done), where a 撤回
+// needs a stop instead of a queue deletion.
+func (r *officialRecovery) applyQueueOp(sid, typ string, pl map[string]any) bool {
 	qid, _ := pl["queueItemId"].(string)
 	cmdID := strings.TrimPrefix(qid, "queue_")
 	if sid == "" || cmdID == "" {
-		return
+		return false
 	}
 	r.mu.Lock()
 	items := r.queuedSends[sid]
@@ -807,7 +811,7 @@ func (r *officialRecovery) applyQueueOp(sid, typ string, pl map[string]any) {
 	}
 	if idx < 0 {
 		r.mu.Unlock()
-		return
+		return false
 	}
 	renumber := func() {
 		for i, x := range items {
@@ -842,8 +846,14 @@ func (r *officialRecovery) applyQueueOp(sid, typ string, pl map[string]any) {
 		renumber()
 	}
 	r.queuedSends[sid] = items
+	// The mirror changed while the engine rows may not have — the
+	// rows-unchanged dedupe would swallow the next snapshot and the chip
+	// would stick on screen until a manual refresh. Drop the dedup key so
+	// the follow-up snapshot is always emitted.
+	delete(r.lastRowsJSON, sid)
 	r.mu.Unlock()
 	fmt.Printf("zcode: recovery: queue op %s %s mirrored (%d left for %s)\n", typ, cmdID, len(items), sid)
+	return true
 }
 
 // emitRecoverySnapshot wraps a readSession result into the conversation topic

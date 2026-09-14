@@ -190,6 +190,20 @@ func officialMarkTaskViewed(sid string) {
 	rec.mu.Unlock()
 }
 
+// officialTurnRunning reports whether a task's turn is currently executing.
+func officialTurnRunning(sid string) bool {
+	if sid == "" {
+		return false
+	}
+	rec := officialActiveRec()
+	if rec == nil {
+		return false
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return rec.turnRunning[sid]
+}
+
 // officialSyntheticTasks returns engine-known tasks that the on-disk task
 // index does not have yet. The host writes the index row at first completion,
 // so a task whose turn is still running would be invisible in the phone's

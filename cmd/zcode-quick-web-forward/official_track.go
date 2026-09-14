@@ -112,6 +112,12 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		}
 		r.pendingTask[c.ID] = op + "|" + taskID
 		r.mu.Unlock()
+		// 删除一个还在跑任务 = 撤回：task-index 的删除不会停引擎 turn，
+		// 必须显式注入 stop，否则任务从列表消失后引擎仍在烧。
+		if c.Name == "deleteTask" && officialTurnRunning(taskID) {
+			officialInjectCommand(taskID, "stop", map[string]any{}, "")
+			fmt.Printf("zcode: recovery: deleteTask on a running task — stop injected for %s (withdraw)\n", taskID)
+		}
 	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "sendConversationCommandV4":
 		env, _ := argMap(c.Arg)["envelope"].(map[string]any)
 		sid, _ := env["sessionId"].(string)
@@ -125,7 +131,20 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		switch typ {
 		case "deleteQueueItem", "sendQueuedNow", "editQueueItem", "reorderQueueItem":
 			pl, _ := env["payload"].(map[string]any)
-			r.applyQueueOp(sid, typ, pl)
+			delivered := r.applyQueueOp(sid, typ, pl)
+			// 撤回一条已经派发执行的消息：镜像里已没有它（userInput row 一出现
+			// 就会退役），引擎对删除只会回 queue.itemMissing，任务照跑。用户
+			// 语义上的删除/编辑此时应当先停掉正在跑的 turn。
+			if !delivered && sid != "" && (typ == "deleteQueueItem" || typ == "editQueueItem") && officialTurnRunning(sid) {
+				officialInjectCommand(sid, "stop", map[string]any{}, "")
+				fmt.Printf("zcode: recovery: %s on an executing message — stop injected for %s (withdraw)\n", typ, sid)
+			}
+			if delivered && sid != "" && b.engine != nil && b.engine.HasIdentity() {
+				// applyQueueOp dropped the rows dedupe key: fetch promptly so
+				// the mirror change (chip removed / 立即 dispatched) reaches
+				// the page without waiting for the 15s+ cadence.
+				time.AfterFunc(300*time.Millisecond, func() { requestRecoverySnapshot(b, sid) })
+			}
 			if typ == "sendQueuedNow" && sid != "" {
 				// Force-dispatch promotes the queued item into a real turn:
 				// mark it running optimistically so the task card flips to
