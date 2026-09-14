@@ -468,6 +468,30 @@ func (r *officialRecovery) nextSnapSeq(sid string) int {
 // Called BEFORE the duplicate-skip so turnRunning stays fresh even when no
 // frame is emitted.
 
+// recordTurnRunning stores the latest engine-observed turn state and books
+// transitions: running→ended stamps completedAt (the phone task list reads it
+// for the 结束蓝点), and either direction schedules a fresh workspace/task
+// list push so the 运行 badge appears/disappears live. Caller must hold r.mu.
+func (r *officialRecovery) recordTurnRunning(sid string, running bool) {
+	if r.turnRunning == nil {
+		r.turnRunning = map[string]bool{}
+	}
+	prev := r.turnRunning[sid]
+	r.turnRunning[sid] = running
+	if prev == running {
+		return
+	}
+	if !running {
+		if r.completedAt == nil {
+			r.completedAt = map[string]int64{}
+		}
+		r.completedAt[sid] = time.Now().UnixMilli()
+	}
+	if f := taskStatusNudge; f != nil {
+		time.AfterFunc(300*time.Millisecond, f)
+	}
+}
+
 func (r *officialRecovery) observeTurnState(b *officialHostBridge, sid string, rowsRes map[string]any) {
 	running := false
 	for _, row := range fullRowsOf(rowsRes) {
@@ -476,10 +500,7 @@ func (r *officialRecovery) observeTurnState(b *officialHostBridge, sid string, r
 		}
 	}
 	r.mu.Lock()
-	if r.turnRunning == nil {
-		r.turnRunning = map[string]bool{}
-	}
-	r.turnRunning[sid] = running
+	r.recordTurnRunning(sid, running)
 	r.mu.Unlock()
 	if running {
 		r.ensureTurnRefresher(b)
@@ -695,10 +716,7 @@ func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
 			running = m["state"] == "running"
 		}
 	}
-	if r.turnRunning == nil {
-		r.turnRunning = map[string]bool{}
-	}
-	r.turnRunning[sid] = running
+	r.recordTurnRunning(sid, running)
 	// Keep only items whose text has not yet shown up as a userInput row
 	// (i.e. the message has not begun executing). Previously an extra
 	// unconditional pass copied every queued item into `kept` first, so the

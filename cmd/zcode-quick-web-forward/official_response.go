@@ -59,7 +59,10 @@ func inspectOfficialResponse(raw []byte) {
 		// Turn lifecycle events stream past here live. A turn.completed /
 		// turn.failed frame is the ENGINE's own completion signal — refreshing
 		// immediately ends the "turn is done but the phone shows 正在执行 for
-		// another 20s poll interval" lag.
+		// another 20s poll interval" lag. It also stamps the phone task list's
+		// 结束蓝点 (completedAt): fast turns can start AND end between two
+		// rows observations, so the observeTurnState transition alone misses
+		// them.
 		if len(data) > 0 && (bytes.Contains(data, []byte(`"type":"turn.completed"`)) ||
 			bytes.Contains(data, []byte(`"type":"turn.failed"`))) {
 			if sid := sidFromFrameBytes(data); sid != "" {
@@ -71,11 +74,18 @@ func inspectOfficialResponse(raw []byte) {
 				due := nowMs-r.lastTurnDone[sid] >= 1000
 				if due {
 					r.lastTurnDone[sid] = nowMs
+					if r.completedAt == nil {
+						r.completedAt = map[string]int64{}
+					}
+					r.completedAt[sid] = nowMs
 				}
 				r.mu.Unlock()
 				if due {
 					fmt.Println("zcode: recovery: turn lifecycle event — instant snapshot for", sid)
 					go requestRecoverySnapshot(b, sid)
+					if f := taskStatusNudge; f != nil {
+						time.AfterFunc(300*time.Millisecond, f)
+					}
 				}
 			}
 		}

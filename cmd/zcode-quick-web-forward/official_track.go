@@ -264,7 +264,23 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			}
 			r.sendAt[sid] = now
 			r.optimisticRun[sid] = now + 30000
+			// Task-list status: optimistically mark the turn running so the
+			// phone's task card (synthesized when the index doesn't have the
+			// task yet — the host writes the row at first completion) shows
+			// the 运行 badge immediately, and start the refresher. Without
+			// this a fresh session gets no engine rows fetch mid-turn (the
+			// post-send snapshots take the synthesized queuedPath), so the
+			// running→ended transition stayed invisible and the card never
+			// flipped to 已完成+蓝点 until some unrelated fetch happened.
+			if r.turnRunning == nil {
+				r.turnRunning = map[string]bool{}
+			}
+			r.turnRunning[sid] = true
 			r.mu.Unlock()
+			r.ensureTurnRefresher(b)
+			if f := taskStatusNudge; f != nil {
+				time.AfterFunc(300*time.Millisecond, f)
+			}
 			go func(sid string) {
 				for _, d := range []time.Duration{0, 1200 * time.Millisecond, 2500 * time.Millisecond} {
 					time.Sleep(d)

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/officialhost"
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
@@ -100,6 +101,8 @@ type officialRecovery struct {
 	retrying         map[int]bool               // call ids with a handshake-retry loop in flight
 	suppressAck      map[int]bool               // early-acked queue-op call ids whose engine ack must not reach the page
 	seenCommand      map[string]int64           // "sid|type|commandId" -> unix ms of first forward (phone re-delivery dedupe)
+	completedAt      map[string]int64           // sessionId -> unix ms the last turn flipped running→ended (drives the phone's 结束蓝点)
+	viewedAt         map[string]int64           // sessionId -> unix ms the phone last opened the task (clears the dot)
 }
 
 // initMaps makes every map field. officialRecovery is constructed once at
@@ -140,6 +143,83 @@ func (r *officialRecovery) initMaps() {
 	r.retrying = map[int]bool{}
 	r.suppressAck = map[int]bool{}
 	r.seenCommand = map[string]int64{}
+	r.completedAt = map[string]int64{}
+	r.viewedAt = map[string]int64{}
+}
+
+// taskStatusNudge is installed by startWebRemote: re-pushes the
+// workspace/task list to the phone so task cards flip the 运行 badge and the
+// 结束蓝点 live (the task index alone only updates on completion, and nothing
+// on the headless side ever writes unread_at).
+var taskStatusNudge func()
+
+// officialTaskRuntime reports engine-observed turn state for one task:
+// running = turn in flight; unreadAt = ms timestamp of the last completion
+// the phone has not opened yet (0 = nothing unread).
+func officialTaskRuntime(sid string) (running bool, unreadAt int64) {
+	rec := officialActiveRec()
+	if rec == nil {
+		return false, 0
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	running = rec.turnRunning[sid]
+	if rec.completedAt[sid] > rec.viewedAt[sid] {
+		unreadAt = rec.completedAt[sid]
+	}
+	return running, unreadAt
+}
+
+// officialMarkTaskViewed records the phone opening a task (bridge-open with
+// initialTaskId) so a previously-set unread dot clears on the next list push.
+func officialMarkTaskViewed(sid string) {
+	if sid == "" {
+		return
+	}
+	rec := officialActiveRec()
+	if rec == nil {
+		return
+	}
+	rec.mu.Lock()
+	if rec.viewedAt == nil {
+		rec.viewedAt = map[string]int64{}
+	}
+	rec.viewedAt[sid] = time.Now().UnixMilli()
+	rec.mu.Unlock()
+}
+
+// officialSyntheticTasks returns engine-known tasks that the on-disk task
+// index does not have yet. The host writes the index row at first completion,
+// so a task whose turn is still running would be invisible in the phone's
+// task list (no card, no 运行 badge). Title falls back to the optimistic sent
+// text; caller fills in workspace/timestamps.
+func officialSyntheticTasks() []map[string]any {
+	rec := officialActiveRec()
+	if rec == nil {
+		return nil
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	out := []map[string]any{}
+	for sid, running := range rec.turnRunning {
+		if !running {
+			continue
+		}
+		title := ""
+		if row := rec.optimisticRow[sid]; row != nil {
+			title, _ = row["text"].(string)
+		}
+		if title == "" {
+			if q := rec.queuedSends[sid]; len(q) > 0 {
+				title, _ = q[0]["text"].(string)
+			}
+		}
+		if len(title) > 60 {
+			title = title[:60]
+		}
+		out = append(out, map[string]any{"taskId": sid, "title": title})
+	}
+	return out
 }
 
 // sameAsLast reports whether the rows payload is byte-identical to the last

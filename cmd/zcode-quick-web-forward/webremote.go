@@ -52,6 +52,11 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 		AppVersion: version,
 		StatePath:  filepath.Join(cache, "webremote-state.json"),
 	}
+	// Turn start/end pushes: the page renders the task cards' 运行 badge from
+	// displayStatus and the 结束蓝点 from unreadAt — both only change when a
+	// fresh task list arrives, so the engine layer nudges this on every turn
+	// transition (officialRecovery.recordTurnRunning).
+	taskStatusNudge = func() { pushWorkspaceList(sender.send, ps) }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	relay.Run(ctx, opts, relay.Handler{
@@ -93,6 +98,25 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 				if c.ChannelName == "zcode-task" {
 					switch c.Name {
 					case "archiveTask", "unarchiveTask", "pinTask", "unpinTask", "deleteTask":
+						for _, d := range []time.Duration{300 * time.Millisecond, 1200 * time.Millisecond} {
+							time.AfterFunc(d, func() { pushWorkspaceList(sender.send, ps) })
+						}
+					case "setTaskUnread":
+						// Opening a task with a unread dot fires this (the
+						// page passes unread:false + expectedUnreadAt). The
+						// dot itself is our synthesized completedAt (the host
+						// never writes unread_at headlessly), so clear it here
+						// and refresh the list.
+						tid := ""
+						if am := argMap(c.Arg); am != nil {
+							tid, _ = am["taskId"].(string)
+							if tid == "" {
+								if t, ok := am["target"].(map[string]any); ok {
+									tid, _ = t["taskId"].(string)
+								}
+							}
+						}
+						officialMarkTaskViewed(tid)
 						for _, d := range []time.Duration{300 * time.Millisecond, 1200 * time.Millisecond} {
 							time.AfterFunc(d, func() { pushWorkspaceList(sender.send, ps) })
 						}
@@ -214,6 +238,9 @@ func handleRemoteData(payload json.RawMessage, reply func(any), engine *relay.Br
 		// fresh service port (see officialReattach).
 		officialReattach()
 		officialFlushOut()
+		// Opening the task counts as "read": a 结束蓝点 set by an earlier
+		// turn completion clears on this and later list pushes.
+		officialMarkTaskViewed(v.TaskID)
 		ps.mu.Lock()
 		prevWS := ps.workspacePath
 		ps.workspacePath = v.WorkspaceKey
@@ -360,7 +387,17 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 			continue
 		}
 		seen[t.TaskID] = true
-		out = append(out, taskItemPayload(t))
+		item := taskItemPayload(t)
+		// Live engine status overrides: the task index only updates on
+		// completion, so a mid-turn task would show no 运行 badge; and nothing
+		// on the headless side ever writes unread_at, so the 结束蓝点 is
+		// synthesized from turn transitions (cleared by bridge-open viewing).
+		if running, unread := officialTaskRuntime(t.TaskID); running {
+			item["displayStatus"] = "running"
+		} else if unread > 0 {
+			item["unreadAt"] = unread
+		}
+		out = append(out, item)
 	}
 	// Runtime tasks (created this session, not yet in the index) only belong
 	// in the unfiltered list — adding them to pinned/archived/deleted views
@@ -391,7 +428,40 @@ func taskListPayload(kind string, ps *phoneSessions) []any {
 				"createdAt":      m["createdAt"],
 				"updatedAt":      m["updatedAt"],
 			}
+			// A finished runtime task must not keep claiming 运行中: flip it to
+			// completed + unread dot once the engine layer saw the turn end.
+			if running, unread := officialTaskRuntime(sid); !running && unread > 0 {
+				item["displayStatus"] = "completed"
+				item["unreadAt"] = unread
+			}
 			out = append(out, item)
+		}
+	}
+	// Engine-known tasks the index doesn't have yet (the host writes the row
+	// at first completion): synthesize a card so the 运行 badge shows live.
+	if ps != nil && kind == "" {
+		ws := ""
+		if list := ps.workspacesList(); len(list) > 0 {
+			ws = list[0]
+		}
+		now := time.Now().UnixMilli()
+		for _, st := range officialSyntheticTasks() {
+			sid, _ := st["taskId"].(string)
+			if sid == "" || seen[sid] {
+				continue
+			}
+			seen[sid] = true
+			title, _ := st["title"].(string)
+			out = append(out, map[string]any{
+				"taskId":         sid,
+				"title":          title,
+				"workspacePath":  ws,
+				"workspaceLabel": pathLabel(ws),
+				"workspaceKind":  "local",
+				"displayStatus":  "running",
+				"createdAt":      now,
+				"updatedAt":      now,
+			})
 		}
 	}
 	return out
