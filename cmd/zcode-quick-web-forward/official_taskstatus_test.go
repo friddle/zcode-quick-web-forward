@@ -187,3 +187,27 @@ func TestShrinkWindowToBudget(t *testing.T) {
 		t.Fatal("window within budget was shrunk")
 	}
 }
+
+// The usage meter must not flicker: once the engine reports a non-zero
+// context usage, factsFor keeps serving it even after the readSession stash
+// evicts the session.
+func TestFactsForUsagePersistence(t *testing.T) {
+	rec := taskStatusTestRec()
+	rec.stashSnap("sess_u", json.RawMessage(`{"session":{"status":"idle"},"projection":{"contextUsed":12345,"contextWindow":128000}}`))
+	f := rec.factsFor("sess_u")
+	if f.ctxUsed != 12345 || f.ctxWindow != 128000 {
+		t.Fatalf("usage not parsed: %d/%d", f.ctxUsed, f.ctxWindow)
+	}
+	// stash 逐出（模拟其它会话把 LRU 挤掉）
+	rec.mu.Lock()
+	delete(rec.snaps, "sess_u")
+	rec.mu.Unlock()
+	f = rec.factsFor("sess_u")
+	if f.ctxUsed != 12345 || f.ctxWindow != 128000 {
+		t.Fatalf("usage lost after eviction: %d/%d", f.ctxUsed, f.ctxWindow)
+	}
+	// 全新会话（从未上报）必须保持 0，不得编造
+	if f2 := rec.factsFor("sess_never"); f2.ctxUsed != 0 || f2.ctxWindow != 0 {
+		t.Fatalf("invented usage for unknown session: %d/%d", f2.ctxUsed, f2.ctxWindow)
+	}
+}

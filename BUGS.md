@@ -121,6 +121,15 @@ host 认为会话仍占用 → 后续 sendText 全部进入 host 内部队列**�
   裁剪前窗口的 `firstRowId` 和真实 `totalCount`，向上翻历史由页面原生
   rowsRange(beforeRowId) 分页完成（host 侧已水合的会话直接可用）。
 
+### BUG-006: 上下文用量（context meter）忽有忽无（已修）
+
+- **现象**: 有时展示上下文容量/用量，有时不展示，无法准确查看。
+- **根因**: 用量来自 host 轮询的 readSession `projection.contextUsed/contextWindow`，
+  stash 只缓存 8 个会话（LRU 会被挤掉）。被逐出后合成快照里 `usedTokens=0`，
+  页面即隐藏用量条——所以忽有忽无。
+- **修复**: 每会话持久化最后一次引擎上报的非零用量（`ctxBySess`），facts 缺失
+  时回退使用（只回放引擎的真实上报值，不编造）；stash LRU 8 → 32。
+
 ---
 
 ## 附：已知限制（非 bug，记录备查）

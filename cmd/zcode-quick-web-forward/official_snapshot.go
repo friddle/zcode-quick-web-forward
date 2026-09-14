@@ -116,7 +116,26 @@ func (r *officialRecovery) factsFor(sid string) *sessionFacts {
 	f := parseSessionFacts(r.snapFor(sid))
 	r.mu.Lock()
 	m := r.modelTracked[sid]
+	if m == nil {
+		// Usage persistence: the readSession stash is a small LRU and the
+		// host only polls it while the conversation is open — without a
+		// last-known cache the context meter flickered between shown and
+		// hidden. Values are the engine's own last report, never invented.
+		if c, ok := r.ctxBySess[sid]; ok {
+			if f.ctxUsed <= 0 {
+				f.ctxUsed = c[0]
+			}
+			if f.ctxWindow <= 0 {
+				f.ctxWindow = c[1]
+			}
+		}
+	}
 	r.mu.Unlock()
+	if f.ctxUsed > 0 && f.ctxWindow > 0 {
+		r.mu.Lock()
+		r.ctxBySess[sid] = [2]int{f.ctxUsed, f.ctxWindow}
+		r.mu.Unlock()
+	}
 	if m != nil {
 		if p, _ := m["provider"].(string); p != "" {
 			f.providerID = p

@@ -79,7 +79,7 @@ func (r *officialRecovery) stashSnap(sid string, raw json.RawMessage) {
 	}
 	r.snaps[sid] = raw
 	r.snapsOrder = append(r.snapsOrder, sid)
-	if len(r.snapsOrder) > 8 {
+	if len(r.snapsOrder) > 32 {
 		delete(r.snaps, r.snapsOrder[0])
 		r.snapsOrder = r.snapsOrder[1:]
 	}
