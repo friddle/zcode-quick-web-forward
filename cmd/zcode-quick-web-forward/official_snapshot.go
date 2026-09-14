@@ -201,17 +201,17 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		})
 	}
 	window, _ := rows["window"].([]any)
-	// firstRowID/totalCount describe the FULL known history (pre-cap): the
-	// page uses them to decide that older rows exist and to page them in via
-	// rowsRange(beforeRowId) — reporting the capped window here is why some
-	// sessions could not scroll up through history.
+	// firstRowID gives the page a cursor for rowsRange(beforeRowId) history
+	// paging. totalCount deliberately stays the CAPPED window length: the
+	// page's turn navigator sees totalCount > window and starts a FULL
+	// history hydration loop (600KB+ rowsRange pulls) that a phone browser
+	// cannot survive — it presented as the page endlessly reloading.
 	firstRowID := any(nil)
 	if len(window) > 0 {
 		if m, ok := window[0].(map[string]any); ok {
 			firstRowID = m["rowId"]
 		}
 	}
-	totalRows := len(window)
 	// Cap the recovery window: long transcripts fragment into many rpc-frames
 	// and the client fails reassembly (endless recover loop). The visible
 	// tail is what matters.
@@ -344,7 +344,7 @@ func buildProjectionSnapshot(sid string, rowsRes map[string]any, queued []any, d
 		"workspaceHookAdmission": nil,
 		"rows": map[string]any{
 			"window":     window,
-			"totalCount": totalRows,
+			"totalCount": len(window),
 			"firstRowId": firstRowID,
 		},
 		"slashCommands": slash,

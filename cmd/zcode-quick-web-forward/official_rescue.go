@@ -60,6 +60,16 @@ func rescueRecentTurns(limit int) {
 	if b == nil {
 		return
 	}
+	// bridge-open fires on every task view open and every page reconnect —
+	// without a rate limit a reconnect storm would multiply the burst.
+	rec.mu.Lock()
+	now := time.Now().UnixMilli()
+	if now-rec.lastRecentRescue < 60_000 {
+		rec.mu.Unlock()
+		return
+	}
+	rec.lastRecentRescue = now
+	rec.mu.Unlock()
 	tasks, err := zcodeListTasksRecent(limit)
 	if err != nil {
 		return
