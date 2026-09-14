@@ -1123,11 +1123,13 @@ func emitRecoveryDeltas(b *officialHostBridge, sid string, snap map[string]any, 
 	inner := map[string]any{
 		"topic":          "conversation/" + sid,
 		"subscriptionId": sub,
-		"logEpoch":       epoch,
 		"fromSeq":        seq - 1,
 		"toSeq":          seq,
 		"sentAt":         time.Now().UnixMilli(),
 		"payload":        map[string]any{"kind": "deltas", "deltas": ops},
+	}
+	if epoch != "" { // an empty logEpoch fails the frame schema's min(1)
+		inner["logEpoch"] = epoch
 	}
 	r.mu.Lock()
 	r.wireOrdinal++
@@ -1185,6 +1187,13 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 		"toSeq":          1,
 		"sentAt":         time.Now().UnixMilli(),
 		"payload":        map[string]any{"kind": "snapshot", "snapshot": snap},
+	}
+	// The strict frame schema (recovery deliveries) requires a non-empty
+	// frame-level logEpoch that MATCHES snapshot.logEpoch. Omitting it made
+	// every recovery frame fail validation silently — the page resynced
+	// forever and updates only appeared after a manual reload.
+	if epoch != "" {
+		inner["logEpoch"] = epoch
 	}
 	r.mu.Lock()
 	r.wireOrdinal++

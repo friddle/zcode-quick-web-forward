@@ -370,6 +370,14 @@ func inspectOfficialResponse(raw []byte) {
 		// expired optimistic row converts into a queue item, which must lift
 		// the suppression or the fallback chip would never render.
 		optRow := r.takeOptimisticRow(rowsid, fullRowsOf(rowsRes))
+		if r.listener() == 0 {
+			// Nothing is listening (page not bridged yet). Recording the
+			// dedupe key NOW would suppress the very first emission after
+			// the page connects — it then sat in a recovery-timeout resync
+			// loop, and every submitted update stayed invisible until a
+			// manual reload (seen live on 2026-09-14 22:19).
+			return
+		}
 		// A queue mirror whose size did NOT change since the last emission
 		// must not lift the duplicate-skip on its own: while an item sat
 		// stuck undelivered this session re-pushed an identical ~48KB
