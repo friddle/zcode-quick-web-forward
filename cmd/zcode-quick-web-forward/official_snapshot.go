@@ -1114,11 +1114,17 @@ func emitRecoveryDeltas(b *officialHostBridge, sid string, snap map[string]any, 
 	delete(snap, "protocol")
 	epoch := r.epochFor(sid)
 	seq := r.nextSnapSeq(sid)
+	// The page's store requires deltas to CHAIN exactly: fromSeq must equal
+	// the currently applied snapshot.seq (the seq the previous frame left
+	// behind) and toSeq becomes the new local seq. Off by one here and every
+	// delta reads as a sequence gap — the page resynced every few seconds,
+	// each resync re-applied a full snapshot, and the whole view kept
+	// resetting (the "history jumps around" bug).
 	inner := map[string]any{
 		"topic":          "conversation/" + sid,
 		"subscriptionId": sub,
 		"logEpoch":       epoch,
-		"fromSeq":        seq,
+		"fromSeq":        seq - 1,
 		"toSeq":          seq,
 		"sentAt":         time.Now().UnixMilli(),
 		"payload":        map[string]any{"kind": "deltas", "deltas": ops},
