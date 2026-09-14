@@ -149,7 +149,9 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 			if len(line) > 1200 {
 				line = line[:1200] + "…"
 			}
-			fmt.Printf("zcode: official-host parentPort FULL %s\n", line)
+			if verboseLogs {
+				fmt.Printf("zcode: official-host parentPort FULL %s\n", line)
+			}
 		}
 	}
 	h.OnRawPortData = b.onPortBytes
