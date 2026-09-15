@@ -203,8 +203,66 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	officialState.sender = sender
 	officialState.mu.Unlock()
 	loadPersistedPageClient()
+	watchPendingSendFile()
 	fmt.Printf("zcode: OFFICIAL host active (%s) — channel traffic forwarded to the official implementation\n", dir)
 	return true
+}
+
+// watchPendingSendFile polls a small outbox file and submits its content as
+// a STANDARD sendConversationCommandV4 (type from line 2: "sendText"/"stop",
+// text from line 3+) through the regular forward path. Format:
+//
+//	line 1: sessionId
+//	line 2: command type (sendText | stop)
+//	line 3+: payload text (sendText)
+//
+// Exists for headless recovery only — a wedged agent runtime (turn killed by
+// AiSdkModelAdapterError leaves the runtime queueing every later send behind
+// it) is cleared with the standard stop command, and a message captured
+// before a restart is resubmitted the same way the page would. The file is
+// consumed on read.
+func watchPendingSendFile() {
+	const path = "/root/data/zqf-pending-send.txt"
+	submit := func() {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		_ = os.Remove(path)
+		lines := strings.SplitN(string(b), "\n", 3)
+		if len(lines) < 2 || strings.TrimSpace(lines[0]) == "" {
+			return
+		}
+		sid := strings.TrimSpace(lines[0])
+		typ := strings.TrimSpace(lines[1])
+		if typ == "" {
+			typ = "sendText"
+		}
+		text := ""
+		if len(lines) == 3 {
+			text = strings.TrimRight(lines[2], "\n")
+		}
+		if typ != "stop" && strings.TrimSpace(text) == "" {
+			return
+		}
+		go func() {
+			// Give the host's service port a moment after a fresh boot; the
+			// forward path buffers until ready anyway.
+			time.Sleep(3 * time.Second)
+			payload := map[string]any{}
+			if typ == "sendText" {
+				payload["text"] = text
+			}
+			fmt.Printf("zcode: recovery: outbox submit %s (%d chars) to %s\n", typ, len(text), sid)
+			officialInjectCommand(sid, typ, payload, "")
+		}()
+	}
+	go func() {
+		for {
+			submit()
+			time.Sleep(2 * time.Second)
+		}
+	}()
 }
 
 // hostForwardEnabled gates the host↔phone pipe. The host answers only part
@@ -319,6 +377,27 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 						if !first {
 							fmt.Printf("zcode: recovery: dropped re-delivered %s command %s for %s\n", typ, cid, sid)
 							return true
+						}
+					}
+					// A turn that dies while items sit in its queue leaves the
+					// session's queue HELD; the engine then rejects every
+					// further send with "held queue requires
+					// heldQueueDisposition (clearQueueAndSend |
+					// keepQueueAndSend)" — the phone page has no dialog for
+					// that state, so each send just pended 30s and vanished.
+					// The phone's newest send expresses "proceed now": answer
+					// the engine's standard question with clearQueueAndSend
+					// (the held items are the user's own stale followups;
+					// resubmission keeps the newest text).
+					if typ == "sendText" {
+						if _, has := env["heldQueueDisposition"]; !has {
+							env["heldQueueDisposition"] = "clearQueueAndSend"
+							if m, ok := c.Arg.(map[string]any); ok {
+								m["envelope"] = env
+							} else {
+								c.Arg = argMap(c.Arg)
+							}
+							fmt.Println("zcode: recovery: set heldQueueDisposition=clearQueueAndSend")
 						}
 					}
 					// The stop guard aborts with fault.guard.stopTargetChanged

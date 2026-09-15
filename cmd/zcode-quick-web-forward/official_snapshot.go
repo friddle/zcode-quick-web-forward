@@ -680,6 +680,14 @@ func (r *officialRecovery) realFramesFresh(sid string) bool {
 	return ok && time.Now().UnixMilli()-at < 10_000
 }
 
+// hasEmittedBase reports whether a full snapshot (and therefore a delta diff
+// base) exists for sid — polling call sites use it to shrink their payloads.
+func (r *officialRecovery) hasEmittedBase(sid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastEmittedState[sid] != nil
+}
+
 // queuedTextFor returns the mirrored text behind a queue_<commandId> item,
 // or "" when the mirror has no such item (the engine's own queue is then the
 // only copy — leave the forwarded command untouched).
@@ -1075,36 +1083,44 @@ func (r *officialRecovery) deltaOpsFor(sid string, snap map[string]any, forceFul
 	if len(patch) > 0 {
 		ops = append(ops, map[string]any{"op": "state.updated", "patch": patch})
 	}
-	// Advance the diff base even when ops stay empty (the dedupe already
-	// decided this payload is worth processing).
-	newRows := make([]map[string]any, 0, len(newRowsAny))
-	for _, ra := range newRowsAny {
+	return ops, true
+}
+
+// recordEmittedBase stores snap as the delta diff base for sid. Call ONLY
+// after a frame actually went out to a live listener — recording on a
+// dropped emission made every later fetch read as "unchanged" and the page
+// never received anything.
+func (r *officialRecovery) recordEmittedBase(sid string, snap map[string]any) {
+	rowsMap, _ := snap["rows"].(map[string]any)
+	window, _ := rowsMap["window"].([]any)
+	rows := make([]map[string]any, 0, len(window))
+	for _, ra := range window {
 		if row, ok := ra.(map[string]any); ok {
-			newRows = append(newRows, row)
+			rows = append(rows, row)
 		}
 	}
-	newState := make(map[string]any, len(patchableStateKeys))
+	state := make(map[string]any, len(patchableStateKeys))
 	for _, k := range patchableStateKeys {
 		if v, ok := snap[k]; ok {
-			newState[k] = v
+			state[k] = v
 		}
 	}
 	r.mu.Lock()
-	r.lastEmittedRows[sid] = newRows
-	r.lastEmittedState[sid] = newState
+	r.lastEmittedRows[sid] = rows
+	r.lastEmittedState[sid] = state
 	r.mu.Unlock()
-	return ops, true
 }
 
 // emitRecoveryDeltas wraps diff ops into the conversation topic frame the
 // page's store patches in place (payload kind "deltas"). Same wire envelope
 // as snapshots; deliveryKind "online" is the live-stream kind — a recovery
-// delivery must carry a full snapshot instead.
-func emitRecoveryDeltas(b *officialHostBridge, sid string, snap map[string]any, ops []map[string]any) {
+// delivery must carry a full snapshot instead. Returns false when nothing
+// was emitted (no live listener) so the caller skips the base recording.
+func emitRecoveryDeltas(b *officialHostBridge, sid string, snap map[string]any, ops []map[string]any) bool {
 	r := b.rec
 	listen := r.listener()
 	if listen == 0 || len(ops) == 0 {
-		return
+		return false
 	}
 	sub := r.subFor(sid)
 	if sub == "" {
@@ -1147,13 +1163,15 @@ func emitRecoveryDeltas(b *officialHostBridge, sid string, snap map[string]any, 
 	}
 	pb, err := json.Marshal(frame)
 	if err != nil {
-		return
+		return false
 	}
 	out := relay.EventFireBytes(listen, pb)
 	fmt.Printf("zcode: recovery: synthesized deltas frame %d bytes (%d ops) for %s (listen %d)\n", len(out), len(ops), sid, listen)
 	if b.engine != nil && b.engine.HasIdentity() {
 		b.engine.SendRawChannelBytes(out, senderSend())
+		return true
 	}
+	return false
 }
 
 // emitRecoverySnapshot wraps a readSession result into the conversation topic
@@ -1223,26 +1241,9 @@ func emitRecoverySnapshot(b *officialHostBridge, sid string, snap map[string]any
 	out := relay.EventFireBytes(listen, pb)
 	fmt.Printf("zcode: recovery: synthesized %s snapshot frame %d bytes for %s (listen %d)\n", kind, len(out), sid, listen)
 	// A full snapshot REPLACES the page's base — it is also the new diff
-	// base for subsequent deltas.
-	newRowsAny, _ := snap["rows"].(map[string]any)
-	if window, ok := newRowsAny["window"].([]any); ok {
-		rows := make([]map[string]any, 0, len(window))
-		for _, ra := range window {
-			if row, ok := ra.(map[string]any); ok {
-				rows = append(rows, row)
-			}
-		}
-		state := make(map[string]any, len(patchableStateKeys))
-		for _, k := range patchableStateKeys {
-			if v, ok := snap[k]; ok {
-				state[k] = v
-			}
-		}
-		r.mu.Lock()
-		r.lastEmittedRows[sid] = rows
-		r.lastEmittedState[sid] = state
-		r.mu.Unlock()
-	}
+	// base for subsequent deltas. (listen==0 already returned above, so a
+	// recorded base always corresponds to a delivered frame.)
+	r.recordEmittedBase(sid, snap)
 	if b.engine != nil && b.engine.HasIdentity() {
 		b.engine.SendRawChannelBytes(out, senderSend())
 	}

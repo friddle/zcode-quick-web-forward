@@ -182,6 +182,16 @@ func (r *officialRecovery) recordListen(id int) {
 			}
 		}
 		r.listenID = id
+		// A NEW listener id means a fresh page instance: everything emitted
+		// to the previous id never reached it, but the dedupe keys and delta
+		// diff bases still claim "already delivered" — the conversation view
+		// then stayed empty forever (rows unchanged — skipping duplicate).
+		// Drop them so the next fetch re-emits full snapshots to the new
+		// listener.
+		r.lastRowsJSON = map[string]string{}
+		r.lastEmittedRows = map[string][]map[string]any{}
+		r.lastEmittedState = map[string]map[string]any{}
+		r.lastQEmitted = map[string]int{}
 	}
 	r.mu.Unlock()
 }

@@ -446,7 +446,9 @@ func inspectOfficialResponse(raw []byte) {
 		forceFull := blocked || r.resyncWaiting(rowsid) || r.sendFresh(rowsid) ||
 			r.queuedCount(rowsid) != r.lastQEmitted[rowsid] || r.optimisticCount(rowsid) > 0
 		if ops, ok := r.deltaOpsFor(rowsid, snap, forceFull); ok {
-			emitRecoveryDeltas(b, rowsid, snap, ops)
+			if emitRecoveryDeltas(b, rowsid, snap, ops) {
+				r.recordEmittedBase(rowsid, snap)
+			}
 			return
 		}
 		emitRecoverySnapshot(b, rowsid, snap)

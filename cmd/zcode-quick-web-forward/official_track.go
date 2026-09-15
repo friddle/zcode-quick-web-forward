@@ -480,6 +480,27 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 // completion only shows up after a manual reload.
 
 func scheduleRecoverySnapshots(b *officialHostBridge, sid string) {
+	// One schedule per session at a time: every send used to stack ANOTHER
+	// 14-minute poll plan on top of the running ones (3-4 overlapping
+	// loops), each pull ~800KB of readSession+rows — the host spent its
+	// time serving redundant polls and a freshly opened session waited
+	// behind them.
+	r := b.rec
+	r.mu.Lock()
+	if r.scheduleActive == nil {
+		r.scheduleActive = map[string]bool{}
+	}
+	if r.scheduleActive[sid] {
+		r.mu.Unlock()
+		return
+	}
+	r.scheduleActive[sid] = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.scheduleActive, sid)
+		r.mu.Unlock()
+	}()
 	for _, d := range []time.Duration{4 * time.Second, 10 * time.Second, 20 * time.Second, 35 * time.Second} {
 		time.Sleep(d)
 		if !b.h.Alive() {
@@ -518,10 +539,18 @@ func requestRecoverySnapshot(b *officialHostBridge, sid string) {
 	if ws == "" {
 		return
 	}
+	// Adaptive payload: a session with an emitted base only needs the
+	// session's live state (status/usage/control) from polling — the full
+	// transcript (messageLimit 50 measured ~318KB on a big session) is
+	// redundant ballast the host re-serializes every few seconds.
+	messageLimit := 50
+	if r.hasEmittedBase(sid) {
+		messageLimit = 5
+	}
 	raw := relay.ChannelCallBytes(&relay.ChannelCall{
 		Kind: relay.KindPromise, ID: r.mintID(),
 		ChannelName: "zcode-session", Name: "readSession",
-		Arg: map[string]any{"workspacePath": ws, "sessionId": sid, "messageLimit": 50},
+		Arg: map[string]any{"workspacePath": ws, "sessionId": sid, "messageLimit": messageLimit},
 	})
 	r.mu.Lock()
 	if r.pendingRead == nil {
@@ -534,15 +563,22 @@ func requestRecoverySnapshot(b *officialHostBridge, sid string) {
 
 // requestConversationRows fetches the official transcript rows for a session
 // (the same call the desktop renderer makes after applying a base snapshot).
+// With a diff base already emitted, polls pull only the window tail — the
+// snapshot emitter trims to a ~48KB window anyway, so 200-row pulls
+// (~489KB measured) were pure host load on the 5s cadence.
 func requestConversationRows(b *officialHostBridge, sid string) {
 	r := b.rec
 	officialState.mu.Lock()
 	ws := officialState.workspace
 	officialState.mu.Unlock()
+	limit := 200
+	if r.hasEmittedBase(sid) {
+		limit = 40
+	}
 	raw := relay.ChannelCallBytes(&relay.ChannelCall{
 		Kind: relay.KindPromise, ID: r.mintID(),
 		ChannelName: "zcode-agent", Name: "conversationRowsRangeV4",
-		Arg: map[string]any{"workspacePath": ws, "sessionId": sid, "limit": 200},
+		Arg: map[string]any{"workspacePath": ws, "sessionId": sid, "limit": limit},
 	})
 	r.mu.Lock()
 	if r.pendingRows == nil {

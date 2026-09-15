@@ -365,6 +365,8 @@ func TestDeltaOpsFor(t *testing.T) {
 	if !ok || len(ops) != 1 || ops[0]["op"] != "row.appended" {
 		t.Fatalf("append diff wrong: ok=%v ops=%v", ok, ops)
 	}
+	// 发射成功后记录基线（与真实 emit 路径一致）。
+	r.recordEmittedBase("sess_d", snapWith([]map[string]any{mk("1", "a"), mk("2", "b"), mk("3", "c")}, [2]int{10, 100}))
 
 	// 行内容变化（同 rowId）→ row.upserted；usage 变化 → state.updated。
 	ops, ok = r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("1", "a"), mk("2", "b-edit"), mk("3", "c")}, [2]int{20, 100}), false)
@@ -378,6 +380,7 @@ func TestDeltaOpsFor(t *testing.T) {
 	if kinds["row.upserted"] != 1 || kinds["state.updated"] != 1 {
 		t.Fatalf("upsert/state diff wrong: %v", kinds)
 	}
+	r.recordEmittedBase("sess_d", snapWith([]map[string]any{mk("1", "a"), mk("2", "b-edit"), mk("3", "c")}, [2]int{20, 100}))
 
 	// 窗口滑动（头部裁剪）→ 容忍，不触发全量。
 	ops, ok = r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("3", "c"), mk("4", "d")}, [2]int{20, 100}), false)
@@ -391,6 +394,7 @@ func TestDeltaOpsFor(t *testing.T) {
 			}
 		}
 	}
+	r.recordEmittedBase("sess_d", snapWith([]map[string]any{mk("3", "c"), mk("4", "d")}, [2]int{20, 100}))
 
 	// 中段消失 → 结构性变化 → 全量。
 	if _, ok := r.deltaOpsFor("sess_d", snapWith([]map[string]any{mk("3", "c"), mk("5", "e")}, [2]int{20, 100}), false); ok {

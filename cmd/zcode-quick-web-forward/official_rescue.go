@@ -156,9 +156,19 @@ func rescueStuckQueues(b *officialHostBridge, sid string, now int64) {
 	// The turn has ENDED (turnRunning false) yet the message(s) never
 	// dispatched — the engine queue wedged after an abnormal turn end. A
 	// fresh sendText re-runs admission from a clean state. No stop needed:
-	// nothing is running.
-	fmt.Printf("zcode: recovery: queue for %s stuck %ds past admission while idle (%d items) — engine queue wedged, resubmitting\n",
+	// nothing is running. BUT: a turn that died with AiSdkModelAdapterError
+	// can leave the agent RUNTIME with a zombie foreground turn — the
+	// projection reports idle, yet every new send is enqueued behind the
+	// zombie and silently dropped after the host's ~30s admission pend
+	// (seen 2026-09-15 morning: hours of submissions vanished). Kick the
+	// runtime with a stop before resubmitting: on a truly idle engine the
+	// stop is a harmless no-op, and the engine-truth gate above guarantees
+	// no live work is cancelled.
+	fmt.Printf("zcode: recovery: queue for %s stuck %ds past admission while idle (%d items) — kicking runtime and resubmitting\n",
 		sid, (now-oldest)/1000, len(items))
+	time.AfterFunc(time.Second, func() {
+		officialInjectCommand(sid, "stop", map[string]any{}, "")
+	})
 	time.AfterFunc(2*time.Second, func() {
 		officialResubmitQueued(sid, texts, clients)
 	})
