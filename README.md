@@ -1,5 +1,15 @@
 # zcode-quick-web-forward
 
+> ⚠️ **BETA SOFTWARE — USE AT YOUR OWN RISK** ⚠️
+>
+> This project is in **active beta**. The web-remote protocol it speaks is
+> reverse-engineered from the official ZCode client, and parts of it can
+> change without notice. Expect rough edges: occasional session glitches,
+> daemon restarts to recover state, and UI quirks on the phone. It runs real
+> tasks on your real machine — treat it like you would any beta automation
+> tool and keep an eye on what it does. **Not recommended as your only way to
+> reach ZCode yet.**
+
 > **Pure-CLI driver.** This tool does not re-implement login or tunnels — it
 > invokes the official ZCode runtime (`glm/zcode.cjs` `app-server`), reads your
 > real ZCode state (task index, model providers, settings), and mints a phone
@@ -132,6 +142,30 @@ zcode-quick-web-forward provider list   # 查看已配置的 provider
 
 `provider add` 后重启 daemon，在手机 **管理模型** 里选择对应模型即可。
 
+### What works from the phone (beta)
+
+- **Full task round-trips**: submit a task from the phone, watch it stream on
+  the desktop engine, stop / edit / queue follow-up messages, approve
+  permission requests — the same conversation state the desktop sees.
+- **Live conversation streaming**: official v4 snapshot + delta frames,
+  synthesized from real host state (`zcode-session.readSession`,
+  `conversationRowsRangeV4`) and patched incrementally.
+- **Self-healing transport**: handshake bootstrap after daemon/host restarts,
+  stuck-queue detection and resubmission, listener-generation tracking so a
+  page reload always gets a fresh full snapshot.
+
+### Known beta limitations
+
+- The web-remote v4 protocol is **reverse-engineered**; a ZCode client update
+  can break wire compatibility at any time.
+- The daemon keeps runtime state in memory (queue mirror, turn tracking,
+  handshake registry). Restarts recover most of it automatically, but a
+  message submitted during a crash window may need resubmitting.
+- Model-picker labels on the phone come from the page's own provider
+  registry; custom providers added via `provider add` may not match its ids.
+- Long turns on very large sessions are heavy (full-log reads); polling is
+  throttled but not free.
+
 ### Flags
 
 | flag | description |
@@ -150,14 +184,17 @@ zcode-quick-web-forward provider list   # 查看已配置的 provider
    `open.bigmodel.cn/api/anthropic/v1/models`, then written into
    `~/.zcode/v2/config.json` + `~/.zcode/cli/config.json`); `--region global`
    runs the official `login --no-browser` (Z.AI OAuth).
-3. **engine** — runs `node glm/zcode.cjs app-server` (the ZCode engine).
+3. **engine** — runs the official ZCode desktop **host bundle** headlessly
+   (the same `zcode-host` the desktop app uses) with the
+   `zcode.cjs app-server` engine attached.
 4. **web-remote** — `remote` registers this machine as a device on ZCode's
    official web-remote relay (`wss://zcode.z.ai/ws`) and prints a **real
    pairing URL** (`https://zcode.z.ai/remote/v4?sid=…&hash=…`), plus a terminal
    QR code when `qrencode` is installed. The phone's channel services
    (model providers, settings, tasks) are answered from **real ZCode state** —
-   the task index (`tasks-index.sqlite`), provider config and settings — so the
-   phone shows actual workspaces and tasks.
+   the task index (`tasks-index.sqlite`), provider config and settings — and
+   the conversation pipe bridges the phone page to the official host, so task
+   submissions run on the real engine.
 
 > **Notes / requirements**
 > - **Node.js is auto-provisioned**: the runtime needs Node >= 22.5 (it uses
@@ -167,8 +204,16 @@ zcode-quick-web-forward provider list   # 查看已配置的 provider
 > - The pairing relay defaults to `https://zcode.z.ai` (reachable). Set
 >   `ZCODE_BASE_URL` to a domestic relay if you have one that resolves
 >   publicly.
-> - Full engine-session control from the phone (running tasks on the desktop
->   engine) is not implemented yet — the phone gets a real workspace view.
+> - **Beta**: the phone drives the desktop engine for real — don't point it
+>   at a workspace you can't afford to have a beta tool touch.
+
+## Releases
+
+Prebuilt static binaries for `linux/amd64`, `linux/arm64`, `darwin/amd64`,
+`darwin/arm64` and `windows/amd64` are attached to every GitHub release
+(builds are automated from `v*` tags). **Releases are beta-quality** — read
+the release notes before upgrading a long-running daemon (`systemctl stop zqf`
+first; the binary is replaced atomically and the service restarted).
 
 ## gh.proxy
 
@@ -200,5 +245,5 @@ git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "ht
 
 ## License
 
-MIT. This project is unofficial and not affiliated with or endorsed by Z.AI.
-ZCode and its bundled runtime remain subject to their upstream terms.
+MIT. This project is unofficial, **beta**, and not affiliated with or endorsed
+by Z.AI. ZCode and its bundled runtime remain subject to their upstream terms.

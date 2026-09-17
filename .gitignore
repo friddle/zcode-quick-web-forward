@@ -21,3 +21,8 @@ official-host/host-deploy/
 .env
 *.local
 node_modules/
+
+# stray build binaries
+/zqf-linux
+zqf-linux
+zqf-new
