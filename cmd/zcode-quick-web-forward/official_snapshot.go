@@ -25,6 +25,9 @@ type sessionFacts struct {
 	mode          string // settings.mode.current (session-level fallback)
 	ctxUsed       int
 	ctxWindow     int
+	tokens        int   // projection.totalTokenCount — climbs while the engine streams
+	revision      int64 // snapshot revision — bumps on every conversation mutation
+	interactions  int   // pendingInteractions — permission/interaction waits
 	slash         []any
 	goal          any // session.target — the engine's goal object (objective/status/...)
 }
@@ -75,7 +78,9 @@ func parseSessionFacts(raw json.RawMessage) *sessionFacts {
 			ContextUsed     int `json:"contextUsed"`
 			ContextWindow   int `json:"contextWindow"`
 		} `json:"projection"`
-		SlashCommands []any `json:"slashCommands"`
+		PendingInteractions []any `json:"pendingInteractions"`
+		Revision            int64 `json:"revision"`
+		SlashCommands       []any `json:"slashCommands"`
 	}
 	if json.Unmarshal(raw, &snap) != nil {
 		return f
@@ -84,6 +89,9 @@ func parseSessionFacts(raw json.RawMessage) *sessionFacts {
 	f.status = snap.Session.Status
 	f.mode = snap.Session.Mode
 	f.goal = snap.Session.Target
+	f.interactions = len(snap.PendingInteractions)
+	f.revision = snap.Revision
+	f.tokens = snap.Projection.TotalTokenCount
 	f.providerID = snap.Settings.Model.Current.ProviderID
 	if f.providerID == "" {
 		f.providerID = snap.Session.Model.ProviderID
@@ -512,6 +520,9 @@ func (r *officialRecovery) recordTurnRunning(sid string, running bool) {
 	}
 	prev := r.turnRunning[sid]
 	r.turnRunning[sid] = running
+	if prev != running {
+		r.noteTurnProgressLocked(sid, time.Now().UnixMilli())
+	}
 	if prev == running {
 		return
 	}
@@ -782,16 +793,16 @@ func (r *officialRecovery) takeOptimisticRow(sid string, rows []any) map[string]
 				// Must match the engine's queue_<commandId> naming (see the
 				// twin site in official_track.go) — the phone sends this id
 				// back on every queue mutation.
-				"queueItemId":     "queue_" + cmdID,
-				"clientId":        clientID,
-				"kind":            "sendText",
-				"text":            text,
-				"attachments":     []any{},
-				"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
-				"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
-				"steer":           map[string]any{"state": "notRequested"},
-				"dispatch":        map[string]any{"state": "queued"},
-				"admittedAt":      time.Now().UnixMilli(),
+				"queueItemId": "queue_" + cmdID,
+				"clientId":    clientID,
+				"kind":        "sendText",
+				"text":        text,
+				"attachments": []any{},
+				"delivery":    map[string]any{"requested": "auto", "admitted": "queue"},
+				"order":       map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
+				"steer":       map[string]any{"state": "notRequested"},
+				"dispatch":    map[string]any{"state": "queued"},
+				"admittedAt":  time.Now().UnixMilli(),
 			})
 			fmt.Printf("zcode: recovery: optimistic row for %s expired unexecuted — fell back to queue chip\n", sid)
 		}

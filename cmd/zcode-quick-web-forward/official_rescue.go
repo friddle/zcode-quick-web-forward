@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
@@ -261,8 +262,21 @@ func (r *officialRecovery) dispatchQueuedAfterTurn(sid string) {
 // hello/initialize) stays handshake-rejected forever.
 const pageClientStateFile = "/root/data/zqf-page-client.json"
 
+// pageClientStatePath resolves the page-client persistence file. The
+// historical constant was CP-specific (/root/data, root-owned); everywhere
+// else the file lives next to the relay state under the user cache dir.
+func pageClientStatePath() string {
+	if v := os.Getenv("ZQF_PAGE_CLIENT"); v != "" {
+		return v
+	}
+	if cache, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(cache, "zcode-quick-web-forward", "page-client.json")
+	}
+	return pageClientStateFile
+}
+
 func loadPersistedPageClient() {
-	b, err := os.ReadFile(pageClientStateFile)
+	b, err := os.ReadFile(pageClientStatePath())
 	if err != nil {
 		return
 	}
@@ -291,7 +305,7 @@ func persistPageClient(clientID string) {
 	officialState.persistedClientID = clientID
 	officialState.mu.Unlock()
 	st, _ := json.Marshal(map[string]any{"clientId": clientID, "savedAt": time.Now().UnixMilli()})
-	if err := os.WriteFile(pageClientStateFile, st, 0644); err != nil {
+	if err := os.WriteFile(pageClientStatePath(), st, 0644); err != nil {
 		fmt.Printf("zcode: recovery: persisting page clientId failed: %v\n", err)
 		return
 	}
@@ -321,20 +335,33 @@ func bootstrapHostHandshake(b *officialHostBridge) {
 		r.mu.Unlock()
 		return
 	}
+	// A real page owns the connection while its handshake is fresh: it
+	// registers ITS client, and a daemon-side hello for another client only
+	// poisons the registration (hello ping-pong, both sides then fail with
+	// clientMismatch). Bootstrap exclusively for the truly headless case —
+	// no page has handshaken recently.
+	if now-r.lastPageHandshakeAt < 5*60_000 {
+		r.mu.Unlock()
+		return
+	}
 	r.lastHandshakeTry = now
 	clientID := ""
-	for _, c := range r.clientBySession {
-		if c != "" {
-			clientID = c
-			break
+	// Prefer the LATEST page client (persisted on every page-issued command)
+	// over any session-era id: after a page reload the host expects the new
+	// client, and bootstrapping the handshake with a stale one only sets the
+	// connection up for clientMismatch on every later command.
+	officialState.mu.Lock()
+	clientID = officialState.persistedClientID
+	officialState.mu.Unlock()
+	if clientID == "" {
+		for _, c := range r.clientBySession {
+			if c != "" {
+				clientID = c
+				break
+			}
 		}
 	}
 	r.mu.Unlock()
-	if clientID == "" {
-		officialState.mu.Lock()
-		clientID = officialState.persistedClientID
-		officialState.mu.Unlock()
-	}
 	if clientID == "" {
 		return // page identity unknown — nothing safe to register as
 	}
@@ -372,6 +399,16 @@ func officialInjectCommand(sid, typ string, payload map[string]any, clientID str
 	officialState.mu.Unlock()
 	if b == nil {
 		return
+	}
+	if clientID == "" {
+		// The host binds commands to the client of the LATEST handshake —
+		// after any page reload that is a NEWER client than the one that
+		// created the session. Prefer the freshly persisted id; the
+		// session-era id is only a fallback, otherwise every injected send
+		// after a page reload dies with fault.command.clientMismatch.
+		officialState.mu.Lock()
+		clientID = officialState.persistedClientID
+		officialState.mu.Unlock()
 	}
 	if clientID == "" {
 		rec := b.rec

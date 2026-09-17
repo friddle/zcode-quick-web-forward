@@ -40,7 +40,9 @@ func inspectOfficialResponse(raw []byte) {
 					if r.realFramesAt == nil {
 						r.realFramesAt = map[string]int64{}
 					}
-					r.realFramesAt[sid] = time.Now().UnixMilli()
+					now := time.Now().UnixMilli()
+					r.realFramesAt[sid] = now
+					r.noteTurnProgressLocked(sid, now)
 					r.mu.Unlock()
 				}
 				if verboseLogs {
@@ -151,6 +153,28 @@ func inspectOfficialResponse(raw []byte) {
 		if kind == relay.KindPromiseErr && pr != nil && pr.typ == "sendText" {
 			fmt.Printf("zcode: recovery: host REJECTED sendText for %s (call %d): %s — queued mirror will resubmit\n",
 				pr.sid, id, firstJSON(data))
+			// clientMismatch means the session-era clientId is stale (the
+			// page reloaded and re-handshook with a new one). Re-inject once
+			// with the latest known client instead of waiting for the queue
+			// rescue to repeat the same rejection.
+			if strings.Contains(firstJSON(data), "clientMismatch") {
+				officialState.mu.Lock()
+				fresh := officialState.persistedClientID
+				officialState.mu.Unlock()
+				env, _ := argMap(pr.call.Arg)["envelope"].(map[string]any)
+				envClient, _ := env["clientId"].(string)
+				if fresh != "" && fresh != envClient {
+					if pl, _ := env["payload"].(map[string]any); pl != nil {
+						if text, _ := pl["text"].(string); text != "" {
+							fmt.Printf("zcode: recovery: retrying sendText for %s with refreshed client\n", pr.sid)
+							go func() {
+								time.Sleep(500 * time.Millisecond)
+								officialInjectCommand(pr.sid, "sendText", map[string]any{"text": text, "heldQueueDisposition": "clearQueueAndSend"}, fresh)
+							}()
+						}
+					}
+				}
+			}
 		}
 		// The engine answers revision-sensitive commands (fork/feedback/
 		// retry/edit) with a PromiseSuccess whose body is status:"stale" +

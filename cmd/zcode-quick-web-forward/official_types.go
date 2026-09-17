@@ -81,38 +81,52 @@ type officialRecovery struct {
 	lastTermID       string                      // most recently created terminal id
 	snaps            map[string]json.RawMessage
 	snapsOrder       []string
-	pendingResolve   map[int][2]string          // sendConversationCommandV4 call id -> {sessionId, interactionId}
-	deadInteractions map[string]bool            // interactionIds the engine reported as no-pending (stale rows)
-	lastKick         int64                      // unix ts of last pendingApproval-triggered refresh (rate limit)
-	refresherStarted bool                       // turn-running periodic refresher goroutine started
-	modeBySess       map[string]string          // sessionId -> collaboration mode (build/edit/plan/yolo)
-	modelTracked     map[string]map[string]any  // sessionId -> page-chosen switchModelConfig {provider,model,thought}
-	modelSwitched    map[string]bool            // sessionId -> switchModelConfig already sent
-	clientBySession  map[string]string          // sessionId -> the phone page's clientId (commands must reuse it)
-	sessionRevision  map[string]int             // sessionId -> engine conversation revision (for fork/feedback/etc.)
-	sendAt           map[string]int64           // sessionId -> unix ms of last sendText (dedupe bypass window)
-	optimisticRun    map[string]int64           // sessionId -> unix ms deadline forcing phase=running
-	optimisticRow    map[string]map[string]any  // sessionId -> optimistic sent userInput row (idle-session send display)
-	lastTurnDone     map[string]int64           // sessionId -> unix ms of last turn.completed/failed refresh kick
-	lastRefresh      map[string]int64           // sessionId -> unix ms of last refresher-issued snapshot
-	pendingPlans     map[int]string             // synthetic conversationPlansV4 call id -> sessionId
-	planStash        map[string]json.RawMessage // sessionId -> latest plans/goal payload
-	pendingRaw       map[int]*pendingRawCall    // call id -> encoded promise call (handshake retry)
-	retrying         map[int]bool               // call ids with a handshake-retry loop in flight
-	suppressAck      map[int]bool               // early-acked queue-op call ids whose engine ack must not reach the page
-	seenCommand      map[string]int64           // "sid|type|commandId" -> unix ms of first forward (phone re-delivery dedupe)
-	completedAt      map[string]int64           // sessionId -> unix ms the last turn flipped running→ended (drives the phone's 结束蓝点)
-	viewedAt         map[string]int64           // sessionId -> unix ms the phone last opened the task (clears the dot)
-	lastQueueRescue  map[string]int64           // sessionId -> unix ms of the last stuck-queue rescue (rate limit)
-	lastRecentRescue int64                      // unix ms of the last rescueRecentTurns sweep (rate limit)
-	ctxBySess        map[string][2]int          // sessionId -> last reported {contextUsed, contextWindow} (usage meter persistence)
-	lastRowsAt       map[string]int64           // sessionId -> unix ms of the last conversationRowsRangeV4 reply (rescue freshness gate)
-	realFramesAt     map[string]int64           // sessionId -> unix ms of the last LIVE host conversation frame (synthesizer stand-down gate)
+	pendingResolve   map[int][2]string           // sendConversationCommandV4 call id -> {sessionId, interactionId}
+	deadInteractions map[string]bool             // interactionIds the engine reported as no-pending (stale rows)
+	lastKick         int64                       // unix ts of last pendingApproval-triggered refresh (rate limit)
+	refresherStarted bool                        // turn-running periodic refresher goroutine started
+	modeBySess       map[string]string           // sessionId -> collaboration mode (build/edit/plan/yolo)
+	modelTracked     map[string]map[string]any   // sessionId -> page-chosen switchModelConfig {provider,model,thought}
+	modelSwitched    map[string]bool             // sessionId -> switchModelConfig already sent
+	clientBySession  map[string]string           // sessionId -> the phone page's clientId (commands must reuse it)
+	sessionRevision  map[string]int              // sessionId -> engine conversation revision (for fork/feedback/etc.)
+	sendAt           map[string]int64            // sessionId -> unix ms of last sendText (dedupe bypass window)
+	optimisticRun    map[string]int64            // sessionId -> unix ms deadline forcing phase=running
+	optimisticRow    map[string]map[string]any   // sessionId -> optimistic sent userInput row (idle-session send display)
+	lastTurnDone     map[string]int64            // sessionId -> unix ms of last turn.completed/failed refresh kick
+	lastRefresh      map[string]int64            // sessionId -> unix ms of last refresher-issued snapshot
+	pendingPlans     map[int]string              // synthetic conversationPlansV4 call id -> sessionId
+	planStash        map[string]json.RawMessage  // sessionId -> latest plans/goal payload
+	pendingRaw       map[int]*pendingRawCall     // call id -> encoded promise call (handshake retry)
+	retrying         map[int]bool                // call ids with a handshake-retry loop in flight
+	suppressAck      map[int]bool                // early-acked queue-op call ids whose engine ack must not reach the page
+	seenCommand      map[string]int64            // "sid|type|commandId" -> unix ms of first forward (phone re-delivery dedupe)
+	completedAt      map[string]int64            // sessionId -> unix ms the last turn flipped running→ended (drives the phone's 结束蓝点)
+	viewedAt         map[string]int64            // sessionId -> unix ms the phone last opened the task (clears the dot)
+	lastQueueRescue  map[string]int64            // sessionId -> unix ms of the last stuck-queue rescue (rate limit)
+	lastRecentRescue int64                       // unix ms of the last rescueRecentTurns sweep (rate limit)
+	ctxBySess        map[string][2]int           // sessionId -> last reported {contextUsed, contextWindow} (usage meter persistence)
+	lastRowsAt       map[string]int64            // sessionId -> unix ms of the last conversationRowsRangeV4 reply (rescue freshness gate)
+	realFramesAt     map[string]int64            // sessionId -> unix ms of the last LIVE host conversation frame (synthesizer stand-down gate)
 	lastEmittedRows  map[string][]map[string]any // sessionId -> row copies of the last emitted snapshot window (delta diff base)
 	lastEmittedState map[string]map[string]any   // sessionId -> non-rows parts of the last emitted snapshot (state.updated patch diff base)
-	scheduleActive   map[string]bool            // sessionId -> a post-send poll schedule is already running (don't stack more)
-	selfInjected     map[int]bool               // daemon-minted call ids whose sendText bookkeeping must be skipped (rescue injects already sit in the mirror)
-	lastHandshakeTry int64                      // unix ms of the last daemon-side host handshake bootstrap (rate limit)
+	scheduleActive   map[string]bool             // sessionId -> a post-send poll schedule is already running (don't stack more)
+	selfInjected     map[int]bool                // daemon-minted call ids whose sendText bookkeeping must be skipped (rescue injects already sit in the mirror)
+	lastHandshakeTry int64                       // unix ms of the last daemon-side host handshake bootstrap (rate limit)
+	listenFrames     map[int][]byte              // event-listen call id -> encoded frame (replayed after svc-port reattach)
+	listenFrameOrder []int                       // registration order of listenFrames keys
+	turnProgressAt   map[string]int64            // sessionId -> unix ms of last observable turn progress
+	turnStallProbe   map[string]int              // sessionId -> consecutive stalled-watchdog probes
+	turnKickAt       map[string]int64            // sessionId -> unix ms of last watchdog stop-kick
+	turnKickCount    map[string]int              // sessionId -> stop-kicks since last real progress
+	watchTokens      map[string]int              // sessionId -> last tick's projection.totalTokenCount
+	watchRevision    map[string]int64            // sessionId -> last tick's snapshot revision
+	interactionAt    map[string]int64            // sessionId -> unix ms a pending interaction was last seen
+	stagedRetry      map[string]string           // sessionId -> last sendText text (watchdog retry source)
+	stagedRetryTaken map[string]bool             // sessionId -> staged retry already consumed
+	engineKilledAt   int64                       // unix ms of last watchdog engine kill
+	watchdogStarted  bool                        // single watchdog goroutine per host bridge
+	lastPageHandshakeAt int64                    // unix ms a real page last ran hello/initialize on this connection
 }
 
 // initMaps makes every map field. officialRecovery is constructed once at
