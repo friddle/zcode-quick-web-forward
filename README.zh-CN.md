@@ -20,6 +20,9 @@ API key）、暴露本地 ZCode 安装里**真实的**工作区/任务，并打�
 URL。没有假数据——手机拿到的是 `~/.zcode` 里的真实内容（任务索引、provider
 配置、设置）。
 
+> 要不是为了 ZCode 编程套餐的优惠（usage×2 及各类活动），这个项目根本
+> 不会存在。
+
 单个 **Go** 静态二进制（Linux / macOS / Windows、多架构），外加
 `wget | bash` 引导脚本（附带中国 / GFW 网络的 **gh.proxy** 镜像助手）。
 

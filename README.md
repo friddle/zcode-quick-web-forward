@@ -23,6 +23,9 @@ OAuth or a BigModel API key), exposes the **real** workspaces/tasks from your
 local ZCode install, and prints the phone pairing URL. No stubs — the phone
 gets real data from `~/.zcode` (task index, provider config, settings).
 
+> If it weren't for the ZCode 编程套餐 perks (usage×2 and the various
+> promos), this project wouldn't exist.
+
 A single **Go** static binary (built for Linux, macOS, Windows, multiple
 arches) plus `wget | bash` bootstrap scripts (with a China / GFW **gh.proxy**
 mirror helper).
