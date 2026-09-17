@@ -89,6 +89,13 @@ func startWebRemote(origin, region string, engine *relay.BridgeEngine, sender *r
 			// the official host's service port — the host (and the engine it
 			// spawns) is the sole implementation. This process is a pipe.
 			onCall := func(c *relay.ChannelCall) {
+				// Desktop-renderer channels the headless host doesn't
+				// register (model picker / provider settings + the send
+				// gate). Answered from config.json; forwarding them would
+				// only log "Unknown channel" and hang the page's promise.
+				if answerDesktopChannelShim(c) {
+					return
+				}
 				fmt.Printf("zcode: official-host forwarding %s.%s to host\n", c.ChannelName, c.Name)
 				forwardCallToOfficialHost(c)
 				// Task mutations land in the shared task-index sqlite via the

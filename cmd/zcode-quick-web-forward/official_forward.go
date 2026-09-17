@@ -204,6 +204,9 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 	officialState.mu.Unlock()
 	loadPersistedPageClient()
 	watchPendingSendFile()
+	watchPendingCreateFile()
+	startTurnWatchdog(b)
+	startMutexCanary()
 	fmt.Printf("zcode: OFFICIAL host active (%s) — channel traffic forwarded to the official implementation\n", dir)
 	return true
 }
@@ -244,12 +247,19 @@ func watchPendingSendFile() {
 		}
 		sid := strings.TrimSpace(lines[0])
 		typ := strings.TrimSpace(lines[1])
-		if typ == "" {
-			typ = "sendText"
-		}
 		text := ""
 		if len(lines) == 3 {
 			text = strings.TrimRight(lines[2], "\n")
+		}
+		// Two-line form (sid + text) means "deliver this message" — line 2
+		// is the TEXT, not a type. The strict 3-line form stays canonical,
+		// but a hand-written 2-line file must not be swallowed silently.
+		if typ != "sendText" && typ != "stop" && len(lines) == 2 {
+			text = lines[1]
+			typ = "sendText"
+		}
+		if typ == "" {
+			typ = "sendText"
 		}
 		if typ != "stop" && strings.TrimSpace(text) == "" {
 			return
@@ -272,6 +282,96 @@ func watchPendingSendFile() {
 			time.Sleep(2 * time.Second)
 		}
 	}()
+}
+
+// watchPendingCreateFile mirrors the outbox for NEW sessions: line 1 is the
+// workspace path, line 2+ the first user message. Exists because the
+// web-remote composer gates NEW-task sends behind the desktop coding-plan
+// account state (model picker disabled = send disabled); a headless operator
+// submits a task by dropping this file instead of driving the gated UI.
+func watchPendingCreateFile() {
+	path := os.Getenv("ZQF_PENDING_CREATE")
+	if path == "" {
+		if cache, err := os.UserCacheDir(); err == nil {
+			path = filepath.Join(cache, "zcode-quick-web-forward", "pending-create.txt")
+		} else {
+			path = "zqf-pending-create.txt"
+		}
+	}
+	submit := func() {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		_ = os.Remove(path)
+		lines := strings.SplitN(string(b), "\n", 2)
+		ws := strings.TrimSpace(lines[0])
+		text := ""
+		if len(lines) == 2 {
+			text = strings.TrimRight(lines[1], "\n")
+		}
+		if ws == "" || strings.TrimSpace(text) == "" {
+			return
+		}
+		go func() {
+			time.Sleep(3 * time.Second)
+			officialInjectCreateSession(ws, text)
+		}()
+	}
+	go func() {
+		for {
+			submit()
+			time.Sleep(2 * time.Second)
+		}
+	}()
+}
+
+// officialInjectCreateSession injects the page's createSession flow (a
+// sendConversationCommandV4 envelope with type=createSession) using the
+// page's persisted client identity, so the minted session belongs to the
+// same client the phone talks as.
+func officialInjectCreateSession(workspace, text string) {
+	officialState.mu.Lock()
+	b := officialState.active
+	clientID := officialState.persistedClientID
+	officialState.mu.Unlock()
+	if b == nil {
+		fmt.Println("zcode: recovery: create-session inject skipped (no host)")
+		return
+	}
+	if clientID == "" {
+		if rec := b.rec; rec != nil {
+			rec.mu.Lock()
+			for _, c := range rec.clientBySession {
+				if c != "" {
+					clientID = c
+					break
+				}
+			}
+			rec.mu.Unlock()
+		}
+	}
+	if clientID == "" {
+		clientID = "client-" + uuidNew()
+	}
+	env := map[string]any{
+		"commandId": uuidNew(),
+		"clientId":  clientID,
+		// Nullable but REQUIRED key — omitting it makes the engine's strict
+		// schema drop the whole command silently.
+		"sessionId": nil,
+		"type":      "createSession",
+		"payload": map[string]any{
+			"workspaceId": workspace,
+			"firstInput":  map[string]any{"text": text},
+		},
+		"issuedAt": time.Now().UnixMilli(),
+	}
+	arg := map[string]any{"workspacePath": workspace, "envelope": env}
+	c := &relay.ChannelCall{Kind: relay.KindPromise, ID: b.rec.mintID(),
+		ChannelName: "zcode-agent", Name: "sendConversationCommandV4", Arg: arg}
+	fmt.Printf("zcode: recovery: injecting createSession for %s (%d chars)\n", workspace, len(text))
+	forwardCallToOfficialHost(c)
 }
 
 // hostForwardEnabled gates the host↔phone pipe. The host answers only part
@@ -471,6 +571,15 @@ func forwardCallToOfficialHost(c *relay.ChannelCall) bool {
 		}
 		b, _ := json.Marshal(c.Arg)
 		out := relay.ChannelCallBytes(c)
+		// Remember the encoded frame of every event-listen: the host scopes
+		// listens per service-port attachment, so after a reattach the new
+		// port starts deaf unless the listens are replayed onto it (see
+		// officialReattach).
+		if c.Kind == relay.KindEventListen {
+			if rec := officialActiveRec(); rec != nil {
+				rec.recordListenFrame(c.ID, out)
+			}
+		}
 		// Remember the encoded bytes of promise calls: if the host answers
 		// fault.connection.handshakeRequired (phone sent before the host
 		// pipe finished handshaking — typical right after a daemon restart)
