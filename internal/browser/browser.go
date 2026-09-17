@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -304,31 +303,6 @@ func launchOnPort(chrome, port string) (*Browser, error) {
 	}
 	_ = cmd.Process.Kill()
 	return nil, fmt.Errorf("chromium CDP port %s not ready", port)
-}
-
-// killOrphanedChromium reaps chromium processes left by earlier daemon runs
-// (temp profiles named zqf-chromium-*). Only our own orphaned instances are
-// matched, never user-facing browsers.
-func killOrphanedChromium() {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if !isPID(e.Name()) {
-			continue
-		}
-		cmdline, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(cmdline), "zqf-chromium-") &&
-			strings.Contains(string(cmdline), "remote-debugging-port") {
-			if p, err := strconv.Atoi(e.Name()); err == nil {
-				_ = syscall.Kill(p, syscall.SIGKILL)
-			}
-		}
-	}
 }
 
 func isPID(name string) bool {

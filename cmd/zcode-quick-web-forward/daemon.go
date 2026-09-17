@@ -103,7 +103,7 @@ func stopDaemon() {
 		}
 		seen[l] = true
 		if pid := daemonPID(l); pid != 0 {
-			_ = syscall.Kill(pid, syscall.SIGTERM)
+			_ = killPID(pid)
 			fmt.Printf("zcode: daemon %d stopped (log %s)\n", pid, l)
 			stopped = true
 		}
@@ -141,7 +141,7 @@ func daemonMain(args []string, logHint string) {
 	defer f.Close()
 	child.Stdout = f
 	child.Stderr = f
-	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	setSysProcAttr(child)
 	if err := child.Start(); err != nil {
 		fatal("daemonize start: %v", err)
 	}

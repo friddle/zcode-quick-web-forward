@@ -44,7 +44,7 @@ func acquireRemoteLock() {
 	if err != nil {
 		return
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if !lockExclusive(f) {
 		holder := strings.TrimSpace(string(mustReadFile(path)))
 		if holder == "" {
 			holder = "unknown"
