@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,7 @@ type Browser struct {
 	wsURL       string
 	uiPort      string // chrome-driverless control service (9223) host port
 	viaControl  bool   // docker mode: CDP only reachable via the control service bridge
+	adopted     bool   // docker mode: container predates this daemon — never removed
 }
 
 // Tab is one chromium page/target.
@@ -139,12 +141,20 @@ func (b *Browser) Wait() {
 	}
 }
 
-// LaunchDocker starts the chrome-driverless container and attaches to its CDP
-// endpoint. The container launches Chromium lazily, so we warm it up via the
-// control service (pw/init_browser) before polling CDP.
+// LaunchDocker attaches to a chrome-driverless container. Default policy is
+// REUSE: if a running container of the same image already serves a healthy
+// control-service bridge (host port mapped to 9223), it is adopted instead of
+// spawning yet another container. Only when no healthy candidate exists does
+// a fresh container get started; Set ZQF_CHROME_FRESH=1 to bypass reuse.
 func LaunchDocker(image string) (*Browser, error) {
 	if image == "" {
 		image = DefaultDockerImage
+	}
+	if os.Getenv("ZQF_CHROME_FRESH") == "" {
+		if b := findReusableDockerChrome(image); b != nil {
+			fmt.Printf("zcode: browser: adopting existing chrome-driverless container %s (bridge port %s)\n", b.dockerName, b.uiPort)
+			return b, nil
+		}
 	}
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -159,6 +169,129 @@ func LaunchDocker(image string) (*Browser, error) {
 		lastErr = err
 	}
 	return nil, fmt.Errorf("docker chrome not ready: %w", lastErr)
+}
+
+// findReusableDockerChrome looks for a running chrome-driverless container of
+// the requested image (same repository, tag tolerated to differ) whose
+// control-service bridge is reachable on localhost, and returns an adopted
+// Browser for it. Preference: containers this daemon started before
+// (zqf-chrome-*), then any other container of the same image.
+func findReusableDockerChrome(image string) *Browser {
+	repo := image
+	if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+		repo = repo[:i]
+	}
+	out, err := exec.Command("docker", "ps", "--format",
+		"{{.Names}}\t{{.Image}}\t{{.Ports}}").Output()
+	if err != nil {
+		return nil
+	}
+	type cand struct {
+		name, image string
+		ports       []string
+	}
+	var cands []cand
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) < 3 {
+			continue
+		}
+		name, cimg, ports := f[0], f[1], f[2]
+		crepo := cimg
+		if i := strings.LastIndex(crepo, ":"); i > strings.LastIndex(crepo, "/") {
+			crepo = crepo[:i]
+		}
+		if crepo != repo {
+			continue
+		}
+		// Host ports mapped to the in-container control service (9223).
+		var hostPorts []string
+		for _, m := range strings.Split(ports, ",") {
+			m = strings.TrimSpace(m)
+			i := strings.Index(m, "->9223/tcp")
+			if i <= 0 {
+				continue
+			}
+			host := m[:i] // e.g. "127.0.0.1:34005" or "0.0.0.0:9224"
+			if j := strings.LastIndex(host, ":"); j >= 0 {
+				hostPorts = append(hostPorts, host[j+1:])
+			}
+		}
+		if len(hostPorts) == 0 {
+			continue
+		}
+		cands = append(cands, cand{name: name, image: cimg, ports: hostPorts})
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		pi, pj := strings.HasPrefix(cands[i].name, "zqf-chrome-"), strings.HasPrefix(cands[j].name, "zqf-chrome-")
+		if pi != pj {
+			return pi
+		}
+		return cands[i].name < cands[j].name
+	})
+	for _, c := range cands {
+		for _, port := range c.ports {
+			resp, err := http.Get("http://127.0.0.1:" + port + "/health")
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			b := &Browser{
+				dockerName:  c.name,
+				generation:  time.Now().UnixMilli(),
+				id:          fmt.Sprintf("iab:%d", time.Now().UnixMilli()),
+				tabs:        map[string]*Tab{},
+				uiPort:      port,
+				viaControl:  true,
+				adopted:     true,
+				debuggerURL: "http://127.0.0.1:" + port,
+			}
+			if err := warmAndAwaitBridge(b, 60*time.Second); err != nil {
+				continue
+			}
+			return b
+		}
+	}
+	return nil
+}
+
+// warmAndAwaitBridge asks the control service to launch Chromium (it starts
+// lazily) and waits until the DevTools bridge reports at least one page
+// target, then refreshes the tab list.
+func warmAndAwaitBridge(b *Browser, timeout time.Duration) error {
+	payload := `{"method":"pw/init_browser"}`
+	req, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%s/mcp", b.uiPort), strings.NewReader(payload))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 150 * time.Second}
+		if resp, err := client.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(b.debuggerURL + "/devtools/targets")
+		if err == nil {
+			var body struct {
+				Targets []map[string]any `json:"targets"`
+				Error   string           `json:"error"`
+			}
+			err = json.NewDecoder(resp.Body).Decode(&body)
+			resp.Body.Close()
+			if err == nil && body.Error == "" && len(body.Targets) > 0 {
+				b.refreshTabs()
+				return nil
+			}
+			lastErr = fmt.Errorf("devtools bridge: %v", err)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("docker chrome devtools bridge on port %s not ready: %v", b.uiPort, lastErr)
 }
 
 func launchDockerOnPort(image, uiPort string) (*Browser, error) {
@@ -195,45 +328,11 @@ func launchDockerOnPort(image, uiPort string) (*Browser, error) {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Warm up: ask the control service to launch Chromium (it starts lazily).
-	go func() {
-		payload := `{"method":"pw/init_browser"}`
-		req, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("http://127.0.0.1:%s/mcp", uiPort), strings.NewReader(payload))
-		if err != nil {
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		client := &http.Client{Timeout: 150 * time.Second}
-		if resp, err := client.Do(req); err == nil {
-			resp.Body.Close()
-		}
-	}()
-
-	// Wait for the DevTools bridge to report at least one page target.
-	deadline = time.Now().Add(150 * time.Second)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(b.debuggerURL + "/devtools/targets")
-		if err == nil {
-			var body struct {
-				Targets []map[string]any `json:"targets"`
-				Error   string           `json:"error"`
-			}
-			err = json.NewDecoder(resp.Body).Decode(&body)
-			resp.Body.Close()
-			if err == nil && body.Error == "" && len(body.Targets) > 0 {
-				b.refreshTabs()
-				return b, nil
-			}
-			lastErr = fmt.Errorf("devtools bridge: %v", err)
-		} else {
-			lastErr = err
-		}
-		time.Sleep(500 * time.Millisecond)
+	if err := warmAndAwaitBridge(b, 150*time.Second); err != nil {
+		_ = exec.Command("docker", "rm", "-f", name).Run()
+		return nil, err
 	}
-	_ = exec.Command("docker", "rm", "-f", name).Run()
-	return nil, fmt.Errorf("docker chrome devtools bridge on port %s not ready: %v", uiPort, lastErr)
+	return b, nil
 }
 
 func freePort() (string, error) {
@@ -826,9 +925,14 @@ func (b *Browser) cdpCall(wsURL, targetID, method string, params map[string]any)
 	return nil, fmt.Errorf("cdp %s: timeout", method)
 }
 
-// Close shuts down chromium (local process or docker container).
+// Close shuts down chromium (local process or docker container). Adopted
+// containers (found healthy at launch) are left running so the next daemon
+// start reuses them instead of paying the pull+boot cost again.
 func (b *Browser) Close() {
 	if b.dockerName != "" {
+		if b.adopted {
+			return
+		}
 		_ = exec.Command("docker", "rm", "-f", b.dockerName).Run()
 		return
 	}

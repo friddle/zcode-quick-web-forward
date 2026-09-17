@@ -222,7 +222,16 @@ func maybeStartOfficialHost(engine *relay.BridgeEngine, sender *relaySender, nod
 // before a restart is resubmitted the same way the page would. The file is
 // consumed on read.
 func watchPendingSendFile() {
-	const path = "/root/data/zqf-pending-send.txt"
+	path := os.Getenv("ZQF_PENDING_SEND")
+	if path == "" {
+		// Next to the relay state (webremote-state.json) on every deployment;
+		// the historic /root/data path was CP-installation specific.
+		if cache, err := os.UserCacheDir(); err == nil {
+			path = filepath.Join(cache, "zcode-quick-web-forward", "pending-send.txt")
+		} else {
+			path = "zqf-pending-send.txt"
+		}
+	}
 	submit := func() {
 		b, err := os.ReadFile(path)
 		if err != nil {
