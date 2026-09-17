@@ -127,6 +127,7 @@ type officialRecovery struct {
 	engineKilledAt   int64                       // unix ms of last watchdog engine kill
 	watchdogStarted  bool                        // single watchdog goroutine per host bridge
 	lastPageHandshakeAt int64                    // unix ms a real page last ran hello/initialize on this connection
+	resurrectCount   map[string]int              // sessionId -> consecutive dead-turn resurrections (progress resets)
 }
 
 // initMaps makes every map field. officialRecovery is constructed once at

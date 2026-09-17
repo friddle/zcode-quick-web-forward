@@ -20,9 +20,10 @@ func (r *officialRecovery) noteTurnProgressLocked(sid string, now int64) {
 		r.turnProgressAt = map[string]int64{}
 	}
 	r.turnProgressAt[sid] = now
-	// Real progress retires the escalation ladder.
+	// Real progress retires the escalation ladder and the death spiral.
 	r.turnStallProbe = map[string]int{}
 	r.turnKickCount = map[string]int{}
+	delete(r.resurrectCount, sid)
 }
 
 func (r *officialRecovery) turnProgressMs(sid string) int64 {
@@ -98,6 +99,13 @@ func (r *officialRecovery) noteStallProbe(sid string) int {
 		r.turnStallProbe = map[string]int{}
 	}
 	r.turnStallProbe[sid]++
+	return r.turnStallProbe[sid]
+}
+
+// stallProbeCount reads the consecutive-probe counter without mutating it.
+func (r *officialRecovery) stallProbeCount(sid string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.turnStallProbe[sid]
 }
 
@@ -192,6 +200,18 @@ func (r *officialRecovery) noteEngineKill(sid string, now int64) {
 	r.turnKickCount = map[string]int{}
 	r.turnStallProbe = map[string]int{}
 	r.mu.Unlock()
+}
+
+// noteResurrect counts consecutive silent-turn-death resurrections for a
+// session; resets when real progress (noteTurnProgress) is observed.
+func (r *officialRecovery) noteResurrect(sid string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.resurrectCount == nil {
+		r.resurrectCount = map[string]int{}
+	}
+	r.resurrectCount[sid]++
+	return r.resurrectCount[sid]
 }
 
 func (r *officialRecovery) engineKillAllowed(now int64) bool {

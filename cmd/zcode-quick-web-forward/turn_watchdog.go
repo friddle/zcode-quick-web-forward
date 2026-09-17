@@ -76,15 +76,40 @@ func turnWatchdogTick(b *officialHostBridge) {
 	now := time.Now().UnixMilli()
 	for _, sid := range rec.runningSessionsSnapshot() {
 		facts := parseSessionFacts(rec.snapFor(sid))
-		// Unknown facts: no authoritative signal — observe, never act.
+		// Unknown facts: the host only stashes readSession snapshots for
+		// tasks the page has OPEN — a headless send was invisible here and
+		// wedged silently. Fetch rows once per probe cycle instead: the
+		// response drives recordTurnRunning (correct running state) and
+		// surfaces any hidden permission interactions.
 		if facts.status == "" {
+			if rec.noteStallProbe(sid) == 1 {
+				fmt.Printf("zcode: watchdog: %s optimistic running but no facts — fetching rows\n", shortSid(sid))
+				requestConversationRows(b, sid)
+			} else if probes := rec.stallProbeCount(sid); probes > turnStallProbeMax {
+				// Facts never arrived but the turn was marked running:
+				// treat as stalled and run the standard ladder.
+				rec.handleNoFactsStall(b, sid, now)
+			}
 			continue
 		}
 		if facts.status != "running" && facts.status != "in-progress" && facts.status != "active" {
-			// Engine says the turn ended; if a retry was staged for a wedge
-			// that has now cleared, fire it.
+			// Engine says the turn ended; reconcile the optimistic running
+			// mark (otherwise the session stays in the scan forever).
+			weStarted := false
+			rec.mu.Lock()
+			if rec.turnRunning[sid] {
+				rec.recordTurnRunning(sid, false)
+				weStarted = true
+			}
+			rec.mu.Unlock()
 			rec.clearTurnStall(sid, now)
-			maybeRetryStagedInput(b, sid, "turn ended on its own")
+			// weStarted means OUR injected send never produced a completed
+			// response — the turn died silently (observed pattern: status
+			// flips to idle with the assistant row left unfinished). The
+			// recordTurnRunning(false) transition above already fired the
+			// staged-input retry; the retry counter inside caps runaway
+			// loops with an engine kill.
+			_ = weStarted
 			continue
 		}
 		// A pending interaction means the turn is waiting on a HUMAN —
@@ -154,11 +179,33 @@ func verifyStopKickedTurn(b *officialHostBridge, sid string) {
 	fmt.Printf("zcode: watchdog: %s still running after stop-kick — escalation armed\n", shortSid(sid))
 }
 
+// handleNoFactsStall unwedges a session whose optimistic running mark never
+// met any facts: the standard stop clears whatever the engine still holds.
+func (r *officialRecovery) handleNoFactsStall(b *officialHostBridge, sid string, now int64) {
+	kicks, sinceKick := r.turnKickState(sid)
+	if sinceKick < turnKickCooldownMs {
+		return
+	}
+	if kicks >= turnKickMax {
+		killWedgedEngine(b, sid)
+		return
+	}
+	r.noteTurnKick(sid, now)
+	fmt.Printf("zcode: watchdog: %s no facts after %d kicks — sending blind stop\n", shortSid(sid), kicks)
+	officialInjectCommand(sid, "stop", map[string]any{}, "")
+}
+
 // maybeRetryStagedInput resubmits the captured last user input once the turn
 // actually ended — the 修复后重试 half of the ladder. Only text the daemon
-// itself observed being sent is retried, exactly once per stall episode.
+// itself injected is retried, capped at 4 consecutive dead turns before the
+// engine itself gets killed (host respawn clears a sick runtime).
 func maybeRetryStagedInput(b *officialHostBridge, sid, why string) {
 	rec := b.rec
+	if n := rec.noteResurrect(sid); n > 4 {
+		fmt.Printf("zcode: watchdog: %s died %d times in a row — killing engine for a clean respawn\n", shortSid(sid), n-1)
+		killWedgedEngine(b, sid)
+		return
+	}
 	text, ok := rec.takeStagedRetry(sid)
 	if !ok || text == "" {
 		return

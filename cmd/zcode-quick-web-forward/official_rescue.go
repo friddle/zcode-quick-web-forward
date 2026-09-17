@@ -429,6 +429,17 @@ func officialInjectCommand(sid, typ string, payload map[string]any, clientID str
 	}
 	arg := map[string]any{"workspacePath": ws, "envelope": env}
 	c := &relay.ChannelCall{Kind: relay.KindPromise, ID: b.rec.mintID(), ChannelName: "zcode-agent", Name: "sendConversationCommandV4", Arg: arg}
+	// Optimistically mark the turn running so the turn-stall watchdog
+	// supervises it: turnRunning otherwise only updates on rows fetches, and
+	// a headless send with nobody watching the task was invisible to the
+	// watchdog — exactly the turns that wedge silently.
+	if typ == "sendText" {
+		b.rec.mu.Lock()
+		b.rec.recordTurnRunning(sid, true)
+		// Stage the text for the watchdog's dead-turn resurrect.
+		b.rec.setStagedRetry(sid, payload["text"].(string))
+		b.rec.mu.Unlock()
+	}
 	// The interceptor's sendText bookkeeping (optimistic row / queue mirror)
 	// must not fire for our own inject: a rescue resubmit of an undelivered
 	// item would otherwise be re-queued behind a stale optimistic running

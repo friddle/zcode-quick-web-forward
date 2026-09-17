@@ -415,9 +415,6 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" && !r.selfInjectedCall(c.ID) {
 				cmdID, _ := env["commandId"].(string)
 				clientID, _ := env["clientId"].(string)
-				// Watchdog retry source: the newest user text seen for this
-				// session is what an unwedge-and-retry replays.
-				r.setStagedRetry(sid, text)
 				r.mu.Lock()
 				if r.turnRunning == nil {
 					r.turnRunning = map[string]bool{}

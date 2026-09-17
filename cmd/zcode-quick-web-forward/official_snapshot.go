@@ -522,6 +522,21 @@ func (r *officialRecovery) recordTurnRunning(sid string, running bool) {
 	r.turnRunning[sid] = running
 	if prev != running {
 		r.noteTurnProgressLocked(sid, time.Now().UnixMilli())
+		// A turn ended while a daemon-injected input was still staged and
+		// unconsumed: the turn died silently (assistant row unfinished) —
+		// resurrect it. Async: this runs under r.mu.
+		if !running && r.stagedRetry[sid] != "" && !r.stagedRetryTaken[sid] {
+			sidCopy := sid
+			go func() {
+				time.Sleep(time.Second)
+				officialState.mu.Lock()
+				b := officialState.active
+				officialState.mu.Unlock()
+				if b != nil {
+					maybeRetryStagedInput(b, sidCopy, "turn ended with staged input")
+				}
+			}()
+		}
 	}
 	if prev == running {
 		return
