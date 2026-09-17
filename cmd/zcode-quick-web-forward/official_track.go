@@ -48,12 +48,21 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 		r.recordListen(c.ID)
 		fmt.Println("zcode: recovery: onDynamicConversationFrame listen id", c.ID)
 	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "helloConversationV4":
-		// The page is running its own handshake. A previous daemon-side
-		// bootstrap may have bound a connection to a client id — a fresh
-		// attachment (fresh connection, empty registry) lets the page's
-		// hello + initialize land without fault.connection.clientChanged.
-		fmt.Println("zcode: recovery: page-initiated handshake — reattaching service port")
-		officialReattach()
+		// NOTE: do NOT reattach here. A reattach resets the connection's
+		// handshake registry, and with more than one phone/client the
+		// handshakes take turns invalidating each other — every injected
+		// command then loses the race against the next reattach (observed
+		// as endless "handshakeRequired → replay → reattach" churn). The
+		// page's hello is forwarded like any other call; the retry loop
+		// refreshes injected commands to the latest handshake client.
+		fmt.Println("zcode: recovery: page-initiated handshake observed")
+		r.mu.Lock()
+		r.lastPageHandshakeAt = time.Now().UnixMilli()
+		r.mu.Unlock()
+		if verboseLogs {
+			out := relay.ChannelCallBytes(c)
+			fmt.Printf("zcode: recovery: PAGE hello frame (%dB): %x\n", len(out), out[:min(64, len(out))])
+		}
 	case c.Kind == relay.KindPromise && c.ChannelName == "zcode-agent" && c.Name == "initializeConversationV4":
 		// The page's own handshake carries its persistent clientId directly
 		// in the args — the most authoritative source for the daemon-side
@@ -406,6 +415,9 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 			if text, _ := env["payload"].(map[string]any)["text"].(string); text != "" && !r.selfInjectedCall(c.ID) {
 				cmdID, _ := env["commandId"].(string)
 				clientID, _ := env["clientId"].(string)
+				// Watchdog retry source: the newest user text seen for this
+				// session is what an unwedge-and-retry replays.
+				r.setStagedRetry(sid, text)
 				r.mu.Lock()
 				if r.turnRunning == nil {
 					r.turnRunning = map[string]bool{}
@@ -447,16 +459,16 @@ func trackOfficialRecoveryCall(c *relay.ChannelCall) {
 							// deleteQueueItem/reorderQueueItem/sendQueuedNow —
 							// any other prefix makes the engine throw
 							// queue.itemMissing and every queue button no-ops.
-							"queueItemId":     "queue_" + cmdID,
-							"clientId":        clientID,
-							"kind":            "sendText",
-							"text":            text,
-							"attachments":     []any{},
-							"delivery":        map[string]any{"requested": "auto", "admitted": "queue"},
-							"order":           map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
-							"steer":           map[string]any{"state": "notRequested"},
-							"dispatch":        map[string]any{"state": "queued"},
-							"admittedAt":      time.Now().UnixMilli(),
+							"queueItemId": "queue_" + cmdID,
+							"clientId":    clientID,
+							"kind":        "sendText",
+							"text":        text,
+							"attachments": []any{},
+							"delivery":    map[string]any{"requested": "auto", "admitted": "queue"},
+							"order":       map[string]any{"admissionSeq": r.admSeq, "queuePosition": len(r.queuedSends[sid])},
+							"steer":       map[string]any{"state": "notRequested"},
+							"dispatch":    map[string]any{"state": "queued"},
+							"admittedAt":  time.Now().UnixMilli(),
 						}
 						r.queuedSends[sid] = append(r.queuedSends[sid], item)
 						fmt.Printf("zcode: recovery: queued send for %s (%d queued)\n", sid, len(r.queuedSends[sid]))
@@ -675,7 +687,8 @@ func (r *officialRecovery) replayWithRevision(b *officialHostBridge, pr *pending
 // cleanup in inspectOfficialResponse.
 func (r *officialRecovery) retryUntilReady(b *officialHostBridge, id int, pr *pendingRawCall) {
 	for _, d := range []time.Duration{200 * time.Millisecond, 400 * time.Millisecond, 800 * time.Millisecond,
-		1500 * time.Millisecond, 3 * time.Second, 5 * time.Second, 8 * time.Second, 12 * time.Second} {
+		1500 * time.Millisecond, 3 * time.Second, 5 * time.Second, 8 * time.Second, 12 * time.Second,
+		15 * time.Second, 15 * time.Second, 20 * time.Second, 20 * time.Second, 30 * time.Second} {
 		time.Sleep(d)
 		r.mu.Lock()
 		still := r.retrying[id]
@@ -687,6 +700,25 @@ func (r *officialRecovery) retryUntilReady(b *officialHostBridge, id int, pr *pe
 			fmt.Printf("zcode: recovery: retry %d (%s) aborted — host gone\n", id, pr.typ)
 			return
 		}
+		// The host binds commands to the client of the LATEST handshake.
+		// Between the original call and this replay the page may have
+		// re-handshook with a new client — refresh the envelope's clientId
+		// and re-encode, or the replay dies on clientMismatch forever.
+		if pr.typ == "sendText" || pr.typ == "stop" {
+			if env, _ := argMap(pr.call.Arg)["envelope"].(map[string]any); env != nil {
+				officialState.mu.Lock()
+				fresh := officialState.persistedClientID
+				officialState.mu.Unlock()
+				if fresh != "" {
+					env["clientId"] = fresh
+					pr.raw = relay.ChannelCallBytes(pr.call)
+				}
+			}
+		}
+		// Each round re-arm the connection handshake if it lapsed (port
+		// reattach, host restart) — bootstrapHostHandshake rate-limits
+		// itself, so calling it per round is cheap.
+		bootstrapHostHandshake(b)
 		fmt.Printf("zcode: recovery: replaying call %d (%s) after handshake rejection\n", id, pr.typ)
 		forwardRawToOfficialHost(pr.raw)
 	}

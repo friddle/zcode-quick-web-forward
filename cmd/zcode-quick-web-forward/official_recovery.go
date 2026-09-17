@@ -196,6 +196,47 @@ func (r *officialRecovery) recordListen(id int) {
 	r.mu.Unlock()
 }
 
+// recordListenFrame keeps the FINAL encoded frame of every event-listen call
+// so a service-port reattach can re-register them on the fresh port. The
+// host scopes event listens per attachment: after a reattach (page reload,
+// bridge-open, handshake reset) the new port starts with ZERO listens, so
+// every live conversation frame the page cares about was silently dropped —
+// the phone's view froze at the pre-reattach state and only a manual reload
+// recovered it.
+func (r *officialRecovery) recordListenFrame(id int, raw []byte) {
+	if id == 0 || len(raw) == 0 {
+		return
+	}
+	r.mu.Lock()
+	if r.listenFrames == nil {
+		r.listenFrames = map[int][]byte{}
+	}
+	if _, ok := r.listenFrames[id]; !ok {
+		r.listenFrameOrder = append(r.listenFrameOrder, id)
+		if len(r.listenFrameOrder) > 32 {
+			dead := r.listenFrameOrder[0]
+			r.listenFrameOrder = r.listenFrameOrder[1:]
+			delete(r.listenFrames, dead)
+		}
+	}
+	r.listenFrames[id] = raw
+	r.mu.Unlock()
+}
+
+// listenFramesForReplay snapshots the recorded listen frames in registration
+// order.
+func (r *officialRecovery) listenFramesForReplay() [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([][]byte, 0, len(r.listenFrameOrder))
+	for _, id := range r.listenFrameOrder {
+		if raw, ok := r.listenFrames[id]; ok {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
 func (r *officialRecovery) subFor(sid string) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

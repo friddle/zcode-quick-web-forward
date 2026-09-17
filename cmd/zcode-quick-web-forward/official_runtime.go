@@ -232,6 +232,18 @@ func officialReattach() {
 	}, id)
 	b.h.PortOpen(id)
 	fmt.Printf("zcode: official-host reattached service port %s\n", id)
+	// The new attachment starts with zero event listens — replay every listen
+	// the page ever registered so live conversation/workspace frames keep
+	// flowing without the page having to reload.
+	if rec := b.rec; rec != nil {
+		frames := rec.listenFramesForReplay()
+		for _, raw := range frames {
+			b.h.RawPortData(id, raw)
+		}
+		if len(frames) > 0 {
+			fmt.Printf("zcode: official-host replayed %d event listens onto %s\n", len(frames), id)
+		}
+	}
 }
 
 // officialCallAnswered reports whether the host replied to a promise call.
