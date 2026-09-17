@@ -1,5 +1,7 @@
 # zcode-quick-web-forward
 
+English | [简体中文](README.zh-CN.md)
+
 > ⚠️ **BETA SOFTWARE — USE AT YOUR OWN RISK** ⚠️
 >
 > This project is in **active beta**. The web-remote protocol it speaks is
