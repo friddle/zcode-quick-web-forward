@@ -261,7 +261,19 @@ func watchPendingSendFile() {
 		if typ == "" {
 			typ = "sendText"
 		}
-		if typ != "stop" && strings.TrimSpace(text) == "" {
+		if typ == "mode" {
+			// `mode` flips the session's collaboration mode (build/edit/
+			// plan/yolo) — the page's own switchCollaborationMode never
+			// reaches the engine behind the composer's send gate, so the
+			// outbox is the reliable path. `text` carries the mode name.
+			mode := strings.TrimSpace(text)
+			if mode == "" {
+				return
+			}
+			typ = "switchCollaborationMode"
+			text = mode
+		}
+		if typ != "stop" && typ != "switchCollaborationMode" && strings.TrimSpace(text) == "" {
 			return
 		}
 		go func() {
@@ -271,6 +283,9 @@ func watchPendingSendFile() {
 			payload := map[string]any{}
 			if typ == "sendText" {
 				payload["text"] = text
+			}
+			if typ == "switchCollaborationMode" {
+				payload["mode"] = strings.TrimSpace(text)
 			}
 			fmt.Printf("zcode: recovery: outbox submit %s (%d chars) to %s\n", typ, len(text), sid)
 			officialInjectCommand(sid, typ, payload, "")
@@ -313,9 +328,27 @@ func watchPendingCreateFile() {
 		if ws == "" || strings.TrimSpace(text) == "" {
 			return
 		}
+		// Optional first line of the body: `mode=<build|edit|plan|yolo>`
+		// seeds the session's collaboration mode (firstInput.mode) so
+		// headless tasks don't stall on permission prompts. Default comes
+		// from ZQF_CREATE_MODE (unset = engine default).
+		mode := os.Getenv("ZQF_CREATE_MODE")
+		if strings.HasPrefix(text, "mode=") {
+			rest := text
+			if i := strings.IndexByte(rest, '\n'); i >= 0 {
+				mode = strings.TrimSpace(rest[len("mode="):i])
+				text = strings.TrimLeft(rest[i+1:], "\n")
+			} else {
+				mode = strings.TrimSpace(rest[len("mode="):])
+				text = ""
+			}
+		}
+		if strings.TrimSpace(text) == "" {
+			return
+		}
 		go func() {
 			time.Sleep(3 * time.Second)
-			officialInjectCreateSession(ws, text)
+			officialInjectCreateSession(ws, text, mode)
 		}()
 	}
 	go func() {
@@ -330,7 +363,7 @@ func watchPendingCreateFile() {
 // sendConversationCommandV4 envelope with type=createSession) using the
 // page's persisted client identity, so the minted session belongs to the
 // same client the phone talks as.
-func officialInjectCreateSession(workspace, text string) {
+func officialInjectCreateSession(workspace, text, mode string) {
 	officialState.mu.Lock()
 	b := officialState.active
 	clientID := officialState.persistedClientID
@@ -354,6 +387,10 @@ func officialInjectCreateSession(workspace, text string) {
 	if clientID == "" {
 		clientID = "client-" + uuidNew()
 	}
+	first := map[string]any{"text": text}
+	if mode != "" {
+		first["mode"] = mode
+	}
 	env := map[string]any{
 		"commandId": uuidNew(),
 		"clientId":  clientID,
@@ -363,7 +400,7 @@ func officialInjectCreateSession(workspace, text string) {
 		"type":      "createSession",
 		"payload": map[string]any{
 			"workspaceId": workspace,
-			"firstInput":  map[string]any{"text": text},
+			"firstInput":  first,
 		},
 		"issuedAt": time.Now().UnixMilli(),
 	}
