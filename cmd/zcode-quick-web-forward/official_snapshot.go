@@ -521,11 +521,19 @@ func (r *officialRecovery) recordTurnRunning(sid string, running bool) {
 	prev := r.turnRunning[sid]
 	r.turnRunning[sid] = running
 	if prev != running {
+		// The resurrect gate: only a turn that produced NO observable output
+		// since its input was staged counts as silently dead. A normal
+		// completion (tokens moved, frames flowed) must NOT resurrect — the
+		// ungated version re-injected every successfully finished task once,
+		// duplicating it.
+		progressAt := r.turnProgressAt[sid]
+		stagedAt := r.stagedRetryAt[sid]
+		hadOutput := stagedAt > 0 && progressAt >= stagedAt
 		r.noteTurnProgressLocked(sid, time.Now().UnixMilli())
 		// A turn ended while a daemon-injected input was still staged and
 		// unconsumed: the turn died silently (assistant row unfinished) —
 		// resurrect it. Async: this runs under r.mu.
-		if !running && r.stagedRetry[sid] != "" && !r.stagedRetryTaken[sid] {
+		if !running && !hadOutput && r.stagedRetry[sid] != "" && !r.stagedRetryTaken[sid] {
 			sidCopy := sid
 			go func() {
 				time.Sleep(time.Second)

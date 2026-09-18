@@ -279,6 +279,7 @@ func watchPendingSendFile() {
 		go func() {
 			// Give the host's service port a moment after a fresh boot; the
 			// forward path buffers until ready anyway.
+			journalOutboxText(sid, text)
 			time.Sleep(3 * time.Second)
 			payload := map[string]any{}
 			if typ == "sendText" {

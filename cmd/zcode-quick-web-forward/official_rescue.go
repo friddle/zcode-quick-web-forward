@@ -434,11 +434,17 @@ func officialInjectCommand(sid, typ string, payload map[string]any, clientID str
 	// a headless send with nobody watching the task was invisible to the
 	// watchdog — exactly the turns that wedge silently.
 	if typ == "sendText" {
+		// recordTurnRunning needs the optimistic running mark; setStagedRetry
+		// takes rec.mu ITSELF — Go mutexes are not reentrant, so holding the
+		// wrapper lock across it self-deadlocked every sendText inject (the
+		// stuck goroutine held rec.mu forever and every dump showed the
+		// holder disguised as a waiter). Sequential acquisitions, no nesting.
+		text, _ := payload["text"].(string)
 		b.rec.mu.Lock()
 		b.rec.recordTurnRunning(sid, true)
-		// Stage the text for the watchdog's dead-turn resurrect.
-		b.rec.setStagedRetry(sid, payload["text"].(string))
 		b.rec.mu.Unlock()
+		// Stage the text for the watchdog's dead-turn resurrect.
+		b.rec.setStagedRetry(sid, text)
 	}
 	// The interceptor's sendText bookkeeping (optimistic row / queue mirror)
 	// must not fire for our own inject: a rescue resubmit of an undelivered

@@ -10,6 +10,9 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,11 +21,37 @@ import (
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 )
 
+// daemonLockChurn counts successful Lock acquisitions across the daemon's
+// hot mutexes. The canary reads it: a lock that fails TryLock while churn
+// advances is merely CONTENDED (Go starvation mode hands the mutex
+// waiter→waiter and TryLock never succeeds) — healthy. Held with churn
+// frozen for a full sample window is a real deadlock.
+var daemonLockChurn atomic.Int64
+
+// lockHolderSites records, per countingMutex, the source line of its most
+// recent successful Lock. A wedged mutex whose owner goroutine already
+// exited (Lock without Unlock on some path) has NO owner in a goroutine
+// dump — the recorded site is the only fingerprint left. The canary prints
+// it before exiting.
+var lockHolderSites sync.Map // *countingMutex -> string
+
+// countingMutex is a sync.Mutex that feeds daemonLockChurn on every acquire.
+// Swap-in compatible: existing `x.mu.Lock()` call sites need no changes.
+type countingMutex struct{ sync.Mutex }
+
+func (m *countingMutex) Lock() {
+	m.Mutex.Lock()
+	if _, file, line, ok := runtime.Caller(1); ok {
+		lockHolderSites.Store(m, fmt.Sprintf("%s:%d", filepath.Base(file), line))
+	}
+	daemonLockChurn.Add(1)
+}
+
 type officialHostBridge struct {
 	h      *officialhost.Host
 	engine *relay.BridgeEngine
 	sender *relaySender // routes to the phone's latest pending reply
-	mu     sync.Mutex
+	mu     countingMutex
 	// pendingOut holds host->phone bytes that arrived before the phone
 	// opened its workspace bridge (no rpc-frame identity yet — the framed
 	// send would silently drop them). Flushed on bridge-open.
@@ -57,7 +86,7 @@ type officialHostBridge struct {
 // the result into the frame shape the client expects, delivered as an event
 // to the page's onDynamicConversationFrame listener.
 type officialRecovery struct {
-	mu               sync.Mutex
+	mu               countingMutex
 	listenID         int            // EventListen id for onDynamicConversationFrame
 	pendingSub       map[int]string // subscribe/resync call id -> sessionId
 	pendingRead      map[int]string // synthetic readSession call id -> sessionId
@@ -123,6 +152,7 @@ type officialRecovery struct {
 	watchRevision    map[string]int64            // sessionId -> last tick's snapshot revision
 	interactionAt    map[string]int64            // sessionId -> unix ms a pending interaction was last seen
 	stagedRetry      map[string]string           // sessionId -> last sendText text (watchdog retry source)
+	stagedRetryAt    map[string]int64            // sessionId -> unix ms the text was staged (output-since gate)
 	stagedRetryTaken map[string]bool             // sessionId -> staged retry already consumed
 	engineKilledAt   int64                       // unix ms of last watchdog engine kill
 	watchdogStarted  bool                        // single watchdog goroutine per host bridge
@@ -294,7 +324,7 @@ func officialSyntheticTasks() []map[string]any {
 // emitted snapshot for the session (duplicate application breaks the store).
 
 type officialHostState struct {
-	mu sync.Mutex
+	mu countingMutex
 	// persistedClientID is the phone page's channel clientId, restored from
 	// disk at startup (the page keeps the same id in localStorage). Without
 	// it the daemon-side host handshake cannot run after a restart until the

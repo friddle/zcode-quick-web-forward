@@ -32,12 +32,15 @@ import (
 const (
 	turnStallSoftMs     = 150_000       // no progress for this long while engine says running
 	turnStallProbeMax   = 3             // consecutive stalled probes before acting
+	turnNoFactsProbeMax = 20            // no-facts probes (≈10 min) before last-resort escalation
 	turnKickCooldownMs  = 120_000       // min gap between stop-kicks per session
 	turnKickVerifyAfter = 45 * 1000     // wait before judging a stop-kick effective
 	turnKickMax         = 2             // ineffective stop-kicks before killing the engine
 	engineKillCooldown  = 600_000       // min gap between engine kills (global)
 	turnRetryDelay      = 6 * 1000      // pause between turn-end and input resubmit
 	watchdogTick        = 30 * time.Second
+	canaryProbeEvery    = time.Second  // canary sample interval
+	canaryFailSamples   = 15           // consecutive failed samples before exit (one full window)
 )
 
 // startTurnWatchdog launches the stall patrol for this host bridge. Runs one
@@ -58,6 +61,8 @@ func startTurnWatchdog(b *officialHostBridge) {
 	}
 	rec.watchdogStarted = true
 	rec.mu.Unlock()
+	loadStagedJournal(rec)
+	go rearmStagedOnBoot(b)
 	go func() {
 		for {
 			time.Sleep(watchdogTick)
@@ -67,7 +72,7 @@ func startTurnWatchdog(b *officialHostBridge) {
 			turnWatchdogTick(b)
 		}
 	}()
-	fmt.Println("zcode: turn watchdog started (stall>2.5m → stop → engine kill → retry)")
+	fmt.Println("zcode: turn watchdog started (stall>2.5m → stop → engine kill → retry, staged journal re-arm)")
 }
 
 // turnWatchdogTick scans every session the engine believes is running.
@@ -82,12 +87,19 @@ func turnWatchdogTick(b *officialHostBridge) {
 		// response drives recordTurnRunning (correct running state) and
 		// surfaces any hidden permission interactions.
 		if facts.status == "" {
-			if rec.noteStallProbe(sid) == 1 {
-				fmt.Printf("zcode: watchdog: %s optimistic running but no facts — fetching rows\n", shortSid(sid))
+			// Headless sessions never get page-open readSession snapshots —
+			// absent facts here usually mean "page closed", NOT "wedged".
+			// The old blind stop after 3 probes cancelled healthy in-flight
+			// turns wholesale (the 2026-09-18 04:5x TURN_CANCELLED cluster,
+			// and yesterday's 16:47/17:05 deaths — "v4 session stopped").
+			// Keep fetching rows (facts arrive as soon as the host can serve
+			// them) and escalate only after a LONG dead-silent window.
+			p := rec.noteStallProbe(sid)
+			if p == 1 || p%2 == 1 {
+				fmt.Printf("zcode: watchdog: %s optimistic running but no facts — fetching rows (probe %d)\n", shortSid(sid), p)
 				requestConversationRows(b, sid)
-			} else if probes := rec.stallProbeCount(sid); probes > turnStallProbeMax {
-				// Facts never arrived but the turn was marked running:
-				// treat as stalled and run the standard ladder.
+			}
+			if p > turnNoFactsProbeMax {
 				rec.handleNoFactsStall(b, sid, now)
 			}
 			continue
@@ -234,7 +246,24 @@ func killWedgedEngine(b *officialHostBridge, sid string) {
 	}
 	pids := findEnginePIDs(ws)
 	if len(pids) == 0 {
-		fmt.Printf("zcode: watchdog: %s engine kill due but no engine process found for %s\n", shortSid(sid), ws)
+		// No engine child for the workspace: the turn cannot be running —
+		// the tree died with a previous daemon exit (the daemon parents the
+		// host, the host parents the engine). Reconcile the optimistic mark
+		// instead of dead-ending: the running→false transition fires the
+		// staged-input resurrect, whose sendText makes the host load the
+		// persisted session back into a fresh engine (observed working).
+		fmt.Printf("zcode: watchdog: %s engine already gone for %s — reconciling optimistic running\n", shortSid(sid), ws)
+		rec.mu.Lock()
+		running := rec.turnRunning[sid]
+		if running {
+			rec.recordTurnRunning(sid, false)
+		}
+		rec.mu.Unlock()
+		if !running {
+			// Nothing left to reconcile; drop the stall bookkeeping so the
+			// session exits the scan.
+			rec.clearTurnStall(sid, time.Now().UnixMilli())
+		}
 		return
 	}
 	fmt.Printf("zcode: watchdog: %s killing wedged engine pid(s) %v (workspace %s) — host will respawn\n", shortSid(sid), pids, ws)
@@ -259,40 +288,71 @@ func killWedgedEngine(b *officialHostBridge, sid string) {
 
 // startMutexCanary is the daemon-level panic mechanism: a wedged event loop
 // or a self-deadlock (the phaseForSession class of bug) makes every further
-// request hang forever. The canary probes the two hot locks; on failure it
-// dumps all goroutine stacks next to the log and exits nonzero so the
-// supervisor restarts the daemon — exit-fast with a post-mortem instead of a
-// silent hang.
+// request hang forever. The canary samples the hot locks once a second; a
+// real deadlock is declared only when TryLock fails AND the lock's churn
+// counter is frozen for a full window — then all goroutine stacks are dumped
+// next to the log and the daemon exits nonzero for the supervisor.
+//
+// Churn matters because TryLock alone also fails on a CONTENDED lock: in Go
+// starvation mode (waiters queued >1ms) the mutex is handed waiter→waiter
+// continuously and TryLock never succeeds even though the daemon is healthy.
+// The 2026-09-17/18 false exits all dumped stacks with no owner at all —
+// five-plus queued waiters, zero deadlock. Frozen churn is the difference.
 func startMutexCanary() {
 	go func() {
+		streak := 0
+		hot := ""
 		for {
-			time.Sleep(15 * time.Second)
-			if probeHotLocks() {
+			time.Sleep(canaryProbeEvery)
+			name, ok := probeHotLocks()
+			churn := daemonLockChurn.Load()
+			if ok {
+				streak = 0
+				hot = ""
 				continue
 			}
+			time.Sleep(canaryProbeEvery)
+			if daemonLockChurn.Load() != churn {
+				// Locks are being handed around — contention, not deadlock.
+				streak = 0
+				hot = ""
+				continue
+			}
+			if streak == 0 {
+				hot = name
+				fmt.Printf("zcode: canary: %s held and churn frozen — watching (fails %d/%d)\n", name, streak+1, canaryFailSamples)
+			}
+			streak++
+			if streak < canaryFailSamples {
+				continue
+			}
+			lockHolderSites.Range(func(k, v any) bool {
+				fmt.Printf("zcode: canary: lock %p last acquired at %s\n", k, v)
+				return true
+			})
 			dump := fmt.Sprintf("/tmp/zqf-canary-%d.log", time.Now().Unix())
 			_ = os.WriteFile(dump, stackDumpAll(), 0644)
-			fmt.Printf("zcode: canary: hot lock held >15s — dumping %s and exiting for supervisor restart\n", dump)
+			fmt.Printf("zcode: canary: %s deadlocked for a full %d-sample window — dumping %s and exiting for supervisor restart\n", hot, canaryFailSamples, dump)
 			os.Exit(1)
 		}
 	}()
 }
 
-// probeHotLocks tries the daemon's hottest locks without blocking; false
-// means one stayed held for a whole canary interval — the deadlock shape
-// (the phaseForSession self-deadlock class).
-func probeHotLocks() bool {
+// probeHotLocks tries the daemon's hottest locks without blocking. Returns
+// the lock name and false when one is held — the deadlock shape (the
+// phaseForSession self-deadlock class).
+func probeHotLocks() (string, bool) {
 	if !officialState.mu.TryLock() {
-		return false
+		return "officialState.mu", false
 	}
 	officialState.mu.Unlock()
 	if rec := officialActiveRec(); rec != nil {
 		if !rec.mu.TryLock() {
-			return false
+			return "rec.mu", false
 		}
 		rec.mu.Unlock()
 	}
-	return true
+	return "", true
 }
 
 func stackDumpAll() []byte {

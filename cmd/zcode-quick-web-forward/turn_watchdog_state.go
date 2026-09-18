@@ -168,17 +168,27 @@ func (r *officialRecovery) interactionRecent(sid string, now int64) bool {
 }
 
 // setStagedRetry captures the most recent sendText text so a watchdog retry
-// can replay it after unwedging the runtime.
+// can replay it after unwedging the runtime. The stage timestamp drives the
+// resurrect gate (output since staging = the turn actually ran; do not
+// duplicate it) and the text is mirrored to the journal so a daemon restart
+// can re-arm the task — the 2026-09-17 restart dropped it from memory and
+// the tasks sat idle for ten hours.
 func (r *officialRecovery) setStagedRetry(sid, text string) {
+	now := time.Now().UnixMilli()
 	r.mu.Lock()
 	if r.stagedRetry == nil {
 		r.stagedRetry = map[string]string{}
+	}
+	if r.stagedRetryAt == nil {
+		r.stagedRetryAt = map[string]int64{}
 	}
 	if r.stagedRetryTaken == nil {
 		r.stagedRetryTaken = map[string]bool{}
 	}
 	r.stagedRetry[sid] = text
+	r.stagedRetryAt[sid] = now
 	delete(r.stagedRetryTaken, sid)
+	writeStagedJournalLocked(r)
 	r.mu.Unlock()
 }
 
@@ -191,6 +201,7 @@ func (r *officialRecovery) takeStagedRetry(sid string) (string, bool) {
 		return "", false
 	}
 	r.stagedRetryTaken[sid] = true
+	writeStagedJournalLocked(r)
 	return text, true
 }
 
