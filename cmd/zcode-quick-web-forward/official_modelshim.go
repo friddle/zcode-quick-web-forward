@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 	"github.com/friddle/zcode-quick-web-forward/internal/zcode"
@@ -164,24 +165,60 @@ func modelSelectionView() map[string]any {
 }
 
 // providerSettingsView is the provider-settings.getView payload behind the
-// 管理模型 dialog. providerTemplates stays empty: adding new providers is a
-// desktop OAuth/API-key flow, not available headless.
+// 管理模型 dialog. The page's JHt mapper touches EVERY field below without
+// guards — e.models.map(...) on a provider without a models array is the
+// "Cannot read properties of undefined (reading 'map')" crash that killed
+// the dialog (and, through the error boundary, task submission with it).
+// providerTemplates stays empty: adding new providers is a desktop
+// OAuth/API-key flow, not available headless.
 func providerSettingsView() map[string]any {
 	providers := []any{}
 	for _, p := range configProviders() {
+		models := []any{}
+		for _, m := range p.Models {
+			models = append(models, map[string]any{
+				"kind":                  "builtin",
+				"modelId":               m,
+				"builtin":               true,
+				"effectiveBuiltinConfig": map[string]any{},
+				"useRecommendedConfig":  true,
+				"effectiveConfig":       map[string]any{"group": providerGroup(p.ID)},
+				"executable":            true,
+				"selectable":            true,
+				"issues":                []any{},
+			})
+		}
 		providers = append(providers, map[string]any{
 			"providerId":   p.ID,
 			"providerName": p.Name,
 			"enabled":      true,
-			"config": map[string]any{
-				"builtinModelIds": p.Models,
+			"executable":   true,
+			"accountState": "active",
+			"issues":       []any{},
+			"effectiveConfig": map[string]any{
+				"group": providerGroup(p.ID),
 			},
+			"models": models,
 		})
 	}
 	return map[string]any{
 		"revision":          configRevision(),
 		"providers":         providers,
 		"providerTemplates": []any{},
+	}
+}
+
+// providerGroup classifies a config provider the way the page's own
+// registry does; only "standard-personal" gets special treatment
+// (reorderable personal providers), everything else renders as-is.
+func providerGroup(id string) string {
+	switch {
+	case strings.Contains(id, "bigmodel"):
+		return "bigmodel-family"
+	case strings.Contains(id, "zai"):
+		return "zai-family"
+	default:
+		return "standard"
 	}
 }
 
