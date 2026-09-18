@@ -23,9 +23,12 @@ package main
 // only after the stop demonstrably failed to end the turn.
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -207,6 +210,70 @@ func (r *officialRecovery) handleNoFactsStall(b *officialHostBridge, sid string,
 	officialInjectCommand(sid, "stop", map[string]any{}, "")
 }
 
+// injectStagedWithMode (re)applies the session's journaled collaboration
+// mode BEFORE the text lands — and WAITS for the engine to answer the mode
+// call. A fresh engine does not restore a manually switched mode, and a
+// text-only re-inject raises a permission approval on the first tool call
+// that fails headless ("Permission request failed") — the mode call racing
+// the text used to lose that race (2026-09-18 07:25: the turns started in
+// build mode and hit the wall again). On timeout the text still goes out
+// (the mid-tool check below remains the backstop).
+func injectStagedWithMode(b *officialHostBridge, sid, text string) {
+	if mode := b.rec.stagedMode(sid); mode != "" {
+		fmt.Printf("zcode: watchdog: %s re-applying collaboration mode %s before staged text\n", shortSid(sid), mode)
+		officialInjectMode(b.rec, sid, mode)
+		if !waitForModeAck(b.rec, sid, 10*time.Second) {
+			fmt.Printf("zcode: watchdog: %s mode %s not confirmed in 10s — sending text anyway\n", shortSid(sid), mode)
+		}
+	}
+	officialInjectCommand(sid, "sendText", map[string]any{
+		"text":                 text,
+		"heldQueueDisposition": "clearQueueAndSend",
+	}, "")
+}
+
+// officialInjectMode sends the mode switch and arms the per-session ack
+// signal consumed by waitForModeAck.
+func officialInjectMode(rec *officialRecovery, sid, mode string) {
+	ch := make(chan string, 1)
+	rec.mu.Lock()
+	if rec.modeAck == nil {
+		rec.modeAck = map[string]chan string{}
+	}
+	rec.modeAck[sid] = ch
+	rec.mu.Unlock()
+	officialInjectCommand(sid, "switchCollaborationMode", map[string]any{"mode": mode}, "")
+}
+
+// waitForModeAck blocks until the mode call is answered (any ack — success or
+// a retryable fault counts as "the engine saw it"; the retry ladder owns
+// redelivery), the facts report the mode, or the timeout elapses.
+func waitForModeAck(rec *officialRecovery, sid string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		rec.mu.Lock()
+		ch := rec.modeAck[sid]
+		rec.mu.Unlock()
+		if ch != nil {
+			select {
+			case <-ch:
+				rec.mu.Lock()
+				delete(rec.modeAck, sid)
+				rec.mu.Unlock()
+				return true
+			default:
+			}
+		}
+		if m := parseSessionFacts(rec.snapFor(sid)).mode; m == rec.stagedMode(sid) && m != "" {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // maybeRetryStagedInput resubmits the captured last user input once the turn
 // actually ended — the 修复后重试 half of the ladder. Only text the daemon
 // itself injected is retried, capped at 4 consecutive dead turns before the
@@ -225,7 +292,7 @@ func maybeRetryStagedInput(b *officialHostBridge, sid, why string) {
 	fmt.Printf("zcode: watchdog: %s retrying interrupted input (%d chars) — %s\n", shortSid(sid), len(text), why)
 	go func() {
 		time.Sleep(time.Duration(turnRetryDelay) * time.Millisecond)
-		officialInjectCommand(sid, "sendText", map[string]any{"text": text, "heldQueueDisposition": "clearQueueAndSend"}, "")
+		injectStagedWithMode(b, sid, text)
 	}()
 }
 
@@ -284,6 +351,214 @@ func killWedgedEngine(b *officialHostBridge, sid string) {
 		}
 		maybeRetryStagedInput(b, sid, "after engine respawn")
 	})
+}
+
+// headlessTurnCheckAfter is how long after a daemon-injected turn ends that
+// the mid-tool cut detector inspects the engine's model-io journal.
+const headlessTurnCheckAfter = 75 * time.Second
+
+// scheduleHeadlessTurnCheck covers the supervision hole that left the
+// 2026-09-18 shopify/kube tasks silent for two hours: a headless turn ENDED
+// (engine projection idle) while its last model response still had UNTOUCHED
+// tool calls — the engine cut the turn mid-tool after a permission-request
+// failure storm. The rows view only proves "not running", not "finished the
+// work", and once running flips false the session left every watchdog. For
+// daemon-injected tasks we CAN do better: the engine journals every model
+// round-trip to ~/.zcode/cli/rollout/model-io-<sid>.jsonl, so a tail entry
+// with unanswered toolCalls is a high-confidence mid-turn cut. Re-nudge the
+// task (capped by the resurrect ladder; real progress resets it).
+func scheduleHeadlessTurnCheck(b *officialHostBridge, sid string) {
+	if b == nil || sid == "" {
+		return
+	}
+	time.AfterFunc(headlessTurnCheckAfter, func() {
+		if !b.h.Alive() {
+			return
+		}
+		verifyHeadlessTurnCompletion(b, sid)
+	})
+}
+
+// verifyHeadlessTurnCompletion resurrects a daemon-injected task whose turn
+// was cut mid-tool. No-op unless ALL of these hold at fire time: no turn is
+// running now, the engine's model-io tail is a model_io entry with toolCalls
+// that belongs to the staged turn (started after it was staged), and the file
+// has been quiet for a minute (no newer model activity).
+func verifyHeadlessTurnCompletion(b *officialHostBridge, sid string) {
+	rec := b.rec
+	rec.mu.Lock()
+	if rec.turnRunning[sid] {
+		rec.mu.Unlock()
+		return // a fresh turn is live and supervised
+	}
+	stagedAt := rec.stagedRetryAt[sid]
+	daemonInjected := stagedAt > 0
+	rec.mu.Unlock()
+	if !daemonInjected {
+		return // not ours — a human-driven session ends whenever the engine says so
+	}
+	cut, at := modelIOTailCut(modelIOPath(sid), stagedAt)
+	if !cut {
+		return
+	}
+	fmt.Printf("zcode: watchdog: %s turn ended %ds ago with its last model response still holding tool calls — mid-tool cut\n",
+		shortSid(sid), time.Now().UnixMilli()-at/1_000_000)
+	// Continuation text: the original staged text if still unconsumed, else a
+	// generic resume prompt. Re-stage whichever we send so this turn is
+	// itself journaled and supervised.
+	text, ok := rec.takeStagedRetry(sid)
+	if !ok || text == "" {
+		text = "继续：上一回合在工具执行中被中断了。请从中断处继续完成原任务，不要重复已完成的部分。"
+	}
+	if n := rec.noteResurrect(sid); n > 4 {
+		fmt.Printf("zcode: watchdog: %s cut %d turns in a row — killing engine for a clean respawn\n", shortSid(sid), n-1)
+		rec.setStagedRetry(sid, text)
+		killWedgedEngine(b, sid)
+		return
+	}
+	rec.setStagedRetry(sid, text)
+	injectStagedWithMode(b, sid, text)
+}
+
+// modelIOPath resolves the engine's model-io journal for a session. The
+// engine (zcode.cjs) writes one rollout file per session next to its CLI
+// state; missing files simply disable the mid-tool cut check.
+func modelIOPath(sid string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || sid == "" {
+		return ""
+	}
+	return filepath.Join(home, ".zcode", "cli", "rollout", "model-io-"+sid+".jsonl")
+}
+
+// modelIOTailCut reads the engine's model-io journal and reports whether its
+// final entry is a model response that still holds unanswered tool calls,
+// staged no earlier than stagedAt-5s and quiet for ≥60s.
+// Returns (cut, fileModTimeNs). Missing/unparseable files are "not cut" —
+// this check may only ADD resurrections, never fabricate them.
+func modelIOTailCut(path string, stagedAt int64) (bool, int64) {
+	if path == "" {
+		return false, 0
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() == 0 {
+		return false, 0
+	}
+	if time.Since(fi.ModTime()) < 60*time.Second {
+		return false, 0 // engine still writing — a turn may be live
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false, 0
+	}
+	defer f.Close()
+	// Read the final line. Lines carry the full model request body and can
+	// reach megabytes — a small window regularly started mid-line and the
+	// JSON parse silently bailed, disabling the whole check. Back up 4MB and
+	// only parse a line whose BOTH ends are visible.
+	read := int64(4 << 20)
+	if fi.Size() < read {
+		read = fi.Size()
+	}
+	buf := make([]byte, read)
+	if _, err := f.ReadAt(buf, fi.Size()-read); err != nil {
+		return false, 0
+	}
+	trimmed := strings.TrimRight(string(buf), "\n")
+	var last string
+	if idx := strings.LastIndexByte(trimmed, '\n'); idx >= 0 {
+		last = strings.TrimSpace(trimmed[idx+1:])
+	} else if read == fi.Size() {
+		last = strings.TrimSpace(trimmed) // single-line file, fully visible
+	} else {
+		return false, 0 // last line exceeds the window — cannot see its start
+	}
+	if last == "" {
+		return false, 0
+	}
+	var rec struct {
+		Type      string `json:"type"`
+		StartedAt string `json:"startedAt"`
+		Response  struct {
+			ToolCalls []any `json:"toolCalls"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(last), &rec) != nil {
+		return false, 0
+	}
+	if rec.Type != "model_io" || len(rec.Response.ToolCalls) == 0 {
+		return false, 0 // clean final answer — the turn finished its loop
+	}
+	started, err := time.Parse(time.RFC3339, rec.StartedAt)
+	if err != nil {
+		return false, 0
+	}
+	if started.UnixMilli() < stagedAt-5_000 {
+		return false, 0 // tail belongs to an OLDER turn, not the staged one
+	}
+	return true, fi.ModTime().UnixNano()
+}
+
+// maybeAutoApprove resolves pending permission interactions for headless
+// sessions: no page listener + a daemon-injected task (staged marker) means
+// nobody else can ever click 允许 — the engine either fails the request
+// ("Permission request failed" denials starved the 2026-09-18 tasks) or
+// blocks on it forever. Answer with the interaction's own allow option, the
+// same card click the page would produce. Never fires when a page is
+// bridged (the human decides) and ZQF_HEADLESS_APPROVE=0 disables the whole
+// path. Caller runs in the rows-response flow.
+func (r *officialRecovery) maybeAutoApprove(b *officialHostBridge, sid string, rowsRes map[string]any) {
+	if os.Getenv("ZQF_HEADLESS_APPROVE") == "0" {
+		return
+	}
+	if len(r.listeners()) > 0 {
+		return // a page is connected — the human decides
+	}
+	r.mu.Lock()
+	injected := r.stagedRetryAt[sid] > 0 || r.stagedModeBy[sid] != ""
+	dead := r.deadInteractions
+	r.mu.Unlock()
+	if !injected {
+		return
+	}
+	now := time.Now().Unix()
+	for _, row := range fullRowsOf(rowsRes) {
+		m, ok := row.(map[string]any)
+		if !ok || m["status"] != "pendingApproval" {
+			continue
+		}
+		iid, _ := m["approvalInteractionId"].(string)
+		if iid == "" || dead[iid] {
+			continue
+		}
+		r.mu.Lock()
+		seen := r.autoApproved[iid]
+		if !seen {
+			if r.autoApproved == nil {
+				r.autoApproved = map[string]bool{}
+			}
+			r.autoApproved[iid] = true
+		}
+		r.mu.Unlock()
+		if seen {
+			continue
+		}
+		// Rate limit across interactions: one approval per 3s max.
+		if now-r.lastKick < 3 {
+			continue
+		}
+		r.mu.Lock()
+		r.lastKick = now
+		r.mu.Unlock()
+		tool, _ := m["toolName"].(string)
+		fmt.Printf("zcode: watchdog: %s headless auto-approve permission %s (%s)\n", shortSid(sid), iid, tool)
+		go func(iid string) {
+			officialInjectCommand(sid, "resolveInteraction", map[string]any{
+				"interactionId": iid,
+				"answer":        map[string]any{"optionId": "allow_once"},
+			}, "")
+		}(iid)
+	}
 }
 
 // startMutexCanary is the daemon-level panic mechanism: a wedged event loop

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"time"
 )
 
@@ -190,6 +191,46 @@ func (r *officialRecovery) setStagedRetry(sid, text string) {
 	delete(r.stagedRetryTaken, sid)
 	writeStagedJournalLocked(r)
 	r.mu.Unlock()
+}
+
+// setStagedRetryMode remembers the collaboration mode a session's tasks must
+// run under (build/edit/plan/yolo) and journals it next to the staged text.
+// The engine does NOT restore a manually switched mode after a respawn: a
+// headless task re-injected into a fresh engine hit the permission wall again
+// (every tool call raised an approval that fails with no page to answer it —
+// the 2026-09-18 05:04 "Permission request failed" stall). Re-apply the mode
+// before every staged re-inject.
+func (r *officialRecovery) setStagedRetryMode(sid, mode string) {
+	mode = strings.TrimSpace(mode)
+	if sid == "" || mode == "" {
+		return
+	}
+	r.mu.Lock()
+	if r.stagedModeBy == nil {
+		r.stagedModeBy = map[string]string{}
+	}
+	r.stagedModeBy[sid] = mode
+	writeStagedJournalLocked(r)
+	r.mu.Unlock()
+}
+
+// stagedMode returns the journaled collaboration mode for sid ("" when none).
+func (r *officialRecovery) stagedMode(sid string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stagedModeBy[sid]
+}
+
+// clearStagedText drops a consumed/finished task's staged text while keeping
+// the mode and the daemon-injected marker (stagedRetryAt drives the mid-tool
+// completion check). Caller holds r.mu.
+func (r *officialRecovery) clearStagedText(sid string) {
+	if r.stagedRetry == nil {
+		return
+	}
+	delete(r.stagedRetry, sid)
+	delete(r.stagedRetryTaken, sid)
+	writeStagedJournalLocked(r)
 }
 
 // takeStagedRetry pops the staged retry text, once per stall episode.

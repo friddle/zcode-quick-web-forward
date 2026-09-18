@@ -260,12 +260,11 @@ func keepAlive(ctx context.Context, ws *client, sid string, h Handler) {
 	})
 	defer watchdog.Stop()
 	_ = watchdog // kept alive via resets below
-	ws.readLoop(func(msg relayMsg) bool {
-		watchdog.Reset(30 * time.Second)
-		if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
-			b, _ := json.Marshal(msg)
-			fmt.Fprintf(os.Stderr, "webremote debug << %s\n", b)
-		}
+		ws.readLoop(func(msg relayMsg) bool {
+			watchdog.Reset(30 * time.Second)
+			if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
+				fmt.Fprintf(os.Stderr, "webremote debug << %s\n", truncateDbg(msg))
+			}
 		switch {
 		case msg.PairStatus == "matched" || msg.PairStatus == "paired" || msg.TerminalSid != "":
 			// every pair_status_ack carries the terminal sid, so only fire
@@ -290,6 +289,27 @@ func mustJSON(v any) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return b
+}
+
+// dbgFrameMaxBytes caps each ZQF_RELAY_DEBUG dump. Untruncated dumps logged
+// whole relay frames (65KB fragments, base64 payloads) and grew a single
+// daemon.log to 687MB in a day — the frame SUMMARY plus a short payload head
+// keeps the same debuggability at four orders of magnitude less disk.
+const dbgFrameMaxBytes = 2048
+
+func truncateDbg(m relayMsg) string {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return truncateDbgBytes(b)
+}
+
+func truncateDbgBytes(b []byte) string {
+	if len(b) <= dbgFrameMaxBytes {
+		return string(b)
+	}
+	return fmt.Sprintf("%s …[%d bytes total, truncated]", b[:dbgFrameMaxBytes], len(b))
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
@@ -408,7 +428,7 @@ func (c *client) send(m relayMsg) {
 		return
 	}
 	if dbg := os.Getenv("ZQF_RELAY_DEBUG"); dbg != "" {
-		fmt.Fprintf(os.Stderr, "webremote debug >> %s\n", string(b))
+		fmt.Fprintf(os.Stderr, "webremote debug >> %s\n", truncateDbgBytes(b))
 	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()

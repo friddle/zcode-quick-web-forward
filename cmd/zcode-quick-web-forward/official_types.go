@@ -154,6 +154,9 @@ type officialRecovery struct {
 	stagedRetry      map[string]string           // sessionId -> last sendText text (watchdog retry source)
 	stagedRetryAt    map[string]int64            // sessionId -> unix ms the text was staged (output-since gate)
 	stagedRetryTaken map[string]bool             // sessionId -> staged retry already consumed
+	stagedModeBy     map[string]string           // sessionId -> collaboration mode to replay before staged texts (journaled)
+	modeAck          map[string]chan string      // sessionId -> signalled when the staged switchCollaborationMode is answered
+	autoApproved     map[string]bool             // interactionIds already auto-approved (headless path)
 	engineKilledAt   int64                       // unix ms of last watchdog engine kill
 	watchdogStarted  bool                        // single watchdog goroutine per host bridge
 	lastPageHandshakeAt int64                    // unix ms a real page last ran hello/initialize on this connection

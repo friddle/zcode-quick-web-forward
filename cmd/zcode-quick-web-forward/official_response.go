@@ -207,6 +207,21 @@ func inspectOfficialResponse(raw []byte) {
 		if pr != nil && wasRetried && kind == relay.KindPromiseOK && pr.typ == "sendText" && pr.sid != "" {
 			go scheduleRecoverySnapshots(b, pr.sid)
 		}
+		// Signal the staged-mode waiters: the engine answered the mode switch
+		// (success OR a definitive fault — the retry ladder owns redelivery),
+		// so the pending text may now be sent.
+		if pr != nil && pr.typ == "switchCollaborationMode" && pr.sid != "" {
+			r.mu.Lock()
+			ch := r.modeAck[pr.sid]
+			delete(r.modeAck, pr.sid)
+			r.mu.Unlock()
+			if ch != nil {
+				select {
+				case ch <- "ack":
+				default:
+				}
+			}
+		}
 	}
 	r.mu.Lock()
 	taskMut, isTask := r.pendingTask[id]
@@ -366,6 +381,13 @@ func inspectOfficialResponse(raw []byte) {
 				data = json.RawMessage(b2)
 			}
 		}
+		// Headless permission wall: a daemon-injected task with the page
+		// closed can never see an approval card — the engine's request either
+		// fails outright ("Permission request failed" denials) or pends
+		// forever. When NO page is listening, resolve pending permission
+		// interactions the way the operator's yolo intent would (allow once).
+		// A connected page ALWAYS wins: with listeners the human decides.
+		r.maybeAutoApprove(b, rowsid, rowsRes)
 		if verboseLogs {
 			fmt.Printf("zcode: recovery: rowsRange result keys %v head %s\n", keysOf(rowsRes), firstJSON(data))
 			_ = os.WriteFile("/tmp/zqf-rows.json", data, 0644)

@@ -32,6 +32,7 @@ func stagedRetryJournalPath() string {
 
 type stagedJournalEntry struct {
 	Text string `json:"text"`
+	Mode string `json:"mode,omitempty"`
 	At   int64  `json:"at"`
 }
 
@@ -46,7 +47,24 @@ func writeStagedJournalLocked(r *officialRecovery) {
 		if r.stagedRetryTaken[sid] && at == 0 {
 			continue
 		}
-		out[sid] = stagedJournalEntry{Text: text, At: at}
+		out[sid] = stagedJournalEntry{Text: text, Mode: r.stagedModeBy[sid], At: at}
+	}
+	// Mode-only entries (text consumed, mode still valid) must survive the
+	// rebuild or the next staged write would silently drop them.
+	for sid, mode := range r.stagedModeBy {
+		if mode == "" {
+			continue
+		}
+		if e, ok := out[sid]; ok {
+			e.Mode = mode
+			out[sid] = e
+			continue
+		}
+		at := r.stagedRetryAt[sid]
+		if at == 0 {
+			at = time.Now().UnixMilli()
+		}
+		out[sid] = stagedJournalEntry{Mode: mode, At: at}
 	}
 	writeStagedJournal(out)
 }
@@ -82,7 +100,34 @@ func journalOutboxText(sid, text string) {
 	b, _ := os.ReadFile(path)
 	out := map[string]stagedJournalEntry{}
 	_ = json.Unmarshal(b, &out)
-	out[sid] = stagedJournalEntry{Text: text, At: time.Now().UnixMilli()}
+	e := out[sid] // preserve a journaled mode across the text update
+	e.Text = text
+	e.At = time.Now().UnixMilli()
+	out[sid] = e
+	writeStagedJournal(out)
+}
+
+// journalOutboxMode records an outbox `mode` submission for sid: the mode the
+// session's tasks must run under. Replayed before every staged re-inject
+// (see setStagedRetryMode).
+func journalOutboxMode(sid, mode string) {
+	if sid == "" || strings.TrimSpace(mode) == "" {
+		return
+	}
+	if rec := officialActiveRec(); rec != nil {
+		rec.setStagedRetryMode(sid, mode)
+		return
+	}
+	path := stagedRetryJournalPath()
+	b, _ := os.ReadFile(path)
+	out := map[string]stagedJournalEntry{}
+	_ = json.Unmarshal(b, &out)
+	e := out[sid]
+	e.Mode = strings.TrimSpace(mode)
+	if e.At == 0 {
+		e.At = time.Now().UnixMilli()
+	}
+	out[sid] = e
 	writeStagedJournal(out)
 }
 
@@ -100,7 +145,25 @@ func loadStagedJournal(r *officialRecovery) {
 	r.mu.Lock()
 	n := 0
 	for sid, e := range in {
-		if e.Text == "" || e.At == 0 || now-e.At > stagedJournalMaxAge.Milliseconds() {
+		if e.At == 0 || now-e.At > stagedJournalMaxAge.Milliseconds() {
+			continue
+		}
+		if e.Mode != "" {
+			if r.stagedModeBy == nil {
+				r.stagedModeBy = map[string]string{}
+			}
+			r.stagedModeBy[sid] = e.Mode
+		}
+		if e.Text == "" {
+			// Mode-only entry: the staged text was consumed, but keep the
+			// daemon-injected marker alive (the headless auto-approve gate
+			// keys off stagedRetryAt) without re-arming any text.
+			if r.stagedRetryAt == nil {
+				r.stagedRetryAt = map[string]int64{}
+			}
+			if r.stagedRetryAt[sid] == 0 {
+				r.stagedRetryAt[sid] = e.At
+			}
 			continue
 		}
 		if r.stagedRetry == nil {
@@ -153,15 +216,12 @@ func rearmStagedOnBoot(b *officialHostBridge) {
 		return
 	}
 	fmt.Printf("zcode: watchdog: boot re-arm: %d staged input(s) pending\n", len(pending))
-	for sid := range pending {
+	for sid, text := range pending {
 		facts := parseSessionFacts(rec.snapFor(sid))
 		if facts.status == "running" || facts.status == "in-progress" || facts.status == "active" {
 			fmt.Printf("zcode: watchdog: boot re-arm: %s turn already running — leaving staged input in place\n", shortSid(sid))
 			continue
 		}
-		officialInjectCommand(sid, "sendText", map[string]any{
-			"text":                 pending[sid],
-			"heldQueueDisposition": "clearQueueAndSend",
-		}, "")
+		injectStagedWithMode(b, sid, text)
 	}
 }

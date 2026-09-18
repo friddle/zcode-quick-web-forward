@@ -279,7 +279,15 @@ func watchPendingSendFile() {
 		go func() {
 			// Give the host's service port a moment after a fresh boot; the
 			// forward path buffers until ready anyway.
-			journalOutboxText(sid, text)
+			if typ == "switchCollaborationMode" {
+				// Journal the mode SEPARATELY from staged texts: the mode is
+				// replayed before every staged re-inject (setStagedRetryMode).
+				// Journaling it AS a staged text would resurrect the literal
+				// word "yolo" as a user message after a restart.
+				journalOutboxMode(sid, text)
+			} else if typ == "sendText" {
+				journalOutboxText(sid, text)
+			}
 			time.Sleep(3 * time.Second)
 			payload := map[string]any{}
 			if typ == "sendText" {

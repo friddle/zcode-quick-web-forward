@@ -545,6 +545,29 @@ func (r *officialRecovery) recordTurnRunning(sid string, running bool) {
 				}
 			}()
 		}
+		// Even a turn WITH output can have been cut mid-tool (the engine ends
+		// the projection after a permission-failure storm while the last model
+		// response still holds untouched tool calls). For daemon-injected
+		// tasks, verify completion against the engine's model-io journal.
+		if !running && stagedAt > 0 {
+			// With output the task text itself is considered DELIVERED: drop
+			// the staged copy so a later daemon restart's boot re-arm cannot
+			// re-send a finished task (the mode stays for future re-injects,
+			// and the mid-tool check below still runs before any of that
+			// matters — it works off stagedRetryAt, not the text).
+			if hadOutput {
+				r.clearStagedText(sid)
+			}
+			sidCopy := sid
+			go func() {
+				officialState.mu.Lock()
+				b := officialState.active
+				officialState.mu.Unlock()
+				if b != nil {
+					scheduleHeadlessTurnCheck(b, sidCopy)
+				}
+			}()
+		}
 	}
 	if prev == running {
 		return
