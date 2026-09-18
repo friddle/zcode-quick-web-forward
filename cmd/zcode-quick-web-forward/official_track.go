@@ -701,7 +701,7 @@ func (r *officialRecovery) retryUntilReady(b *officialHostBridge, id int, pr *pe
 		// Between the original call and this replay the page may have
 		// re-handshook with a new client — refresh the envelope's clientId
 		// and re-encode, or the replay dies on clientMismatch forever.
-		if pr.typ == "sendText" || pr.typ == "stop" || pr.typ == "switchCollaborationMode" {
+		if pr.typ == "sendText" || pr.typ == "stop" || pr.typ == "switchCollaborationMode" || pr.typ == "setAutoDrain" {
 			if env, _ := argMap(pr.call.Arg)["envelope"].(map[string]any); env != nil {
 				officialState.mu.Lock()
 				fresh := officialState.persistedClientID

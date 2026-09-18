@@ -273,6 +273,19 @@ func watchPendingSendFile() {
 			typ = "switchCollaborationMode"
 			text = mode
 		}
+		if typ == "deleteQueue" {
+			// `deleteQueue` un-wedges a session whose engine queue holds a
+			// stuck admitted item (headless auto-drain failure): `text` is
+			// the queueItemId. Destructive by design — the operator saw the
+			// stuck item and asked for its removal.
+			qid := strings.TrimSpace(text)
+			if qid == "" {
+				return
+			}
+			fmt.Printf("zcode: recovery: outbox deleteQueue %s on %s\n", qid, sid)
+			officialInjectCommand(sid, "deleteQueueItem", map[string]any{"queueItemId": qid}, "")
+			return
+		}
 		if typ != "stop" && typ != "switchCollaborationMode" && strings.TrimSpace(text) == "" {
 			return
 		}

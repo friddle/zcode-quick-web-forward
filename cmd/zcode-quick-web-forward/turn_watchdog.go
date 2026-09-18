@@ -103,6 +103,16 @@ func turnWatchdogTick(b *officialHostBridge) {
 				requestConversationRows(b, sid)
 			}
 			if p > turnNoFactsProbeMax {
+				// "No facts for 10 minutes" alone carries NO information
+				// headless: with the page closed, facts NEVER arrive, so this
+				// ladder blind-stopped healthy LONG turns mid-flight (the
+				// 08:33 stop landed inside the shopify turn's model call).
+				// The engine's model-io journal is the headless liveness
+				// oracle: a turn whose last model round is recent is ALIVE.
+				if recent := modelIORecent(sid, 5*time.Minute); recent {
+					rec.noteTurnProgress(sid, now)
+					continue
+				}
 				rec.handleNoFactsStall(b, sid, now)
 			}
 			continue
@@ -229,6 +239,12 @@ func (r *officialRecovery) handleNoFactsStall(b *officialHostBridge, sid string,
 func injectStagedWithMode(b *officialHostBridge, sid, text string) {
 	fmt.Printf("zcode: watchdog: %s kicking runtime (zombie turn guard) before staged text\n", shortSid(sid))
 	officialInjectCommand(sid, "stop", map[string]any{}, "")
+	// Headless auto-drain: the engine only promotes admitted-but-queued
+	// messages after a turn when autoDrain is on, and with no page to touch
+	// the followup switch it never gets enabled — an admitted item then sits
+	// in session_input forever (both sessions wedged on exactly that after
+	// the 08:37 turn death; every later send pends behind it unadmitted).
+	officialInjectCommand(sid, "setAutoDrain", map[string]any{"autoDrain": true}, "")
 	time.Sleep(2 * time.Second)
 	if mode := b.rec.stagedMode(sid); mode != "" {
 		fmt.Printf("zcode: watchdog: %s re-applying collaboration mode %s before staged text\n", shortSid(sid), mode)
@@ -457,6 +473,21 @@ func modelIOPath(sid string) string {
 		return ""
 	}
 	return filepath.Join(home, ".zcode", "cli", "rollout", "model-io-"+sid+".jsonl")
+}
+
+// modelIORecent reports whether the session's model-io journal was written
+// to within the window — proof that a turn is actively producing model
+// rounds even when no page is open to carry facts to the daemon.
+func modelIORecent(sid string, within time.Duration) bool {
+	path := modelIOPath(sid)
+	if path == "" {
+		return false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return time.Since(fi.ModTime()) < within
 }
 
 // modelIOTailCut reads the engine's model-io journal and reports whether its
