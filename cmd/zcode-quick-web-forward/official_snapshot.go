@@ -521,14 +521,13 @@ func (r *officialRecovery) recordTurnRunning(sid string, running bool) {
 	prev := r.turnRunning[sid]
 	r.turnRunning[sid] = running
 	if prev != running {
-		// The resurrect gate: only a turn that produced NO observable output
-		// since its input was staged counts as silently dead. A normal
-		// completion (tokens moved, frames flowed) must NOT resurrect — the
-		// ungated version re-injected every successfully finished task once,
-		// duplicating it.
-		progressAt := r.turnProgressAt[sid]
+		// The resurrect gate: only a turn that produced NO REAL output since
+		// its input was staged counts as silently dead. A normal completion
+		// (tokens moved, frames flowed) must NOT resurrect — the ungated
+		// version re-injected every successfully finished task once,
+		// duplicating it. realOutputAt excludes the optimistic inject stamp.
 		stagedAt := r.stagedRetryAt[sid]
-		hadOutput := stagedAt > 0 && progressAt >= stagedAt
+		hadOutput := stagedAt > 0 && r.realOutputSinceLocked(sid, stagedAt)
 		r.noteTurnProgressLocked(sid, time.Now().UnixMilli())
 		// A turn ended while a daemon-injected input was still staged and
 		// unconsumed: the turn died silently (assistant row unfinished) —
@@ -596,6 +595,11 @@ func (r *officialRecovery) observeTurnState(b *officialHostBridge, sid string, r
 		}
 	}
 	r.mu.Lock()
+	if running {
+		// A rows OBSERVATION of a running turn is real output evidence —
+		// unlike the optimistic inject stamp.
+		r.noteRealOutputLocked(sid, time.Now().UnixMilli())
+	}
 	r.recordTurnRunning(sid, running)
 	r.mu.Unlock()
 	if running {
@@ -893,6 +897,9 @@ func (r *officialRecovery) takeQueuedItems(sid string, rows []any) []any {
 		if m, ok := row.(map[string]any); ok && m["kind"] == "turnHeader" {
 			running = m["state"] == "running"
 		}
+	}
+	if running {
+		r.noteRealOutputLocked(sid, time.Now().UnixMilli())
 	}
 	r.recordTurnRunning(sid, running)
 	// Keep only items whose text has not yet shown up as a userInput row

@@ -204,19 +204,26 @@ func TestModelIOTailCut(t *testing.T) {
 	}
 
 	// Clean final answer (no tool calls) — not a cut.
-	mk(t, tail(0, time.Now().Add(-5*time.Minute).Format(time.RFC3339)), 2*time.Minute)
+	mk(t, tail(0, time.Now().Add(-5*time.Minute).Format(time.RFC3339)), 4*time.Minute)
 	if cut, _ := modelIOTailCut(path, staged); cut {
 		t.Fatal("tail without tool calls is a finished turn")
 	}
 
+	// Quiet but under the 180s window — a slow tool execution in a live turn
+	// looks like this; the 07:52 false positive must stay impossible.
+	mk(t, tail(2, time.Now().Add(-8*time.Minute).Format(time.RFC3339)), 100*time.Second)
+	if cut, _ := modelIOTailCut(path, staged); cut {
+		t.Fatal("file quiet <180s must not count as cut")
+	}
+
 	// Tool calls + old start inside the turn window + quiet file → cut.
-	mk(t, tail(2, time.Now().Add(-8*time.Minute).Format(time.RFC3339)), 2*time.Minute)
+	mk(t, tail(2, time.Now().Add(-8*time.Minute).Format(time.RFC3339)), 4*time.Minute)
 	if cut, _ := modelIOTailCut(path, staged); !cut {
 		t.Fatal("unanswered tool calls in a quiet tail must count as cut")
 	}
 
 	// Tail started BEFORE the turn was staged → belongs to an older turn.
-	mk(t, tail(2, time.Now().Add(-30*time.Minute).Format(time.RFC3339)), 2*time.Minute)
+	mk(t, tail(2, time.Now().Add(-30*time.Minute).Format(time.RFC3339)), 4*time.Minute)
 	if cut, _ := modelIOTailCut(path, staged); cut {
 		t.Fatal("older-turn tail must not count")
 	}
@@ -228,8 +235,34 @@ func TestModelIOTailCut(t *testing.T) {
 	}
 
 	// Unparseable garbage → not a cut.
-	mk(t, strings.Repeat("junk", 100), 2*time.Minute)
+	mk(t, strings.Repeat("junk", 100), 4*time.Minute)
 	if cut, _ := modelIOTailCut(path, staged); cut {
 		t.Fatal("unparseable tail must not count")
+	}
+}
+
+// The optimistic inject stamp (turnProgressAt) must NOT satisfy the
+// hadOutput gate — only real evidence does. The 2026-09-18 07:52 incident:
+// the inject stamp alone made hadOutput true and cleared the staged text
+// before the engine even started the turn.
+func TestRealOutputGateIgnoresOptimisticStamp(t *testing.T) {
+	r := &officialRecovery{}
+	r.initMaps()
+	r.mu.Lock()
+	r.stagedRetryAt["s"] = 1_000
+	r.noteTurnProgressLocked("s", 2_000) // optimistic inject stamp
+	r.mu.Unlock()
+	if r.realOutputSince("s", 1_000) {
+		t.Fatal("optimistic stamp must not count as real output")
+	}
+	r.noteRealOutput("s", 3_000) // a live frame / facts movement / rows view
+	if !r.realOutputSince("s", 1_000) {
+		t.Fatal("real evidence must satisfy the gate")
+	}
+	if !r.realOutputSince("s", 3_000) {
+		t.Fatal("output at exactly the boundary counts")
+	}
+	if r.realOutputSince("s", 3_001) {
+		t.Fatal("output before the threshold must not count")
 	}
 }

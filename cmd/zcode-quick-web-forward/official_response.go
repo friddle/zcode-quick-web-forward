@@ -43,6 +43,7 @@ func inspectOfficialResponse(raw []byte) {
 					now := time.Now().UnixMilli()
 					r.realFramesAt[sid] = now
 					r.noteTurnProgressLocked(sid, now)
+					r.noteRealOutputLocked(sid, now)
 					r.mu.Unlock()
 				}
 				if verboseLogs {
@@ -136,6 +137,10 @@ func inspectOfficialResponse(raw []byte) {
 			go r.retryUntilReady(b, id, pr)
 		}
 		if pr != nil {
+			// Tell a staged-mode waiter the call is alive in the retry ladder
+			// (not lost): it keeps waiting instead of giving up at 10s while
+			// the handshake is still being rebuilt.
+			r.signalModeAck(pr.sid)
 			return // retry loop owns this id
 		}
 	} else {
@@ -211,16 +216,7 @@ func inspectOfficialResponse(raw []byte) {
 		// (success OR a definitive fault — the retry ladder owns redelivery),
 		// so the pending text may now be sent.
 		if pr != nil && pr.typ == "switchCollaborationMode" && pr.sid != "" {
-			r.mu.Lock()
-			ch := r.modeAck[pr.sid]
-			delete(r.modeAck, pr.sid)
-			r.mu.Unlock()
-			if ch != nil {
-				select {
-				case ch <- "ack":
-				default:
-				}
-			}
+			r.signalModeAck(pr.sid)
 		}
 	}
 	r.mu.Lock()

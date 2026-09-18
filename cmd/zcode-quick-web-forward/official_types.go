@@ -144,7 +144,8 @@ type officialRecovery struct {
 	lastHandshakeTry int64                       // unix ms of the last daemon-side host handshake bootstrap (rate limit)
 	listenFrames     map[int][]byte              // event-listen call id -> encoded frame (replayed after svc-port reattach)
 	listenFrameOrder []int                       // registration order of listenFrames keys
-	turnProgressAt   map[string]int64            // sessionId -> unix ms of last observable turn progress
+	turnProgressAt   map[string]int64            // sessionId -> unix ms of last observable turn progress (optimistic stamps included)
+	realOutputAt     map[string]int64            // sessionId -> unix ms of last REAL output evidence (frames/facts/rows) — the resurrect gate
 	turnStallProbe   map[string]int              // sessionId -> consecutive stalled-watchdog probes
 	turnKickAt       map[string]int64            // sessionId -> unix ms of last watchdog stop-kick
 	turnKickCount    map[string]int              // sessionId -> stop-kicks since last real progress
@@ -212,6 +213,12 @@ func (r *officialRecovery) initMaps() {
 	r.lastEmittedState = map[string]map[string]any{}
 	r.scheduleActive = map[string]bool{}
 	r.selfInjected = map[int]bool{}
+	r.turnProgressAt = map[string]int64{}
+	r.realOutputAt = map[string]int64{}
+	r.stagedRetryAt = map[string]int64{}
+	r.stagedModeBy = map[string]string{}
+	r.modeAck = map[string]chan string{}
+	r.autoApproved = map[string]bool{}
 }
 
 // taskStatusNudge is installed by startWebRemote: re-pushes the

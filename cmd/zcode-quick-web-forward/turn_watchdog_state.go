@@ -27,6 +27,41 @@ func (r *officialRecovery) noteTurnProgressLocked(sid string, now int64) {
 	delete(r.resurrectCount, sid)
 }
 
+// noteRealOutputLocked records REAL turn output evidence (a live engine
+// frame, projection facts movement, or a rows-observed turn state). The
+// resurrect/clear gates must not count the optimistic inject stamp here:
+// officialInjectCommand stamps turnProgressAt itself, which otherwise made
+// hadOutput true 2s after every injection and silently disarmed the whole
+// dead-turn path (2026-09-18 07:52: the staged text was cleared and the
+// mid-tool check armed before the engine had even started the turn).
+func (r *officialRecovery) noteRealOutputLocked(sid string, now int64) {
+	if r.realOutputAt == nil {
+		r.realOutputAt = map[string]int64{}
+	}
+	r.realOutputAt[sid] = now
+}
+
+// noteRealOutput is the locked wrapper for use outside r.mu.
+func (r *officialRecovery) noteRealOutput(sid string, now int64) {
+	r.mu.Lock()
+	r.noteRealOutputLocked(sid, now)
+	r.mu.Unlock()
+}
+
+// realOutputSinceLocked is the r.mu-held variant used inside transitions.
+func (r *officialRecovery) realOutputSinceLocked(sid string, ts int64) bool {
+	at := r.realOutputAt[sid]
+	return at > 0 && at >= ts
+}
+
+// realOutputSince reports whether real output was observed at or after ts.
+func (r *officialRecovery) realOutputSince(sid string, ts int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	at := r.realOutputAt[sid]
+	return at > 0 && at >= ts
+}
+
 func (r *officialRecovery) turnProgressMs(sid string) int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -85,6 +120,7 @@ func (r *officialRecovery) watchdogFactsProgress(sid string, revision int64, tok
 			r.turnProgressAt = map[string]int64{}
 		}
 		r.turnProgressAt[sid] = now
+		r.noteRealOutputLocked(sid, now)
 		delete(r.turnStallProbe, sid)
 	}
 	return moved

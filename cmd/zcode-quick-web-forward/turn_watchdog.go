@@ -218,18 +218,46 @@ func (r *officialRecovery) handleNoFactsStall(b *officialHostBridge, sid string,
 // the text used to lose that race (2026-09-18 07:25: the turns started in
 // build mode and hit the wall again). On timeout the text still goes out
 // (the mid-tool check below remains the backstop).
+//
+// The leading stop is the zombie-foreground-turn kick: a session whose turn
+// died abnormally (AiSdkModelAdapterError, mid-tool cut, engine respawn)
+// can keep a dead foreground turn in the engine's runtime — the projection
+// reports idle yet every new send is enqueued behind the zombie and
+// silently dropped (hours of lost submissions on 2026-09-15; the shopify
+// session never restarted after 07:25 until this stop was added). On a
+// healthy idle engine the stop is a harmless no-op.
 func injectStagedWithMode(b *officialHostBridge, sid, text string) {
+	fmt.Printf("zcode: watchdog: %s kicking runtime (zombie turn guard) before staged text\n", shortSid(sid))
+	officialInjectCommand(sid, "stop", map[string]any{}, "")
+	time.Sleep(2 * time.Second)
 	if mode := b.rec.stagedMode(sid); mode != "" {
 		fmt.Printf("zcode: watchdog: %s re-applying collaboration mode %s before staged text\n", shortSid(sid), mode)
 		officialInjectMode(b.rec, sid, mode)
-		if !waitForModeAck(b.rec, sid, 10*time.Second) {
-			fmt.Printf("zcode: watchdog: %s mode %s not confirmed in 10s — sending text anyway\n", shortSid(sid), mode)
+		if !waitForModeAck(b.rec, sid, 30*time.Second) {
+			fmt.Printf("zcode: watchdog: %s mode %s not confirmed in 30s — sending text anyway\n", shortSid(sid), mode)
 		}
 	}
 	officialInjectCommand(sid, "sendText", map[string]any{
 		"text":                 text,
 		"heldQueueDisposition": "clearQueueAndSend",
 	}, "")
+}
+
+// signalModeAck wakes a waitForModeAck waiter for sid (no-op if none).
+func (r *officialRecovery) signalModeAck(sid string) {
+	if sid == "" {
+		return
+	}
+	r.mu.Lock()
+	ch := r.modeAck[sid]
+	delete(r.modeAck, sid)
+	r.mu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- "ack":
+		default:
+		}
+	}
 }
 
 // officialInjectMode sends the mode switch and arms the per-session ack
@@ -402,7 +430,7 @@ func verifyHeadlessTurnCompletion(b *officialHostBridge, sid string) {
 		return
 	}
 	fmt.Printf("zcode: watchdog: %s turn ended %ds ago with its last model response still holding tool calls — mid-tool cut\n",
-		shortSid(sid), time.Now().UnixMilli()-at/1_000_000)
+		shortSid(sid), (time.Now().UnixMilli()-at/1_000_000)/1_000)
 	// Continuation text: the original staged text if still unconsumed, else a
 	// generic resume prompt. Re-stage whichever we send so this turn is
 	// itself journaled and supervised.
@@ -433,10 +461,16 @@ func modelIOPath(sid string) string {
 
 // modelIOTailCut reads the engine's model-io journal and reports whether its
 // final entry is a model response that still holds unanswered tool calls,
-// staged no earlier than stagedAt-5s and quiet for ≥60s.
+// staged no earlier than stagedAt-5s and quiet for ≥180s.
 // Returns (cut, fileModTimeNs). Missing/unparseable files are "not cut" —
 // this check may only ADD resurrections, never fabricate them.
+//
+// The 180s quiet window matters: a live turn with a slow tool execution
+// (>60s between model rounds — a long kube query, a big build) looks exactly
+// like a dead file, and the false "cut" resurrect queued a duplicate
+// continuation behind the healthy turn (2026-09-18 07:52).
 func modelIOTailCut(path string, stagedAt int64) (bool, int64) {
+	const quietFor = 180 * time.Second
 	if path == "" {
 		return false, 0
 	}
@@ -444,7 +478,7 @@ func modelIOTailCut(path string, stagedAt int64) (bool, int64) {
 	if err != nil || fi.Size() == 0 {
 		return false, 0
 	}
-	if time.Since(fi.ModTime()) < 60*time.Second {
+	if time.Since(fi.ModTime()) < quietFor {
 		return false, 0 // engine still writing — a turn may be live
 	}
 	f, err := os.Open(path)
