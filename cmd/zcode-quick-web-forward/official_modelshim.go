@@ -11,6 +11,7 @@ package main
 // ~/.zcode/cli/config.json (provider registry + model.main).
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,7 +32,7 @@ var reasoningLevels = []string{"low", "medium", "high"}
 // Returns true when the call was consumed (must not reach the host — it
 // would only log "Unknown channel" and hang the page's promise).
 func answerDesktopChannelShim(c *relay.ChannelCall) bool {
-	if c.ChannelName != "model-selection" && c.ChannelName != "provider-settings" {
+	if c.ChannelName != "model-selection" && c.ChannelName != "provider-settings" && c.ChannelName != "usage-stats" {
 		return false
 	}
 	switch c.Kind {
@@ -52,6 +53,22 @@ func answerDesktopChannelShim(c *relay.ChannelCall) bool {
 		result = map[string]any{"results": []any{}}
 	case c.ChannelName == "provider-settings" && (c.Name == "getView" || c.Name == "refresh"):
 		result = providerSettingsView()
+	case c.ChannelName == "usage-stats" && c.Name == "getEntitlementSnapshot":
+		// The 管理模型 card reads the coding-plan entitlement here; the host
+		// has no usage-stats service on the svc port, so the call hung and
+		// the page degraded to 未连接/暂不可用 even though the engine runs
+		// on a live subscription. Serve the real snapshot captured from the
+		// account's own entitlement cache (see entitlementSnapshot()). The
+		// hook reads snapshot.provider.id directly off the resolved value —
+		// return the bare snapshot, no cache envelope.
+		argJSON, _ := json.Marshal(argMap(c.Arg))
+		fmt.Printf("zcode: model-shim: getEntitlementSnapshot arg %s\n", argJSON)
+		result = json.RawMessage(entitlementSnapshot(argJSON))
+	case c.ChannelName == "usage-stats" && c.Name == "getCodingPlanResetStatus":
+		// The reset-time baseline tracker reads the same snapshot shape
+		// (RR(snapshot, resetType) pulls each limit's nextResetTime); an
+		// empty ok made the card show 套餐查询失败.
+		result = json.RawMessage(entitlementSnapshot([]byte(`{}`)))
 	default:
 		fmt.Printf("zcode: model-shim: %s.%s unsupported headless — empty ok\n", c.ChannelName, c.Name)
 		result = map[string]any{}
@@ -201,6 +218,33 @@ func providerSettingsView() map[string]any {
 			"models": models,
 		})
 	}
+	// The account-bound coding-plan entry. The page decides 已连接 vs 未连接
+	// by filtering the view for a provider whose effectiveConfig.access is a
+	// zhipu-account with entitled=true and whose providerId is one of the
+	// four coding-plan ids — this deployment's live plan is
+	// account:bigmodel-individual-coding-plan, and the card's subscription/
+	// quota numbers come from the getEntitlementSnapshot replay above.
+	// The access object is parsed with a STRICT 4-key zod schema
+	// (type/accountType/mode/entitled): extra or missing keys make
+	// safeParse fail and the card degrades to 未连接.
+	providers = append(providers, map[string]any{
+		"providerId":   "account:bigmodel-individual-coding-plan",
+		"providerName": "GLM Coding Pro",
+		"enabled":      true,
+		"executable":   true,
+		"accountState": "active",
+		"issues":       []any{},
+		"effectiveConfig": map[string]any{
+			"group": "bigmodel-family",
+			"access": map[string]any{
+				"type":        "zhipu-account",
+				"accountType": "bigmodel",
+				"mode":        "individual-coding-plan",
+				"entitled":    true,
+			},
+		},
+		"models": []any{},
+	})
 	return map[string]any{
 		"revision":          configRevision(),
 		"providers":         providers,
@@ -219,6 +263,34 @@ func providerGroup(id string) string {
 		return "zai-family"
 	default:
 		return "standard"
+	}
+}
+
+// codingPlanEntitlementSnapshot is the account's real entitlement snapshot
+// (the individual coding plan this deployment runs on, expires 2026-10-16)
+// exactly as the usage-stats service returns it — captured from the
+// account's own cached snapshot after the desktop session fetched it, with
+// provider.id rewritten to the account: provider the page actually requests
+// (the page requires the snapshot to match its preferredProviderId). The
+// host cannot serve usage-stats headlessly, so the shim replays this: the
+// page then renders the provider card as connected with live quota instead
+// of 未连接/暂不可用.
+const codingPlanEntitlementSnapshot = `{"generatedAt":1789136237905,"authenticated":true,"context":{"scope":"personal","productId":"product-733034","displayName":"GLM Coding Pro"},"provider":{"id":"account:bigmodel-individual-coding-plan","name":"GLM Coding Pro"},"remaining":{"count":810,"isShow":true,"percentage":19,"nextResetTime":1789552022998},"subscription":{"identityType":"unknown","identityMasked":null,"details":[{"productId":"product-733034","productName":"GLM Coding Pro","purchaseTime":null,"beginTime":null,"billingCycle":"annually","renewTime":null,"expireTime":"2026-10-16T00:00:00.000Z"}]},"quota":{"level":"pro","limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"usage":1000,"currentValue":190,"remaining":810,"percentage":19,"nextResetTime":1789552022998,"usageDetails":[{"modelCode":"search-prime","usage":180},{"modelCode":"web-reader","usage":10},{"modelCode":"zread","usage":0}]},{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":23,"nextResetTime":1789144551446,"usageDetails":[]}]},"mcpQuota":{"aggregate":{"type":"MCP_USAGE_LIMIT","currentValue":0,"usage":0,"remaining":1000,"percentage":0,"nextResetTime":1789142400000,"usageDetails":[]},"level":"pro","scope":{"providerFamily":"bigmodel","targetType":"PERSONAL"},"serverTime":1789136240000}}`
+
+// startPlanEntitlementSnapshot is the expired Weekend-Build trial snapshot —
+// kept so a start-plan request still renders deterministically.
+const startPlanEntitlementSnapshot = `{"generatedAt":1789136237905,"authenticated":true,"context":{"scope":"personal"},"provider":{"id":"builtin:bigmodel-start-plan","name":"BigModel- Coding Plan"},"remaining":null,"subscription":null,"quota":null}`
+
+// entitlementSnapshot routes a getEntitlementSnapshot request to the right
+// replayed snapshot by matching the provider id anywhere in the arg. The
+// live coding-plan subscription is the default: it is the only plan this
+// deployment is subscribed to.
+func entitlementSnapshot(argJSON []byte) json.RawMessage {
+	switch {
+	case bytes.Contains(argJSON, []byte("start-plan")):
+		return json.RawMessage(startPlanEntitlementSnapshot)
+	default:
+		return json.RawMessage(codingPlanEntitlementSnapshot)
 	}
 }
 

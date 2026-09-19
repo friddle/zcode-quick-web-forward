@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,7 +45,7 @@ func TestProviderSettingsViewShape(t *testing.T) {
 			t.Fatalf("provider %v: effectiveConfig.group must be a non-empty string", p["providerId"])
 		}
 		models := p["models"].([]any)
-		if len(models) == 0 {
+		if pid, _ := p["providerId"].(string); !strings.HasPrefix(pid, "account:") && len(models) == 0 {
 			t.Fatalf("provider %v: models must not be empty", p["providerId"])
 		}
 		for _, mv := range models {
