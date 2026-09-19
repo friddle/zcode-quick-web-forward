@@ -150,6 +150,30 @@ func inspectOfficialResponse(raw []byte) {
 		delete(r.pendingRaw, id)
 		delete(r.retrying, id)
 		r.mu.Unlock()
+		// A daemon-injected createSession was ACCEPTED: harvest the new
+		// session id from the ack and arm its headless supervision —
+		// optimistic running mark + staged text/mode for the watchdog.
+		if kind == relay.KindPromiseOK && len(data) > 0 {
+			r.mu.Lock()
+			watch := r.pendingCreateSes[id]
+			delete(r.pendingCreateSes, id)
+			r.mu.Unlock()
+			if watch != nil {
+				if sid := extractCreatedSessionId(data); sid != "" {
+					// The setters take r.mu themselves — sequential, not nested.
+					r.setStagedRetry(sid, watch.Text)
+					if watch.Mode != "" {
+						r.setStagedRetryMode(sid, watch.Mode)
+					}
+					r.mu.Lock()
+					r.recordTurnRunning(sid, true)
+					r.mu.Unlock()
+					fmt.Printf("zcode: recovery: created session %s for %s — supervision armed\n", sid, watch.Workspace)
+				} else {
+					fmt.Printf("zcode: recovery: createSession ack had no session id: %s\n", firstJSON(data))
+				}
+			}
+		}
 		// A sendText the host ultimately REJECTED (its ~30s admission pend
 		// ended in an error) must never stay silent: we early-acked the page,
 		// so without this line the message just vanishes from the user's view.
@@ -516,3 +540,30 @@ func sidFromFrameBytes(data []byte) string {
 }
 
 // keysOf returns the top-level keys of a decoded JSON object (diagnostics).
+
+// extractCreatedSessionId pulls the fresh session id out of a
+// createSession ack: the body carries sessionId (zod-nullable-required),
+// with a raw "sess_…" scan as the fallback for shape drift.
+func extractCreatedSessionId(data []byte) string {
+	var body struct {
+		SessionID string `json:"sessionId"`
+		Ack       struct {
+			SessionID string `json:"sessionId"`
+		} `json:"ack"`
+	}
+	if json.Unmarshal(data, &body) == nil {
+		if body.SessionID != "" {
+			return body.SessionID
+		}
+		if body.Ack.SessionID != "" {
+			return body.Ack.SessionID
+		}
+	}
+	if i := bytes.Index(data, []byte(`"sess_`)); i >= 0 {
+		rest := data[i+1:]
+		if end := bytes.IndexAny(rest, "\"\\"); end > 0 {
+			return string(rest[:end])
+		}
+	}
+	return ""
+}

@@ -163,7 +163,20 @@ func modelSelectionView() map[string]any {
 			"providerName": p.Name,
 			"enabled":      true,
 			"models":       models,
-			"config":       reasoningSpec(),
+			"config": map[string]any{
+				"optionSpecs": reasoningSpec()["optionSpecs"],
+				// The composer picker FILTERS providers by api.type (t2e):
+				// a provider without config.api is dropped wholesale and the
+				// picker renders zero models. The registry kind is the truth
+				// (both coding-plan providers speak the anthropic protocol).
+				"api":   map[string]any{"type": "anthropic"},
+				"access": map[string]any{
+					"type":        "zhipu-account",
+					"accountType": providerAccountType(p.ID),
+					"mode":        "individual-coding-plan",
+					"entitled":    true,
+				},
+			},
 		}
 		providers = append(providers, entry)
 	}
@@ -264,6 +277,14 @@ func providerGroup(id string) string {
 	default:
 		return "standard"
 	}
+}
+
+// providerAccountType maps a config provider to its zhipu-account family.
+func providerAccountType(id string) string {
+	if strings.Contains(id, "zai") {
+		return "zai"
+	}
+	return "bigmodel"
 }
 
 // codingPlanEntitlementSnapshot is the account's real entitlement snapshot

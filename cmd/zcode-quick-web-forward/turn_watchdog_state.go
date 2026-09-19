@@ -21,10 +21,10 @@ func (r *officialRecovery) noteTurnProgressLocked(sid string, now int64) {
 		r.turnProgressAt = map[string]int64{}
 	}
 	r.turnProgressAt[sid] = now
-	// Real progress retires the escalation ladder and the death spiral.
+	// Progress retires the escalation ladder. NOTE: the resurrect-spiral
+	// counter does NOT reset here — see noteRealOutputLocked.
 	r.turnStallProbe = map[string]int{}
 	r.turnKickCount = map[string]int{}
-	delete(r.resurrectCount, sid)
 }
 
 // noteRealOutputLocked records REAL turn output evidence (a live engine
@@ -39,6 +39,11 @@ func (r *officialRecovery) noteRealOutputLocked(sid string, now int64) {
 		r.realOutputAt = map[string]int64{}
 	}
 	r.realOutputAt[sid] = now
+	// REAL evidence alone resets the death spiral: the optimistic inject
+	// stamp must not, or every re-inject resets its own resurrect counter
+	// and the 4-attempt engine-kill cap never arms (2026-09-19 10:2x
+	// feedback-system: the ladder looped retry->wedge forever).
+	delete(r.resurrectCount, sid)
 }
 
 // noteRealOutput is the locked wrapper for use outside r.mu.

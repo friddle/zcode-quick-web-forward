@@ -107,6 +107,7 @@ type officialRecovery struct {
 	lastQEmitted     map[string]int              // sessionId -> queue size at last emitted snapshot
 	termListens      []*relay.ChannelCall        // cached terminal.onDynamic* listens (forwarded after create)
 	pendingCreate    map[int]bool                // terminal.create call ids awaiting their id
+	pendingCreateSes map[int]*createSessionWatch // createSession call ids awaiting the new session id (headless supervision)
 	lastTermID       string                      // most recently created terminal id
 	snaps            map[string]json.RawMessage
 	snapsOrder       []string
@@ -350,6 +351,16 @@ type officialHostState struct {
 }
 
 var officialState officialHostState
+
+// createSessionWatch tracks a daemon-injected createSession until the host
+// answers with the new session id, so the fresh headless task enters the
+// watchdog's supervision (optimistic running mark + staged text) instead of
+// being invisible for its whole life.
+type createSessionWatch struct {
+	Workspace string
+	Text      string
+	Mode      string
+}
 
 type pendingRawCall struct {
 	raw  []byte

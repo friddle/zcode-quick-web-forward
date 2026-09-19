@@ -430,6 +430,16 @@ func officialInjectCreateSession(workspace, text, mode string) {
 	c := &relay.ChannelCall{Kind: relay.KindPromise, ID: b.rec.mintID(),
 		ChannelName: "zcode-agent", Name: "sendConversationCommandV4", Arg: arg}
 	fmt.Printf("zcode: recovery: injecting createSession for %s (%d chars)\n", workspace, len(text))
+	// Arm the headless supervision for the session this create will spawn:
+	// without an optimistic running mark the turn-stall watchdog never sees
+	// the session (no page = no facts either) and a wedged first turn sits
+	// there forever (the 09:51 feedback-system task).
+	b.rec.mu.Lock()
+	if b.rec.pendingCreateSes == nil {
+		b.rec.pendingCreateSes = map[int]*createSessionWatch{}
+	}
+	b.rec.pendingCreateSes[c.ID] = &createSessionWatch{Workspace: workspace, Text: text, Mode: mode}
+	b.rec.mu.Unlock()
 	forwardCallToOfficialHost(c)
 }
 
