@@ -336,9 +336,10 @@ func phoneURL(o Options, st state) string {
 	if o.DeviceName != "" {
 		q.Set("name", o.DeviceName)
 	}
-	if o.AppVersion != "" {
-		q.Set("app_version", o.AppVersion)
-	}
+	// app_version is deliberately NOT sent: the 2026-09-19 web deploy made
+	// the site's router answer 404 to /remote/v4?app_version=0.7.0 while the
+	// same URL without it serves fine — the parameter is informational only
+	// and now actively breaks every pairing link it appears in.
 	u.RawQuery = q.Encode()
 	return u.String()
 }
