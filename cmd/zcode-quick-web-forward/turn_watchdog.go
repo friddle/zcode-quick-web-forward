@@ -348,6 +348,13 @@ func killWedgedEngine(b *officialHostBridge, sid string) {
 	officialState.mu.Lock()
 	ws := officialState.workspace
 	officialState.mu.Unlock()
+	// A daemon-CREATED session belongs to ITS workspace, not the default
+	// one: killing the default engine leaves the wedged session's engine
+	// untouched and murders the healthy workspace's runtime instead (the
+	// 10:3x incident: the feedback session's wedge killed the erp engines).
+	if sw := b.rec.sessionWorkspaceOf(sid); sw != "" {
+		ws = sw
+	}
 	if ws == "" {
 		return
 	}

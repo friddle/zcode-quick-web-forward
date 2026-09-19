@@ -166,6 +166,10 @@ func inspectOfficialResponse(raw []byte) {
 						r.setStagedRetryMode(sid, watch.Mode)
 					}
 					r.mu.Lock()
+					if r.sessionWorkspace == nil {
+						r.sessionWorkspace = map[string]string{}
+					}
+					r.sessionWorkspace[sid] = watch.Workspace
 					r.recordTurnRunning(sid, true)
 					r.mu.Unlock()
 					fmt.Printf("zcode: recovery: created session %s for %s — supervision armed\n", sid, watch.Workspace)

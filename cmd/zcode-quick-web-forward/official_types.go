@@ -108,6 +108,7 @@ type officialRecovery struct {
 	termListens      []*relay.ChannelCall        // cached terminal.onDynamic* listens (forwarded after create)
 	pendingCreate    map[int]bool                // terminal.create call ids awaiting their id
 	pendingCreateSes map[int]*createSessionWatch // createSession call ids awaiting the new session id (headless supervision)
+	sessionWorkspace map[string]string           // sessionId -> workspacePath of daemon-created sessions (engine kill targeting)
 	lastTermID       string                      // most recently created terminal id
 	snaps            map[string]json.RawMessage
 	snapsOrder       []string

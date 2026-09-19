@@ -46,6 +46,14 @@ func (r *officialRecovery) noteRealOutputLocked(sid string, now int64) {
 	delete(r.resurrectCount, sid)
 }
 
+// sessionWorkspaceOf returns the workspace a daemon-created session belongs
+// to ("" when unknown).
+func (r *officialRecovery) sessionWorkspaceOf(sid string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sessionWorkspace[sid]
+}
+
 // noteRealOutput is the locked wrapper for use outside r.mu.
 func (r *officialRecovery) noteRealOutput(sid string, now int64) {
 	r.mu.Lock()
