@@ -66,15 +66,21 @@ func startTurnWatchdog(b *officialHostBridge) {
 	rec.mu.Unlock()
 	loadStagedJournal(rec)
 	go rearmStagedOnBoot(b)
-	go func() {
-		for {
-			time.Sleep(watchdogTick)
-			if !b.h.Alive() {
-				continue
+		go func() {
+			for {
+				time.Sleep(watchdogTick)
+				if !b.h.Alive() {
+					// The host died underneath the watchdog (engine kills once
+					// took the shim down with them). Respawn so staged-input
+					// resurrection and headless checks have a pipe again —
+					// otherwise headless recovery silently dead-ends until a
+					// human reloads the page.
+					officialEnsureHostAlive()
+					continue
+				}
+				turnWatchdogTick(b)
 			}
-			turnWatchdogTick(b)
-		}
-	}()
+		}()
 	fmt.Println("zcode: turn watchdog started (stall>2.5m → stop → engine kill → retry, staged journal re-arm)")
 }
 
@@ -237,6 +243,10 @@ func (r *officialRecovery) handleNoFactsStall(b *officialHostBridge, sid string,
 // session never restarted after 07:25 until this stop was added). On a
 // healthy idle engine the stop is a harmless no-op.
 func injectStagedWithMode(b *officialHostBridge, sid, text string) {
+	if !b.rec.noteStagedInject(sid) {
+		fmt.Printf("zcode: watchdog: %s staged input exhausted %d inject tries — dropping text (circuit breaker)\n", shortSid(sid), stagedInjectMaxTries)
+		return
+	}
 	fmt.Printf("zcode: watchdog: %s kicking runtime (zombie turn guard) before staged text\n", shortSid(sid))
 	officialInjectCommand(sid, "stop", map[string]any{}, "")
 	// Headless auto-drain: the engine only promotes admitted-but-queued

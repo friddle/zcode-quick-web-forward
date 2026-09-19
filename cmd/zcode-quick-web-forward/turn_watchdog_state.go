@@ -44,6 +44,11 @@ func (r *officialRecovery) noteRealOutputLocked(sid string, now int64) {
 	// and the 4-attempt engine-kill cap never arms (2026-09-19 10:2x
 	// feedback-system: the ladder looped retry->wedge forever).
 	delete(r.resurrectCount, sid)
+	// A turn that provably ran also earns the staged text a fresh inject
+	// budget: only never-productive texts should hit the circuit breaker.
+	if r.stagedTries != nil {
+		delete(r.stagedTries, sid)
+	}
 }
 
 // sessionWorkspaceOf returns the workspace a daemon-created session belongs
@@ -238,6 +243,12 @@ func (r *officialRecovery) setStagedRetry(sid, text string) {
 	r.stagedRetry[sid] = text
 	r.stagedRetryAt[sid] = now
 	delete(r.stagedRetryTaken, sid)
+	// A brand-new explicit submission is not a retry: give it a fresh
+	// inject budget regardless of what an older staged text burned.
+	if r.stagedTries == nil {
+		r.stagedTries = map[string]int{}
+	}
+	delete(r.stagedTries, sid)
 	writeStagedJournalLocked(r)
 	r.mu.Unlock()
 }
@@ -280,6 +291,36 @@ func (r *officialRecovery) clearStagedText(sid string) {
 	delete(r.stagedRetry, sid)
 	delete(r.stagedRetryTaken, sid)
 	writeStagedJournalLocked(r)
+}
+
+// stagedInjectMaxTries caps how many times the SAME staged text may be
+// re-injected (persisted in the journal, so the cap survives restarts —
+// unlike the in-memory resurrectCount, which the boot re-arm ignored). A
+// text that never produced real output after this many injections is
+// poisoned: it wedges or crashes every engine that loads it, and each retry
+// adds one more startNow row to the engine queue while flooding attached
+// pages with resynthesized snapshots.
+const stagedInjectMaxTries = 4
+
+// noteStagedInject counts one more inject attempt for sid's staged text and
+// reports whether the inject may proceed. Real output resets the counter
+// (noteRealOutputLocked) — a turn that provably ran earns a fresh budget for
+// any LATER interruption retry; only never-productive texts hit the wall.
+func (r *officialRecovery) noteStagedInject(sid string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stagedTries == nil {
+		r.stagedTries = map[string]int{}
+	}
+	r.stagedTries[sid]++
+	if r.stagedTries[sid] > stagedInjectMaxTries {
+		delete(r.stagedRetry, sid)
+		delete(r.stagedRetryTaken, sid)
+		writeStagedJournalLocked(r)
+		return false
+	}
+	writeStagedJournalLocked(r)
+	return true
 }
 
 // takeStagedRetry pops the staged retry text, once per stall episode.

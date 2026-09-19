@@ -33,7 +33,9 @@ var reasoningLevels = []string{"low", "medium", "high"}
 // would only log "Unknown channel" and hang the page's promise).
 func answerDesktopChannelShim(c *relay.ChannelCall) bool {
 	if c.ChannelName != "model-selection" && c.ChannelName != "provider-settings" && c.ChannelName != "usage-stats" {
-		return false
+		if !(c.ChannelName == "zcode-session" && c.Name == "readWorkspacePresentation") {
+			return false
+		}
 	}
 	switch c.Kind {
 	case relay.KindEventListen, relay.KindEventDispose:
@@ -48,7 +50,7 @@ func answerDesktopChannelShim(c *relay.ChannelCall) bool {
 	var result any
 	switch {
 	case c.ChannelName == "model-selection" && (c.Name == "getView" || c.Name == "refresh"):
-		result = modelSelectionView()
+		result = modelSelectionView(argMap(c.Arg))
 	case c.ChannelName == "model-selection" && c.Name == "testModelConnectivity":
 		result = map[string]any{"results": []any{}}
 	case c.ChannelName == "provider-settings" && (c.Name == "getView" || c.Name == "refresh"):
@@ -69,6 +71,19 @@ func answerDesktopChannelShim(c *relay.ChannelCall) bool {
 		// (RR(snapshot, resetType) pulls each limit's nextResetTime); an
 		// empty ok made the card show 套餐查询失败.
 		result = json.RawMessage(entitlementSnapshot([]byte(`{}`)))
+	case c.ChannelName == "zcode-session" && c.Name == "readWorkspacePresentation":
+		// The composer's config-options flight (Dw → readWorkspacePresentation)
+		// aborts wholesale when this call fails: configOptionsStatus flips to
+		// "error", the model button degrades to 管理模型 and SEND stays
+		// disabled — the "模型选不了/提交不了" symptom. The deployed host
+		// bundle predates the method ("Method not found"), so the shim serves
+		// the minimal contract: n.mode → rhe(mode) builds the mode select
+		// (unknown/empty mode falls back to "build" page-side), n.slashCommands
+		// feeds the command catalog.
+		result = map[string]any{
+			"mode":          "build",
+			"slashCommands": []any{},
+		}
 	default:
 		fmt.Printf("zcode: model-shim: %s.%s unsupported headless — empty ok\n", c.ChannelName, c.Name)
 		result = map[string]any{}
@@ -145,7 +160,16 @@ func reasoningSpec() map[string]any {
 
 // modelSelectionView is the model-selection.getView payload: the composer's
 // picker list plus the active selection (model.main from config).
-func modelSelectionView() map[string]any {
+//
+// effectiveSelection is what makes a picked model actually COMMIT: the
+// composer derives its runtime config from view.effectiveSelection whenever
+// the view is ready and IGNORES the draft's own modelSelection
+// (`let w = x ? x.effectiveSelection ?? void 0 : y.modelSelection` in the
+// page bundle). A view without effectiveSelection therefore shows 管理模型
+// and keeps SEND disabled even though the draft recorded the click — the
+// "选择不生效" bug. The picker passes the draft selection in the call args;
+// validate it against the view and echo it back.
+func modelSelectionView(arg map[string]any) map[string]any {
 	provID, modelID := zcode.DefaultModel()
 	providers := []any{}
 	for _, p := range configProviders() {
@@ -184,6 +208,10 @@ func modelSelectionView() map[string]any {
 		"revision":  configRevision(),
 		"providers": providers,
 	}
+	sel := effectiveSelection(arg, providers, provID, modelID)
+	if sel != nil {
+		view["effectiveSelection"] = sel
+	}
 	if provID != "" && modelID != "" {
 		view["preferredSelection"] = map[string]any{
 			"providerId": provID,
@@ -192,6 +220,74 @@ func modelSelectionView() map[string]any {
 		}
 	}
 	return view
+}
+
+// effectiveSelection validates the selection the composer passed in the
+// getView args (arg.selection) against the providers of this view and
+// returns it as the view's effectiveSelection. Falls back to the config's
+// preferred (model.main) selection — the desktop semantics: the composer's
+// active model is the draft selection when valid, else the persisted default.
+func effectiveSelection(arg map[string]any, providers []any, prefProv, prefModel string) map[string]any {
+	argSel, _ := arg["selection"].(map[string]any)
+	if validSelection(argSel, providers) {
+		return normalizeSelection(argSel)
+	}
+	if prefProv != "" && prefModel != "" {
+		sel := map[string]any{
+			"providerId": prefProv,
+			"modelId":    prefModel,
+			"options":    map[string]any{"reasoningLevel": reasoningLevels[len(reasoningLevels)-1]},
+		}
+		if validSelection(sel, providers) {
+			return sel
+		}
+	}
+	return nil
+}
+
+// validSelection reports whether sel names a provider of this view and one
+// of that provider's models (the composer's picker only offers those, so a
+// stored draft can only ever name view entries).
+func validSelection(sel map[string]any, providers []any) bool {
+	if sel == nil {
+		return false
+	}
+	prov, _ := sel["providerId"].(string)
+	model, _ := sel["modelId"].(string)
+	if prov == "" || model == "" {
+		return false
+	}
+	for _, pe := range providers {
+		p, ok := pe.(map[string]any)
+		if !ok || p["providerId"] != prov {
+			continue
+		}
+		models, _ := p["models"].([]any)
+		for _, me := range models {
+			m, ok := me.(map[string]any)
+			if ok && m["modelId"] == model {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// normalizeSelection fills the options the page's selection schema expects.
+func normalizeSelection(sel map[string]any) map[string]any {
+	out := map[string]any{
+		"providerId": sel["providerId"],
+		"modelId":    sel["modelId"],
+	}
+	opts, _ := sel["options"].(map[string]any)
+	if opts == nil {
+		opts = map[string]any{}
+	}
+	if _, ok := opts["reasoningLevel"].(string); !ok {
+		opts["reasoningLevel"] = reasoningLevels[len(reasoningLevels)-1]
+	}
+	out["options"] = opts
+	return out
 }
 
 // providerSettingsView is the provider-settings.getView payload behind the

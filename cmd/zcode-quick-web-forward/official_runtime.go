@@ -3,6 +3,10 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/friddle/zcode-quick-web-forward/internal/relay"
 	"log"
 	"os"
@@ -208,14 +212,60 @@ func senderSend() func(any) {
 	}
 }
 
+// officialSpawnMu serializes host respawns: officialReattach, the forward
+// path and the watchdog can all notice a dead host at the same moment, and
+// maybeStartOfficialHost's reuse-check is not atomic across the spawn.
+var officialSpawnMu sync.Mutex
+
+// officialSpawnLastAt rate-limits respawn attempts so a failing start (bundle
+// missing, node broken) does not turn every forwarded frame into a spawn try.
+var officialSpawnLastAt atomic.Int64
+
+// officialEnsureHostAlive respawns the official host after an exit and
+// returns the live bridge (nil when official mode is not configured). The
+// host can die underneath the daemon — watchdog engine kills once took it
+// down too (its shim inherited the engine's ZCODE_AGENT_SERVER_CWD) — and a
+// dead host means every forwarded channel call is dropped while the page
+// waits on the pairing splash forever. The respawn reuses the stored engine
+// command and re-arms the watchdog/canary through maybeStartOfficialHost.
+func officialEnsureHostAlive() *officialHostBridge {
+	officialSpawnMu.Lock()
+	defer officialSpawnMu.Unlock()
+	officialState.mu.Lock()
+	b := officialState.active
+	node, script, ws, mid := officialState.nodeBin, officialState.script, officialState.workspace, officialState.mid
+	engine, sender := officialState.engine, officialState.sender
+	officialState.mu.Unlock()
+	if b != nil && b.h.Alive() {
+		return b
+	}
+	if node == "" || engine == nil {
+		return b // official host never configured — builtin-handler mode
+	}
+	if now := time.Now().UnixMilli(); now-officialSpawnLastAt.Load() < 10_000 {
+		return b // a respawn attempt is seconds old — give it time to boot
+	}
+	officialSpawnLastAt.Store(time.Now().UnixMilli())
+	if b != nil {
+		b.h.Stop() // no-op once exited; reaps the process
+	}
+	if maybeStartOfficialHost(engine, sender, node, script, ws, mid) {
+		fmt.Println("zcode: official host respawned (ensure-alive)")
+	}
+	officialState.mu.Lock()
+	b = officialState.active
+	officialState.mu.Unlock()
+	return b
+}
+
 // officialReattach attaches a FRESH service port on the live host. Called on
 // every workspace-bridge-open; a repeated attach with the same attachmentId
 // does not survive the host's dispose of the previous bridge generation.
+// A host that exited underneath us is respawned here — the page's bridge-open
+// is the first signal that the service pipe is needed again.
 func officialReattach() {
-	officialState.mu.Lock()
-	b := officialState.active
-	officialState.mu.Unlock()
-	if b == nil || !b.h.Alive() {
+	b := officialEnsureHostAlive()
+	if b == nil {
 		return
 	}
 	b.mu.Lock()

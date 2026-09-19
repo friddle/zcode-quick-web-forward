@@ -34,6 +34,7 @@ type stagedJournalEntry struct {
 	Text string `json:"text"`
 	Mode string `json:"mode,omitempty"`
 	At   int64  `json:"at"`
+	Tries int   `json:"tries,omitempty"`
 }
 
 // writeStagedJournalLocked mirrors the staged map to disk. Caller holds r.mu.
@@ -47,7 +48,7 @@ func writeStagedJournalLocked(r *officialRecovery) {
 		if r.stagedRetryTaken[sid] && at == 0 {
 			continue
 		}
-		out[sid] = stagedJournalEntry{Text: text, Mode: r.stagedModeBy[sid], At: at}
+		out[sid] = stagedJournalEntry{Text: text, Mode: r.stagedModeBy[sid], At: at, Tries: r.stagedTries[sid]}
 	}
 	// Mode-only entries (text consumed, mode still valid) must survive the
 	// rebuild or the next staged write would silently drop them.
@@ -64,7 +65,7 @@ func writeStagedJournalLocked(r *officialRecovery) {
 		if at == 0 {
 			at = time.Now().UnixMilli()
 		}
-		out[sid] = stagedJournalEntry{Mode: mode, At: at}
+		out[sid] = stagedJournalEntry{Mode: mode, At: at, Tries: r.stagedTries[sid]}
 	}
 	writeStagedJournal(out)
 }
@@ -174,6 +175,18 @@ func loadStagedJournal(r *officialRecovery) {
 		}
 		if r.stagedRetryTaken == nil {
 			r.stagedRetryTaken = map[string]bool{}
+		}
+		if r.stagedTries == nil {
+			r.stagedTries = map[string]int{}
+		}
+		r.stagedTries[sid] = e.Tries
+		if e.Tries >= stagedInjectMaxTries {
+			// Poisoned input: this text already burned its inject budget
+			// without ever producing a completed turn (the sess_ba174238
+			// incident — 126 injections, each re-queued startNow, each
+			// engine start wedging on the same input). Never re-arm it.
+			fmt.Printf("zcode: watchdog: %s staged input hit %d tries — NOT re-arming from journal\n", shortSid(sid), e.Tries)
+			continue
 		}
 		if _, taken := r.stagedRetryTaken[sid]; !taken {
 			r.stagedRetry[sid] = e.Text

@@ -693,7 +693,12 @@ func forwardRawToOfficialHost(raw []byte) bool {
 	b := officialState.active
 	officialState.mu.Unlock()
 	if b == nil || !b.h.Alive() {
-		return false
+		// Host exited underneath us — respawn it and hold the frame on the
+		// fresh bridge: dropping it here leaves the phone's promise hanging
+		// and, for an injected turn, the task silently lost.
+		if b = officialEnsureHostAlive(); b == nil {
+			return false
+		}
 	}
 	if !b.ready.Load() {
 		// host still initializing its workspaces — hold the frame

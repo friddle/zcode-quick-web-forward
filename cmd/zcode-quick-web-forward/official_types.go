@@ -158,6 +158,7 @@ type officialRecovery struct {
 	stagedRetryAt    map[string]int64            // sessionId -> unix ms the text was staged (output-since gate)
 	stagedRetryTaken map[string]bool             // sessionId -> staged retry already consumed
 	stagedModeBy     map[string]string           // sessionId -> collaboration mode to replay before staged texts (journaled)
+	stagedTries      map[string]int              // sessionId -> persisted inject attempts for the staged text (circuit breaker, journaled)
 	modeAck          map[string]chan string      // sessionId -> signalled when the staged switchCollaborationMode is answered
 	autoApproved     map[string]bool             // interactionIds already auto-approved (headless path)
 	engineKilledAt   int64                       // unix ms of last watchdog engine kill
@@ -219,6 +220,7 @@ func (r *officialRecovery) initMaps() {
 	r.realOutputAt = map[string]int64{}
 	r.stagedRetryAt = map[string]int64{}
 	r.stagedModeBy = map[string]string{}
+	r.stagedTries = map[string]int{}
 	r.modeAck = map[string]chan string{}
 	r.autoApproved = map[string]bool{}
 }

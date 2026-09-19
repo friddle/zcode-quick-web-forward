@@ -61,3 +61,54 @@ func TestProviderSettingsViewShape(t *testing.T) {
 		}
 	}
 }
+
+// The composer derives its runtime config from view.effectiveSelection and
+// IGNORES the draft's modelSelection when the view is ready — a view without
+// effectiveSelection is the "picked model never commits" bug. The selection
+// arrives in the getView args; it must be validated against the view's own
+// providers/models before being echoed back.
+func TestModelSelectionViewEffectiveSelection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfgDir := filepath.Join(home, ".zcode", "cli")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `{"model":{"main":"bigmodel/GLM-5.3-Flash"},"provider":{"bigmodel":{"enabled":true,"name":"BigModel","models":{"GLM-5.3":{},"GLM-5.3-Flash":{}}}}}`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	view := modelSelectionView(map[string]any{
+		"selection": map[string]any{
+			"providerId": "bigmodel",
+			"modelId":    "GLM-5.3",
+			"options":    map[string]any{"reasoningLevel": "high"},
+		},
+	})
+	sel, ok := view["effectiveSelection"].(map[string]any)
+	if !ok {
+		t.Fatalf("effectiveSelection missing: %v", view)
+	}
+	if sel["providerId"] != "bigmodel" || sel["modelId"] != "GLM-5.3" {
+		t.Fatalf("effectiveSelection mismatch: %v", sel)
+	}
+	// Unknown provider/model must NOT become effective (but preferred from
+	// config.json may, when it names a real view entry).
+	view = modelSelectionView(map[string]any{
+		"selection": map[string]any{"providerId": "ghost", "modelId": "X"},
+	})
+	if sel, ok := view["effectiveSelection"].(map[string]any); ok {
+		if sel["providerId"] == "ghost" {
+			t.Fatalf("ghost selection echoed back: %v", sel)
+		}
+	}
+	// No selection arg at all: fall back to preferred (config model.main).
+	view = modelSelectionView(map[string]any{})
+	sel, ok = view["effectiveSelection"].(map[string]any)
+	if !ok {
+		t.Fatalf("preferred fallback missing (config has model.main): %v", view)
+	}
+	if sel["modelId"] != "GLM-5.3-Flash" {
+		t.Fatalf("preferred fallback = model.main, got %v", sel)
+	}
+}
